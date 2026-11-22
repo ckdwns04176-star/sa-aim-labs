@@ -34,6 +34,8 @@ jobs:
         shell: pwsh
         run: python -m compileall -q app main.py
 
+      # pywebview 는 플랫폼 백엔드(edgechromium)를 importlib 로 동적 import 하므로
+      # PyInstaller 정적 분석에 잡히지 않습니다 → --collect-all webview 로 통째로 포함.
       - name: Build SA_Aim_Labs.exe
         shell: pwsh
         run: |
@@ -42,6 +44,7 @@ jobs:
             --add-data "ui;ui" `
             --add-data "assets;assets" `
             --add-data "config.json;." `
+            --collect-all webview `
             main.py
 
       - name: Verify artifact

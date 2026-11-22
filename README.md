@@ -33,8 +33,11 @@ python main.py --serve 8710    # 브라우저 미리보기 (샘플 데이터, ht
 
 ```powershell
 pyinstaller --noconfirm --onefile --windowed --icon assets/app.ico --name "SA_Aim_Labs" ^
-  --add-data "ui;ui" --add-data "assets;assets" --add-data "config.json;." main.py
+  --add-data "ui;ui" --add-data "assets;assets" --add-data "config.json;." ^
+  --collect-all webview main.py
 ```
+
+> `--collect-all webview` 는 pywebview 가 플랫폼 백엔드(edgechromium)를 동적으로 import 하기 때문에 필요합니다.
 
 결과물: `dist/SA_Aim_Labs.exe` (Actions 아티팩트 `SA_Aim_Labs-windows`, `latest-build` 릴리즈 첨부)
 실행하려면 Windows 10/11 + **Microsoft Edge WebView2 Runtime** 이 필요합니다.
