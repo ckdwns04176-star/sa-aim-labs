@@ -378,6 +378,7 @@
       const area = AREAS.find((a) => a.key === weakest);
       radarWeak.innerHTML = `가장 약한 영역 · <b>${area.name} ${VALUES[weakest]}</b>`;
     }
+    paintSummaryExtras(summary);
 
     renderUtilsState(utils);
     renderBarracks(barracks, st);
@@ -389,6 +390,30 @@
   /* ==================================================================
      대시보드 · 기타 렌더 보조
      ================================================================== */
+  function paintSummaryExtras(summary) {
+    if (!summary) return;
+    const weak = $('#radar-weak');
+    if (weak) {
+      const keys = AREAS.map((a) => a.key);
+      const w = keys.reduce((a, b) => (VALUES[a] <= VALUES[b] ? a : b), keys[0]);
+      const area = AREAS.find((a) => a.key === w);
+      weak.innerHTML = `가장 약한 영역 · <b>${area.name} ${VALUES[w]}</b>`;
+    }
+    const chipToday = $('#chip-today');
+    if (chipToday) chipToday.textContent = (summary.recs || []).filter((r) => r.done).length;
+    const delta = summary.week_delta;
+    const dEl = $('#kpi-delta');
+    if (dEl) {
+      dEl.textContent = delta === null || delta === undefined ? '—' : `${delta > 0 ? '+' : ''}${n0(delta)}`;
+      dEl.style.color = delta === null || delta === undefined ? '#8FA1B8' : delta >= 0 ? '#6EE7C0' : '#F7AFAE';
+    }
+    const known = (summary.daily || []).filter((d) => d.score !== null).map((d) => d.score);
+    const tp = $('#trend-prev');
+    if (tp) tp.innerHTML = `최근 7일 기록 <b>${known.length}일</b> · 훈련 <b>${summary.records || 0}회</b>`;
+    const tb = $('#trend-best');
+    if (tb) tb.innerHTML = `최고 <b>${known.length ? n0(Math.max(...known)) : '—'}</b>`;
+  }
+
   function renderUtilsState(utils) {
     const points = (utils.points || []);
     const box = $('#nv-points');
@@ -1242,6 +1267,7 @@
       TIERS.forEach((t, k) => { if (score >= t.cut) tierIdx = k; });
       drawKpis(); drawRadar(); drawLadder(); drawTierTable();
     }
+    paintSummaryExtras(summary);
   }
 
   /* ==================================================================
