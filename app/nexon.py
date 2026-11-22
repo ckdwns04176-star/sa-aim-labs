@@ -1,0 +1,542 @@
+"""NEXON Open API client (Sudden Attack) with pacing, retries and disk cache.
+
+Endpoints used
+--------------
+GET /suddenattack/v1/id            ?user_name=
+GET /suddenattack/v1/user/basic    ?ouid=
+GET /suddenattack/v1/user/rank     ?ouid=
+GET /suddenattack/v1/user/tier     ?ouid=&match_type=랭크전 솔로|랭크전 파티
+GET /suddenattack/v1/user/recent-info ?ouid=
+GET /suddenattack/v1/match         ?ouid=&match_mode=폭파미션&match_type=
+GET /suddenattack/v1/match-detail  ?match_id=
+
+The test key allows roughly ten requests per second; requests are therefore
+paced (default 0.13 s apart) and 429 responses are retried with backoff.  Match
+details never change, so they are cached on disk for a week.
+"""
+from __future__ import annotations
+
+import datetime as _dt
+import hashlib
+import json
+import math
+import os
+import threading
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+from typing import Any, Callable, Iterable, Sequence
+
+from . import paths
+
+BASE_URL = "https://open.api.nexon.com"
+MATCH_MODE = "폭파미션"
+MATCH_TYPES = ("랭크전 솔로", "랭크전 파티")
+RECENT_N = 100
+MATCH_ROWS = 20
+MAP_MIN = 5
+DETAIL_DEPTH = 20  # leaderboard: how many recent matches get a damage/map lookup
+
+Progress = Callable[[int, int, str], None]
+
+
+class NexonError(RuntimeError):
+    pass
+
+
+# --------------------------------------------------------------------- tier names
+_TIER_KR = {
+    "BRONZE": "브론즈", "SILVER": "실버", "GOLD": "골드",
+    "MASTER": "마스터", "GRAND MASTER": "그랜드마스터", "GRANDMASTER": "그랜드마스터",
+    "LEGEND": "레전드", "RANKER": "불레전드", "HIGH RANKER": "별레전드",
+    "UNRANKED": "언랭크", "UNRANK": "언랭크",
+}
+_ROMAN = {"1": "I", "2": "II", "3": "III", "I": "I", "II": "II", "III": "III"}
+
+
+def kr_tier(name: str | None) -> str:
+    """'GRAND MASTER II' -> '그랜드마스터 II'."""
+    if not name:
+        return "언랭크"
+    s = str(name).strip().upper().replace("_", " ")
+    if s in ("", "-", "NONE", "NULL", "UNRANKED"):
+        return "언랭크"
+    family, _, suffix = s.rpartition(" ")
+    if family in _TIER_KR and suffix in _ROMAN:
+        return f"{_TIER_KR[family]} {_ROMAN[suffix]}"
+    if s in _TIER_KR:
+        return _TIER_KR[s]
+    # e.g. "GRANDMASTERII"
+    for key in sorted(_TIER_KR, key=len, reverse=True):
+        if s.startswith(key.replace(" ", "")):
+            rest = s[len(key.replace(" ", "")):]
+            if rest in _ROMAN:
+                return f"{_TIER_KR[key]} {_ROMAN[rest]}"
+    return str(name)
+
+
+# --------------------------------------------------------------------- disk cache
+class _DiskCache:
+    def __init__(self, path: os.PathLike[str], max_entries: int = 4000):
+        self.path = path
+        self.max_entries = max_entries
+        self._lock = threading.Lock()
+        self.data: dict[str, dict[str, Any]] = {}
+        try:
+            if os.path.exists(path):
+                self.data = json.loads(open(path, encoding="utf-8").read())
+        except (OSError, ValueError):
+            self.data = {}
+
+    def get(self, key: str) -> Any | None:
+        row = self.data.get(key)
+        if not row:
+            return None
+        if row.get("ttl") and time.time() - row.get("at", 0) > row["ttl"]:
+            return None
+        return row.get("data")
+
+    def put(self, key: str, data: Any, ttl: int | None) -> None:
+        with self._lock:
+            self.data[key] = {"at": time.time(), "ttl": ttl, "data": data}
+            if len(self.data) > self.max_entries:
+                # drop the oldest quarter
+                rows = sorted(self.data.items(), key=lambda kv: kv[1].get("at", 0))
+                for k, _ in rows[: len(rows) // 4]:
+                    self.data.pop(k, None)
+            try:
+                os.makedirs(os.path.dirname(self.path), exist_ok=True)
+                tmp = str(self.path) + ".tmp"
+                with open(tmp, "w", encoding="utf-8") as fh:
+                    json.dump(self.data, fh, ensure_ascii=False)
+                os.replace(tmp, self.path)
+            except OSError:
+                pass
+
+
+# --------------------------------------------------------------------- client
+class NexonClient:
+    MIN_INTERVAL = 0.13
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        cache_dir: str | os.PathLike[str] | None = None,
+        timeout: float = 20.0,
+        min_interval: float | None = None,
+        progress: Progress | None = None,
+    ):
+        self.api_key = (api_key or "").strip()
+        self.timeout = timeout
+        self.min_interval = self.MIN_INTERVAL if min_interval is None else min_interval
+        self.progress = progress
+        self._lock = threading.Lock()
+        self._last = 0.0
+        self.calls = 0
+        cache_root = str(cache_dir or paths.cache_dir())
+        os.makedirs(cache_root, exist_ok=True)
+        self._cache_api = _DiskCache(os.path.join(cache_root, "nexon_api.json"), 600)
+        self._cache_detail = _DiskCache(os.path.join(cache_root, "nexon_match_detail.json"), 5000)
+
+    # ------------------------------------------------------------ http
+    def _pace(self) -> None:
+        with self._lock:
+            wait = self.min_interval - (time.monotonic() - self._last)
+            if wait > 0:
+                time.sleep(wait)
+            self._last = time.monotonic()
+
+    def _request(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        if not self.api_key:
+            raise NexonError("NEXON Open API 키가 없습니다 · 설정 탭에서 입력해 주세요")
+        query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
+        url = f"{BASE_URL}{path}?{query}"
+        last_error: Exception | None = None
+        for attempt in range(4):
+            self._pace()
+            req = urllib.request.Request(url, headers={
+                "x-nxopen-api-key": self.api_key,
+                "Accept": "application/json",
+                "User-Agent": f"SA-Aim-Labs/{paths.APP_VERSION}",
+            })
+            try:
+                self.calls += 1
+                with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                    raw = resp.read().decode("utf-8", "replace")
+                body = json.loads(raw) if raw else {}
+                if isinstance(body, dict) and body.get("error"):
+                    err = body["error"] or {}
+                    raise NexonError(f"{err.get('name', 'ERROR')} · {err.get('message', '')}".strip(" ·"))
+                return body
+            except urllib.error.HTTPError as exc:
+                detail = ""
+                try:
+                    payload = json.loads(exc.read().decode("utf-8", "replace"))
+                    err = payload.get("error") or {}
+                    detail = f"{err.get('name', '')} · {err.get('message', '')}".strip(" ·")
+                except Exception:  # noqa: BLE001 - body may be empty
+                    pass
+                last_error = NexonError(detail or f"HTTP {exc.code}")
+                if exc.code == 429:
+                    time.sleep(1.2 * (attempt + 1))
+                    self.min_interval = min(0.5, self.min_interval * 1.5)
+                    continue
+                if exc.code in (500, 502, 503, 504):
+                    time.sleep(0.8 * (attempt + 1))
+                    continue
+                raise last_error
+            except (urllib.error.URLError, TimeoutError) as exc:
+                last_error = NexonError(f"네트워크 오류 · {exc}")
+                time.sleep(0.6 * (attempt + 1))
+        raise last_error or NexonError("NEXON API 요청 실패")
+
+    def _cached(self, cache: _DiskCache, key: str, path: str, params: dict[str, Any], ttl: int | None) -> dict[str, Any]:
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        data = self._request(path, params)
+        cache.put(key, data, ttl)
+        return data
+
+    # ------------------------------------------------------------ endpoints
+    def resolve_ouid(self, nickname: str) -> str:
+        nickname = (nickname or "").strip()
+        if not nickname:
+            raise NexonError("서든어택 닉네임을 입력해 주세요")
+        body = self._cached(self._cache_api, f"id:{nickname.lower()}", "/suddenattack/v1/id",
+                            {"user_name": nickname}, ttl=3600)
+        ouid = body.get("ouid")
+        if not ouid:
+            raise NexonError(f"닉네임 '{nickname}' 의 전적을 찾지 못했습니다")
+        return str(ouid)
+
+    def user_basic(self, ouid: str) -> dict[str, Any]:
+        return self._cached(self._cache_api, f"basic:{ouid}", "/suddenattack/v1/user/basic", {"ouid": ouid}, ttl=1800)
+
+    def user_rank(self, ouid: str) -> dict[str, Any]:
+        return self._cached(self._cache_api, f"rank:{ouid}", "/suddenattack/v1/user/rank", {"ouid": ouid}, ttl=1800)
+
+    def user_tier(self, ouid: str) -> dict[str, Any]:
+        body = self._cached(self._cache_api, f"tier:{ouid}", "/suddenattack/v1/user/tier",
+                            {"ouid": ouid, "match_type": MATCH_TYPES[0]}, ttl=900)
+        if "party_rank_match_score" not in body:
+            party = self._cached(self._cache_api, f"tier-party:{ouid}", "/suddenattack/v1/user/tier",
+                                 {"ouid": ouid, "match_type": MATCH_TYPES[1]}, ttl=900)
+            body = {**body, **{k: v for k, v in party.items() if k not in body}}
+        return body
+
+    def user_recent(self, ouid: str) -> dict[str, Any]:
+        return self._cached(self._cache_api, f"recent:{ouid}", "/suddenattack/v1/user/recent-info",
+                            {"ouid": ouid}, ttl=900)
+
+    def matches(self, ouid: str, match_type: str, ttl: int = 600) -> list[dict[str, Any]]:
+        body = self._cached(self._cache_api, f"match:{ouid}:{match_type}", "/suddenattack/v1/match",
+                            {"ouid": ouid, "match_mode": MATCH_MODE, "match_type": match_type}, ttl=ttl)
+        rows = body.get("match") or []
+        return rows if isinstance(rows, list) else []
+
+    def recent_matches(self, ouid: str, limit: int = RECENT_N) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for mtype in MATCH_TYPES:
+            try:
+                rows.extend(self.matches(ouid, mtype))
+            except NexonError:
+                continue
+        rows.sort(key=match_time, reverse=True)
+        return rows[:limit]
+
+    def match_detail(self, match_id: str) -> dict[str, Any] | None:
+        if not match_id:
+            return None
+        try:
+            return self._cached(self._cache_detail, f"d:{match_id}", "/suddenattack/v1/match-detail",
+                                {"match_id": match_id}, ttl=7 * 24 * 3600)
+        except NexonError:
+            return None
+
+
+# --------------------------------------------------------------------- aggregation
+def match_time(m: dict[str, Any]) -> float:
+    raw = str(m.get("date_match") or "").strip()
+    if not raw:
+        return 0.0
+    try:
+        return _dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return 0.0
+
+
+def _player_detail(detail: dict[str, Any] | None, nickname: str) -> dict[str, Any]:
+    out = {"map": None, "damage": None}
+    if not detail:
+        return out
+    out["map"] = detail.get("match_map") or None
+    target = (nickname or "").strip().lower()
+    for p in detail.get("match_detail") or []:
+        if str(p.get("user_name") or "").strip().lower() == target:
+            try:
+                out["damage"] = float(p.get("damage") or 0)
+            except (TypeError, ValueError):
+                out["damage"] = None
+            break
+    return out
+
+
+def _weak_index(win: float, kd: float, dmg: float) -> float:
+    score = win * 0.5 + min(100.0, kd) * 0.3 + min(100.0, dmg / 20.0) * 0.2
+    return round((100.0 - score) * 10) / 10
+
+
+def aggregate(rows: Sequence[dict[str, Any]], details: Sequence[dict[str, Any] | None], nickname: str) -> dict[str, Any]:
+    kills = deaths = wins = 0
+    dmg_sum = 0.0
+    dmg_n = 0
+    maps: dict[str, dict[str, Any]] = {}
+    for idx, m in enumerate(rows):
+        k = int(m.get("kill") or 0)
+        d = int(m.get("death") or 0)
+        win = str(m.get("match_result")) == "1"
+        kills += k
+        deaths += d
+        wins += 1 if win else 0
+        one = _player_detail(details[idx] if idx < len(details) else None, nickname)
+        dmg = one["damage"]
+        if dmg is not None:
+            dmg_sum += dmg
+            dmg_n += 1
+        key = one["map"] or "기타"
+        agg = maps.setdefault(key, {"n": 0, "w": 0, "k": 0, "d": 0, "ds": 0.0, "dc": 0})
+        agg["n"] += 1
+        agg["w"] += 1 if win else 0
+        agg["k"] += k
+        agg["d"] += d
+        if dmg is not None:
+            agg["ds"] += dmg
+            agg["dc"] += 1
+
+    n = len(rows)
+    kd = round(kills / (kills + deaths) * 100, 1) if (kills + deaths) else 0.0
+    win_rate = round(wins / n * 100, 1) if n else 0.0
+    avg_dmg = int(round(dmg_sum / dmg_n)) if dmg_n else 0
+
+    map_rows = []
+    for name, a in maps.items():
+        m_win = (a["w"] / a["n"] * 100) if a["n"] else 0.0
+        m_kd = (a["k"] / (a["k"] + a["d"]) * 100) if (a["k"] + a["d"]) else 0.0
+        m_dmg = (a["ds"] / a["dc"]) if a["dc"] else 0.0
+        map_rows.append({
+            "map": name, "games": a["n"],
+            "win": round(m_win, 1), "kd": round(m_kd, 1), "dmg": round(m_dmg, 1),
+            "weak": _weak_index(m_win, m_kd, m_dmg),
+        })
+    solid = sorted([m for m in map_rows if m["games"] >= MAP_MIN], key=lambda m: -m["weak"])
+    thin = sorted([m for m in map_rows if m["games"] < MAP_MIN], key=lambda m: m["games"])
+    for i, m in enumerate(solid + thin, start=1):
+        m["rk"] = i
+    return {
+        "games": n, "kills": kills, "deaths": deaths, "wins": wins,
+        "win": win_rate, "kd": kd, "dmg": avg_dmg,
+        "maps": solid + thin, "weak": solid[:3], "map_count": len(solid), "thin_count": len(thin),
+    }
+
+
+def _match_rows(rows: Sequence[dict[str, Any]], details: Sequence[dict[str, Any] | None], nickname: str, limit: int = MATCH_ROWS) -> list[dict[str, Any]]:
+    out = []
+    for idx, m in enumerate(rows[:limit]):
+        one = _player_detail(details[idx] if idx < len(details) else None, nickname)
+        k = int(m.get("kill") or 0)
+        d = int(m.get("death") or 0)
+        raw = str(m.get("date_match") or "")
+        try:
+            dt = _dt.datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone()
+            date_txt, time_txt = dt.strftime("%Y-%m-%d"), dt.strftime("%H:%M")
+        except ValueError:
+            date_txt, time_txt = "-", "-"
+        out.append({
+            "date": date_txt, "time": time_txt,
+            "type": "솔로" if "솔로" in str(m.get("match_type")) else "파티",
+            "map": one["map"] or "-",
+            "result": "승" if str(m.get("match_result")) == "1" else "패",
+            "k": k, "d": d,
+            "kd": round(k / (k + d) * 100, 1) if (k + d) else 0.0,
+            "damage": None if one["damage"] is None else int(round(one["damage"])),
+        })
+    return out
+
+
+def _detail_jobs(client: NexonClient, rows: Sequence[dict[str, Any]], progress: Progress | None, label: str, depth: int | None = None) -> list[dict[str, Any] | None]:
+    target = rows if depth is None else rows[:depth]
+    total = len(target)
+    out: list[dict[str, Any] | None] = []
+    for i, m in enumerate(target):
+        out.append(client.match_detail(m.get("match_id")))
+        if progress and (i + 1) % 5 == 0:
+            progress(i + 1, total, label)
+    if progress and total:
+        progress(total, total, label)
+    return out
+
+
+# --------------------------------------------------------------------- public builders
+def build_barracks(client: NexonClient, nickname: str, progress: Progress | None = None) -> dict[str, Any]:
+    nickname = (nickname or "").strip()
+    ouid = client.resolve_ouid(nickname)
+    if progress:
+        progress(1, 6, "계정 확인")
+    basic = client.user_basic(ouid)
+    rank = client.user_rank(ouid)
+    recent = client.user_recent(ouid)
+    tier = client.user_tier(ouid)
+    if progress:
+        progress(2, 6, "랭크 정보")
+    rows = client.recent_matches(ouid, RECENT_N)
+    details = _detail_jobs(client, rows, progress, "경기 상세", depth=None)
+    agg = aggregate(rows, details, nickname)
+    if progress:
+        progress(6, 6, "집계 완료")
+
+    solo_rp = tier.get("solo_rank_match_score")
+    party_rp = tier.get("party_rank_match_score")
+    created = str(basic.get("user_date_create") or "")
+    return {
+        "nickname": basic.get("user_name") or nickname,
+        "ouid": ouid,
+        "basic": {
+            "name": basic.get("user_name") or nickname,
+            "clan": basic.get("clan_name") or "-",
+            "title": basic.get("title_name") or "-",
+            "manner": basic.get("manner_grade") or "-",
+            "created": created[:10].replace("-", ".") if created else "-",
+        },
+        "rank": {
+            "grade": rank.get("grade") or "-",
+            "grade_ranking": rank.get("grade_ranking"),
+            "season_grade": rank.get("season_grade") or "-",
+            "season_ranking": rank.get("season_grade_ranking"),
+        },
+        "recent": {
+            "win": recent.get("recent_win_rate"),
+            "kd": round(float(recent.get("recent_kill_death_rate") or 0), 1),
+            "assault": recent.get("recent_assault_rate"),
+            "sniper": recent.get("recent_sniper_rate"),
+        },
+        "tier": {
+            "solo": {"name": kr_tier(tier.get("solo_rank_match_tier")), "rp": int(solo_rp or 0)},
+            "party": {"name": kr_tier(tier.get("party_rank_match_tier")), "rp": int(party_rp or 0)},
+        },
+        "stats": {k: agg[k] for k in ("games", "kills", "deaths", "wins", "win", "kd", "dmg")},
+        "maps": agg["maps"],
+        "weak": agg["weak"],
+        "matches": _match_rows(rows, details, nickname),
+        "updated_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
+    }
+
+
+def fetch_member(client: NexonClient, nickname: str, *, depth: int = DETAIL_DEPTH, progress: Progress | None = None) -> dict[str, Any]:
+    nickname = (nickname or "").strip()
+    base = {"name": nickname, "updated_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds")}
+    try:
+        ouid = client.resolve_ouid(nickname)
+        basic = client.user_basic(ouid)
+        tier = client.user_tier(ouid)
+        recent = client.user_recent(ouid)
+        rows = client.recent_matches(ouid, RECENT_N)
+        details = _detail_jobs(client, rows, progress, nickname, depth=depth) if depth else []
+        agg = aggregate(rows, details, nickname)
+        solo = int(tier.get("solo_rank_match_score") or 0)
+        party = int(tier.get("party_rank_match_score") or 0)
+        sniper = float(recent.get("recent_sniper_rate") or 0)
+        assault = float(recent.get("recent_assault_rate") or 0)
+        return {
+            **base,
+            "ok": True,
+            "ouid": ouid,
+            "clan": basic.get("clan_name") or "친구",
+            "weapon": "sniper" if sniper >= assault else "rifle",
+            "solo": solo,
+            "party": party or None,
+            "kd": agg["kd"] if agg["games"] else None,
+            "dmg": agg["dmg"] if agg["games"] and any(d is not None for d in details) else None,
+            "win": agg["win"] if agg["games"] else None,
+            "games": agg["games"],
+            "solo_tier": kr_tier(tier.get("solo_rank_match_tier")),
+            "party_tier": kr_tier(tier.get("party_rank_match_tier")),
+            "unranked": solo <= 0,
+        }
+    except NexonError as exc:
+        return {**base, "ok": False, "error": str(exc), "unranked": True, "solo": 0, "party": None,
+                "kd": None, "dmg": None, "win": None, "weapon": "sniper", "clan": "친구"}
+
+
+def build_leaderboard(client: NexonClient, nicknames: Iterable[str], progress: Progress | None = None,
+                      depth: int = DETAIL_DEPTH) -> list[dict[str, Any]]:
+    names = [str(n).strip() for n in nicknames if str(n).strip()][:10]
+    out: list[dict[str, Any]] = []
+    total = len(names) * 4
+    for i, name in enumerate(names):
+        def _p(done: int, all_: int, label: str, _i=i) -> None:
+            if progress:
+                progress(_i * 4 + min(4, max(1, round(done / max(1, all_) * 4))), total, label)
+        out.append(fetch_member(client, name, depth=depth, progress=_p))
+        if progress:
+            progress((i + 1) * 4, total, name)
+    return out
+
+
+def leaderboard_payload(members: Sequence[dict[str, Any]], client: NexonClient | None = None) -> list[dict[str, Any]]:
+    """Normalise stored members for the UI (tier marks, unranked flags)."""
+    from . import scoring
+
+    rows = []
+    for m in members:
+        solo = m.get("solo") or 0
+        band = scoring.band_of(solo)
+        party = m.get("party")
+        rows.append({
+            **m,
+            "solo": solo,
+            "party": party,
+            "solo_tier": m.get("solo_tier") or band["n"],
+            "solo_img": band["img"],
+            "party_tier": m.get("party_tier") or (scoring.party_band_of(party)["n"] if party else "언랭크"),
+            "unranked": solo <= 0,
+            "kd": m.get("kd"),
+            "dmg": m.get("dmg"),
+            "win": m.get("win"),
+        })
+    return rows
+
+
+def safe_int(v: Any) -> int:
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return 0
+
+
+def fmt_ts(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        return _dt.datetime.fromisoformat(iso).astimezone().strftime("%Y-%m-%d %H:%M")
+    except ValueError:
+        return iso
+
+
+def hhmm(iso: str | None) -> str:
+    if not iso:
+        return "—"
+    try:
+        return _dt.datetime.fromisoformat(iso).astimezone().strftime("%H:%M")
+    except ValueError:
+        return iso
+
+
+def ceil_pct(a: float) -> float:
+    return math.ceil(a * 10) / 10
+
+
+def key_digest(api_key: str) -> str:
+    return hashlib.sha1((api_key or "").encode()).hexdigest()[:8]

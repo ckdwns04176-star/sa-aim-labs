@@ -1,0 +1,53 @@
+# ============================================================
+#  SA AIM LABS — 절대 커밋하면 안 되는 것들
+#  (넥슨 Open API 키 · Supabase 로그인 토큰 · 개인 훈련 기록)
+# ============================================================
+
+# --- 개인 키 / 런타임 데이터 -------------------------------------------
+data.json
+data.json.bak
+data.json.corrupt.json
+data/
+portable.txt
+user-nexon-api-key.txt
+test_*.txt
+*api*key*.txt
+*.key
+*.pem
+.env
+.env.*
+secrets.json
+
+# data.json 에는 NEXON api_key / Supabase access_token 이 들어갑니다.
+# 백업·캐시 폴더도 개인 기록이라 저장소에 올리지 않습니다.
+backups/
+cache/
+logs/
+nvidia_backups/
+webview/
+
+# --- Python -----------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# --- PyInstaller ------------------------------------------------------
+build/
+dist/
+*.spec
+*.manifest
+
+# --- 편집기 / OS ------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
