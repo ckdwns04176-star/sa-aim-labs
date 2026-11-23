@@ -496,7 +496,9 @@ class Api:
             client = self._client(key or None, force=True)
             try:
                 ouid = client.resolve_ouid(nick)
-            except nexon.NexonError:
+            except nexon.NexonError as exc:
+                if getattr(exc, "quota", False) or "한도" in str(exc):
+                    return self._err(exc)
                 return {"ok": True, "found": False, "query": nick,
                         "message": f"'{nick}' 조회 결과 없음"}
             basic = client.user_basic(ouid)
@@ -683,8 +685,7 @@ class Api:
                 if elevate:
                     return {"ok": True, **(mgr.elevate_help(mode)), "state": self._build_state()}
                 result = mgr.apply_stairfix()
-                self._remember_drs("stairfix" if not result.get("unchanged") else "stairfix", result,
-                                   label="계단현상 끄기 적용 전")
+                self._remember_drs("stairfix", result, label="계단현상 끄기 적용 전")
                 self._drs_state = None
                 return {"ok": True, **result, "state": self._build_state()}
             if not mgr.available_modes().get(mode):

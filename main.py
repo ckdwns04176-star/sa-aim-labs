@@ -200,7 +200,9 @@ def main(argv: list[str] | None = None) -> int:
     # loaded 이벤트가 오지 않는 환경에서도 창이 숨어 있지 않도록 안전장치
     import threading
 
-    threading.Timer(4.0, _show).start()
+    guard = threading.Timer(4.0, _show)
+    guard.daemon = True
+    guard.start()
     log.info("starting %s %s · ui=%s · data=%s", paths.APP_TITLE, paths.APP_VERSION, url, paths.data_file())
 
     try:
