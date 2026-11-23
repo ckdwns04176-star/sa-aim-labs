@@ -800,9 +800,9 @@
         <div class="field"><label>NEXON Open API 키</label>
           <input id="set-key" class="inp" type="text" value="${nexon.connected ? esc(set.api_key_masked || '등록됨') : ''}"
             placeholder="발급: open.api.nexon.com">
-          <div class="hint">${nexon.connected ? '키 등록됨 · 그대로 두면 유지됩니다 (새 키를 붙여넣으면 교체)' : '발급: open.api.nexon.com · test_ 키는 본인 계정 전용입니다'}</div>
+          
         </div>
-        <div class="set-note">목표 <b>4종</b>은 대시보드·병영수첩 게이지에 바로 반영됩니다</div>
+        
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
           ${inputRow('set-goal-win', '승률 %', goals.win ?? 55, { type: 'number' })}
           ${inputRow('set-goal-kd', 'K/D %', goals.kd ?? 60, { type: 'number' })}
@@ -3282,6 +3282,7 @@
       renderSettings(AL.state || { settings: {}, nexon: {}, cloud: {}, meta: {} });
       renderSettingsTray(AL.tray);
       renderUpdate(AL.update);
+      if (typeof compactGrayNotes === 'function') compactGrayNotes();
       const mask = $('#settings-mask');
       if (mask) mask.classList.add('show');
     };
