@@ -157,13 +157,17 @@ def main() -> int:
         page.wait_for_timeout(300)
         splash = page.evaluate("""() => {
             const el = document.getElementById('app-splash');
+            const r = el.getBoundingClientRect();
             return {visible: !!el && !el.classList.contains('out') && getComputedStyle(el).display !== 'none',
                     pct: document.getElementById('sp-pct') ? document.getElementById('sp-pct').textContent : '',
                     arms: document.querySelectorAll('#app-splash .sp-arm').length,
-                    bar: !!document.getElementById('sp-fill')};
+                    bar: !!document.getElementById('sp-fill'),
+                    covers: r.width >= 1199 && r.height >= 749,
+                    z: getComputedStyle(el).zIndex};
         }""")
         page.screenshot(path=str(SHOTS / "splash.png"))
         check("스플래시가 첫 화면에 먼저 보임", splash["visible"] and splash["arms"] == 2 and splash["bar"], str(splash))
+        check("스플래시가 전체 화면을 덮음", splash["covers"] and splash["z"] == "9999", str({"covers": splash["covers"], "z": splash["z"]}))
         check("스플래시 퍼센트 표시", "%" in (splash["pct"] or ""), str(splash["pct"]))
         page.wait_for_selector("#app-splash", state="hidden", timeout=8000)
         done = page.evaluate("""() => ({pct: document.getElementById('sp-pct').textContent,
