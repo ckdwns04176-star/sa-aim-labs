@@ -169,6 +169,31 @@
     return st.summaries[`${game}-${weapon}`] || null;
   }
 
+  /* 서버 rec → 화면 rec (오늘 내 점수 포함) */
+  function mapRecs(rows) {
+    return (rows || []).map((r) => ({
+      name: r.name,
+      area: typeof r.area === 'number' ? r.area : areaIdx(r.area_key),
+      areaKey: r.area_key || (AREAS[typeof r.area === 'number' ? r.area : 0] || AREAS[0]).key,
+      areaName: r.area_name || '',
+      diff: r.diff || '초급',
+      score: r.score === null || r.score === undefined ? null : Math.round(r.score * 10) / 10,
+      today_score: r.today_score === null || r.today_score === undefined ? null : Math.round(r.today_score * 10) / 10,
+      best: r.best === null || r.best === undefined ? null : Math.round(r.best * 10) / 10,
+      done: !!r.done,
+      extra: !!r.extra,
+      delta: typeof r.delta === 'number' ? r.delta : null
+    }));
+  }
+
+  function applyRecs(summary) {
+    const key = `${game}-${weapon}`;
+    if (AL.state && AL.state.today_scores) TODAY_SCORES = AL.state.today_scores;
+    RECS[key] = mapRecs(summary && summary.recs);
+    RECS_MORE[key] = mapRecs(summary && summary.more);
+    if (AL.state && AL.state.philosophy) PHILOSOPHY = AL.state.philosophy;
+  }
+
   function applyState(st) {
     if (!st) return;
     AL.state = st;
@@ -240,16 +265,7 @@
         TIERS.forEach((t, k) => { if (score >= t.cut) tierIdx = k; });
       }
 
-      const recs = (summary.recs || []).map((r) => ({
-        name: r.name,
-        area: typeof r.area === 'number' ? r.area : areaIdx(r.area_key),
-        diff: r.diff || '초급',
-        score: r.score === null || r.score === undefined ? null : Math.round(r.score * 10) / 10,
-        done: !!r.done,
-        delta: typeof r.delta === 'number' ? r.delta : null
-      }));
-      RECS[`${game}-${weapon}`] = recs;
-
+      applyRecs(summary);
       const daily = summary.daily || [];
       TREND = {
         labels: daily.map((d) => mdLabel(d.date)),
@@ -826,6 +842,114 @@
   }
 
   /* ==================================================================
+     시나리오 모달 — 내 점수 입력/수정 + 게임에서 재생 (한 곳에서)
+     ================================================================== */
+  let SCEN = null;
+
+  function findRec(name) {
+    const key = `${game}-${weapon}`;
+    return (RECS[key] || []).find((r) => r.name === name)
+        || (RECS_MORE[key] || []).find((r) => r.name === name)
+        || null;
+  }
+
+  function openScenario(name, areaKey) {
+    if (!name) return;
+    const rec = findRec(name) || AL.findScenario(name);
+    SCEN = {
+      name,
+      areaKey: (rec && rec.areaKey) || areaKey || 'precision',
+      trainer: game,
+      weapon
+    };
+    const area = AREAS.find((a) => a.key === SCEN.areaKey) || AREAS[0];
+    const title = $('#scen-title');
+    if (title) title.textContent = name;
+    const areaEl = $('#scen-area');
+    if (areaEl) { areaEl.textContent = area.name; areaEl.className = `area ${area.cls}`; }
+    const diff = $('#scen-diff');
+    if (diff) diff.textContent = (rec && rec.diff) || '초급';
+    const trainer = $('#scen-trainer');
+    if (trainer) trainer.textContent = `${game === 'kovak' ? "KovaaK's" : 'Aim Lab'} · ${weapon === 'sniper' ? '스나' : '라플'}`;
+    const today = rec ? rec.today_score : null;
+    const setText = (id, value) => { const el = $('#' + id); if (el) el.textContent = value; };
+    setText('scen-today', today === null || today === undefined ? '미기록' : n0(today));
+    setText('scen-last', rec && rec.score !== null && rec.score !== undefined ? n0(rec.score) : '—');
+    setText('scen-best', rec && rec.best !== null && rec.best !== undefined ? n0(rec.best) : '—');
+    const note = $('#scen-note');
+    if (note) {
+      note.innerHTML = today === null || today === undefined
+        ? '<b>통합 점수 · 5영역 · 티어</b>에 저장 즉시 반영됩니다'
+        : `오늘 이미 <b>${n0(today)}점</b> · 값을 고쳐 저장하면 오늘 기록이 갱신됩니다`;
+    }
+    const input = $('#scen-score');
+    if (input) {
+      input.value = today === null || today === undefined ? '' : String(today);
+      input.classList.remove('bad');
+    }
+    const mask = $('#scen-mask');
+    if (mask) mask.classList.add('show');
+    if (input) setTimeout(() => { input.focus(); try { input.select(); } catch (e) {} }, 70);
+  }
+  AL.openScenario = openScenario;
+
+  /* 레코드에 없는(라이브러리에서 직접 누른) 시나리오도 열 수 있게 */
+  AL.findScenario = function (name) {
+    const st = AL.state;
+    const rows = st && st.scenarios && st.scenarios[`${game}-${weapon}`];
+    const hit = (rows || []).find((r) => r.name === name);
+    if (!hit) return null;
+    return { name, areaKey: hit.area_key || hit.area, diff: '초급', today_score: null, score: null, best: null };
+  };
+
+  async function saveScenario() {
+    if (!SCEN) return;
+    const input = $('#scen-score');
+    const raw = String((input && input.value) || '').trim().replace(/,/g, '');
+    if (raw === '') { if (input) input.focus(); return toast('점수를 입력해 주세요', false); }
+    const value = Number(raw);
+    if (Number.isNaN(value) || value < 0) {
+      if (input) { input.classList.add('bad'); input.focus(); }
+      return toast('0 이상의 숫자로 입력해 주세요', false);
+    }
+    if (!AL.real) return toast('앱(.exe)에서 실행하면 저장됩니다', false);
+    const btn = $('#scen-save');
+    if (btn) { btn.disabled = true; btn.textContent = '저장 중…'; }
+    busy(true, `${SCEN.name} 점수를 저장하는 중…`);
+    const result = await call('save_training_session', {
+      game: SCEN.trainer,
+      weapon: SCEN.weapon,
+      date: (AL.meta && AL.meta.today) || null,
+      scenarios: [{ name: SCEN.name, area_key: SCEN.areaKey, score: value }]
+    });
+    busy(false);
+    if (btn) { btn.disabled = false; btn.textContent = '점수 저장'; }
+    if (!result || !result.ok) return fail(result, '점수를 저장하지 못했습니다');
+    if (result.state) applyState(result.state);
+    const s = currentSummary();
+    toast(`✅ ${SCEN.name} ${n0(value)}점 저장 · 통합 ${n0(s ? s.score : 0)}점`, true);
+    const mask = $('#scen-mask');
+    if (mask) mask.classList.remove('show');
+  }
+
+  async function morePractice() {
+    const label = `${game === 'kovak' ? "KovaaK's" : 'Aim Lab'} · ${weapon === 'sniper' ? '스나' : '라플'}`;
+    if (!AL.real) return toast('앱(.exe)에서 실행하면 더 연습하기가 열립니다', false);
+    busy(true, `${label} 약점 보완 시나리오를 고르는 중…`);
+    const result = await call('recommend_more', game, weapon, 3);
+    busy(false);
+    if (!result || !result.ok) return fail(result, '더 연습할 시나리오를 가져오지 못했습니다');
+    if (result.state) applyState(result.state);
+    const count = (result.recs || []).length;
+    if (!count) return toast(result.message || '더 추천할 시나리오가 없습니다', false);
+    /* 추가된 시나리오가 바로 보이게 목록을 살짝 내린다 */
+    const list = $('#rec-list');
+    const sep = list && list.querySelector('.rec-sep');
+    if (list && sep) list.scrollTop = Math.max(0, sep.offsetTop - list.offsetTop - 2);
+    toast(`➕ ${label} 약점 보완 ${count}종 추가 · 클릭해서 점수 기록`, true);
+  }
+
+  /* ==================================================================
      실행 (Steam · Aim Lab)
      ================================================================== */
   function scenarioUrl(name) {
@@ -1226,29 +1350,48 @@
     const recSave = $('#rec-save');
     if (recSave) recSave.addEventListener('click', openScoreModal);
 
+    /* ---------- 시나리오 모달 (점수 + 재생) ---------- */
+    const scenSave = $('#scen-save');
+    if (scenSave) scenSave.addEventListener('click', (e) => { e.preventDefault(); saveScenario(); });
+    const scenScore = $('#scen-score');
+    if (scenScore) scenScore.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); saveScenario(); }
+    });
+    const scenPlay = $('#scen-play');
+    if (scenPlay) scenPlay.addEventListener('click', () => {
+      if (!SCEN) return;
+      if (!AL.real) return toast('앱(.exe)에서 실행하면 Steam 이 열립니다', false);
+      launch(SCEN.name);
+    });
+
+    /* ---------- + 더 연습하기 ---------- */
+    ['#rec-more', '#rec-more-2'].forEach((sel) => {
+      const btn = $(sel);
+      if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); morePractice(); });
+    });
+
     /* ---------- 추천 목록 · 실행 ---------- */
     const recList = $('#rec-list');
     if (recList) {
       recList.addEventListener('click', (e) => {
-        const runBtn = e.target.closest('[data-run]');
-        if (runBtn) {
-          const recs = (currentSummary() && currentSummary().recs) || [];
-          const rec = recs[Number(runBtn.dataset.run)];
-          if (!rec) return;
-          if (!AL.real) return;
+        const row = e.target.closest('[data-rec]');
+        if (!row) return;
+        const name = row.dataset.name;
+        if (e.target.closest('[data-run]')) {
+          if (!AL.real) return toast('앱(.exe)에서 실행하면 Steam 이 열립니다', false);
           e.preventDefault();
-          launch(rec.name);
+          launch(name);
           return;
         }
-        if (e.target.closest('.score')) { openScoreModal(); }
+        openScenario(name, row.dataset.areakey);
       });
     }
     const recGrid = $('#rec-grid');
     if (recGrid) {
       recGrid.addEventListener('click', (e) => {
         const item = e.target.closest('[data-scen]');
-        if (!item || !AL.real) return;
-        launch(item.dataset.scen);
+        if (!item) return;
+        openScenario(item.dataset.scen, item.dataset.scenArea);
       });
     }
     const startBtn = $('#start-train-btn');
@@ -1452,14 +1595,7 @@
       tierIdx = 0;
       TIERS.forEach((t, k) => { if (score >= t.cut) tierIdx = k; });
     }
-    RECS[`${game}-${weapon}`] = (summary.recs || []).map((r) => ({
-      name: r.name,
-      area: typeof r.area === 'number' ? r.area : areaIdx(r.area_key),
-      diff: r.diff || '초급',
-      score: r.score === null || r.score === undefined ? null : Math.round(r.score * 10) / 10,
-      done: !!r.done,
-      delta: typeof r.delta === 'number' ? r.delta : null
-    }));
+    applyRecs(summary);
     const daily = summary.daily || [];
     TREND = { labels: daily.map((d) => mdLabel(d.date)), values: daily.map((d) => (d.score === null ? null : d.score)) };
     const known = daily.filter((d) => d.score !== null).map((d) => d.score);

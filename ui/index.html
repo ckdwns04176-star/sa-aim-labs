@@ -283,10 +283,17 @@ svg{display:block}
 /* ============ MAIN ============ */
 .main{flex:1;min-width:0;position:relative;overflow:hidden}
 .screen{
-  position:absolute;inset:0;padding:13px 17px 13px;
+  position:absolute;inset:0;padding:13px 17px 16px;
   display:flex;flex-direction:column;gap:10px;
+  overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;
+  scrollbar-width:thin;scrollbar-color:rgba(148,163,184,.26) transparent;
 }
 .screen[hidden]{display:none}
+/* 다크 슬림 스크롤바 — 병영수첩 맨 아래(약점·맵별 분석)까지 끝까지 내려간다 */
+.screen::-webkit-scrollbar{width:7px}
+.screen::-webkit-scrollbar-track{background:transparent}
+.screen::-webkit-scrollbar-thumb{background:rgba(148,163,184,.22);border-radius:6px;border:1px solid transparent;background-clip:padding-box}
+.screen::-webkit-scrollbar-thumb:hover{background:rgba(148,163,184,.4);background-clip:padding-box}
 
 /* header */
 .head{display:flex;align-items:flex-end;justify-content:space-between;height:36px;flex:0 0 36px}
@@ -387,11 +394,37 @@ svg{display:block}
 
 /* recommendations */
 .recs{display:flex;flex-direction:column;min-height:0}
-.rec-list{flex:1;display:flex;flex-direction:column;padding:6px 8px 8px;gap:2px;min-height:0;overflow:hidden}
+.rec-list{flex:1;display:flex;flex-direction:column;padding:6px 8px 8px;gap:2px;min-height:0;overflow-y:auto;overflow-x:hidden;
+  scrollbar-width:thin;scrollbar-color:rgba(148,163,184,.22) transparent}
+.rec-list::-webkit-scrollbar{width:6px}
+.rec-list::-webkit-scrollbar-track{background:transparent}
+.rec-list::-webkit-scrollbar-thumb{background:rgba(148,163,184,.2);border-radius:5px}
 .rec{
-  display:grid;grid-template-columns:20px 1fr 80px 80px 74px;align-items:center;gap:8px;
-  flex:1 1 0;min-height:0;overflow:hidden;padding:0 7px;border-radius:8px;border:1px solid transparent;transition:.15s;
+  display:grid;grid-template-columns:20px minmax(0,1fr) 80px 94px 72px;align-items:center;gap:8px;
+  flex:1 1 28px;min-height:28px;overflow:hidden;padding:0 7px;border-radius:8px;border:1px solid transparent;transition:.15s;
+  cursor:pointer;
 }
+.rec-sep{
+  flex:0 0 18px;display:flex;align-items:center;gap:7px;padding:2px 8px 0;
+  font-size:8.5px;font-weight:800;letter-spacing:.06em;color:#8FA1B8;
+}
+.rec-sep::before,.rec-sep::after{content:'';height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(169,139,255,.38),transparent)}
+.rec-today{
+  height:25px;border-radius:6px;display:flex;align-items:center;justify-content:flex-end;gap:3px;padding:0 7px;
+  background:rgba(52,211,153,.10);border:1px solid rgba(52,211,153,.28);
+  font-family:var(--num);font-size:11px;font-weight:700;color:#B8F5DC;
+}
+.rec-today .lb{font-family:'Pretendard';font-size:8px;font-weight:800;color:#5FCFA4;letter-spacing:.03em}
+.rec-today i{font-family:'Pretendard';font-size:8.5px;font-style:normal;color:#6F8098;font-weight:600}
+.rec-today.none{background:rgba(7,11,19,.7);border:1px dashed rgba(148,163,184,.2);color:#5E6E85;justify-content:center;font-size:10px;font-weight:600}
+.rec-more{
+  margin:0 11px 10px;height:30px;border-radius:8px;display:flex;align-items:center;justify-content:center;gap:6px;
+  font-size:11px;font-weight:700;color:#CDBBFF;
+  background:linear-gradient(180deg,rgba(169,139,255,.18),rgba(169,139,255,.08));
+  border:1px solid rgba(169,139,255,.34);
+}
+.rec-more:hover{background:rgba(169,139,255,.24);color:#E6DDFF}
+.rec-more svg{width:11px;height:11px}
 .rec:hover{background:rgba(148,163,184,.055);border-color:rgba(148,163,184,.10)}
 .rec-idx{font-family:var(--num);font-size:12px;font-weight:700;color:#5F7088;text-align:center}
 .rec.done .rec-idx{color:#34D399}
@@ -431,6 +464,10 @@ svg{display:block}
 }
 .rec-save svg{width:12px;height:12px}
 .rec-save:hover{background:rgba(245,158,11,.26)}
+.rec-foot{display:flex;gap:7px;margin:0 11px 10px}
+.rec-foot .rec-save,.rec-foot .rec-more{margin:0}
+.rec-foot .rec-save{flex:1.5}
+.rec-foot .rec-more{flex:1}
 
 /* bottom row */
 .bottom{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;flex:1;min-height:0}
@@ -534,6 +571,9 @@ svg{display:block}
 .gbar::after{content:'';position:absolute;right:0;top:0;bottom:0;width:2px;background:rgba(239,68,68,.75)}
 
 .maps{display:grid;grid-template-columns:330px 1fr;gap:10px;flex:1;min-height:0}
+/* 병영수첩은 내용이 길어 창을 넘으면 잘리지 않고 스크롤된다 — 맨 아래 약점·맵별 분석까지 */
+#s-barracks > *{flex-shrink:0}
+#s-barracks .maps{flex:0 0 auto;min-height:330px}
 .weak-list{padding:5px 10px 10px;display:flex;flex-direction:column;gap:6px;flex:1;min-height:0}
 .weak{
   flex:1;border-radius:9px;padding:7px 9px;display:flex;align-items:center;gap:9px;
@@ -614,8 +654,8 @@ tr.cur td{background:rgba(245,158,11,.055)}
 
 .lb-table{padding:4px 13px 8px;flex:1;min-height:0;display:flex;flex-direction:column}
 .lb-row{
-  display:grid;grid-template-columns:38px minmax(0,1fr) 84px 156px 74px 70px 78px 62px 24px;
-  align-items:center;gap:9px;height:48px;border-bottom:1px solid rgba(148,163,184,.05);
+  display:grid;grid-template-columns:38px minmax(0,1fr) 84px 150px 150px 66px 70px 58px 24px;
+  align-items:center;gap:8px;height:48px;border-bottom:1px solid rgba(148,163,184,.05);
   padding:0 7px;border-radius:7px;
 }
 .lb-row.hd{height:24px;border-bottom:1px solid rgba(148,163,184,.13);padding:0 7px}
@@ -652,6 +692,10 @@ tr.cur td{background:rgba(245,158,11,.055)}
 .lb-tier .tt{display:flex;flex-direction:column;line-height:1.05;min-width:0}
 .lb-tier .tt b{font-size:10px;font-weight:700;color:#DCE6F5;white-space:nowrap;letter-spacing:-.01em}
 .lb-tier .tt span{font-family:var(--num);font-size:9.5px;color:#8FA1B8;font-weight:600}
+.lb-tier.party .emb{width:23px;height:23px}
+.lb-tier.dim .emb{opacity:.72}
+.lb-tier.dim .tt b{color:#AEBCCD}
+.lb-tier.dim .tt span{color:#78899F}
 .lb-row.me .lb-tier .tt b{color:#FDE8BD}
 .lb-num{font-family:var(--num);font-size:11.5px;font-weight:600;color:#DCE6F5;text-align:right;white-space:nowrap}
 .lb-num.dim{color:#9AAABF}
@@ -883,6 +927,16 @@ html,body{width:100%;height:100%}
 .mtabs button.on{color:#0B111D;background:linear-gradient(180deg,#FDE68A,#FBBF24);border-color:transparent}
 .mnote{font-size:9px;color:#6E7F95;line-height:1.6}
 .mnote b{color:#A9B9CE}
+/* 시나리오 모달 — 점수 입력/수정 + 게임에서 재생 */
+.scen-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:7px}
+.scen-stat{border-radius:8px;background:rgba(7,11,19,.6);border:1px solid rgba(148,163,184,.14);padding:7px 9px;display:flex;flex-direction:column;gap:3px}
+.scen-stat span{font-size:8.5px;font-weight:800;color:#71829A;letter-spacing:.04em}
+.scen-stat b{font-family:var(--num);font-size:13.5px;color:#E9EFFA}
+.scen-stat.hl{background:rgba(52,211,153,.08);border-color:rgba(52,211,153,.26)}
+.scen-stat.hl b{color:#B8F5DC}
+.scen-tags{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.scen-note{font-size:9px;color:#6E7F95;line-height:1.65}
+.scen-note b{color:#A9B9CE}
 .spinner{width:11px;height:11px;border-radius:50%;border:2px solid rgba(245,158,11,.25);border-top-color:#F59E0B;
   animation:sp .7s linear infinite;display:inline-block}
 @keyframes sp{to{transform:rotate(360deg)}}
@@ -1156,7 +1210,7 @@ html,body{width:100%;height:100%}
               </div>
               <span class="chip" style="height:20px;font-size:9.5px">종합 <b id="radar-grade">골드 I</b></span>
             </div>
-            <svg class="radar-svg" id="radar" viewBox="0 0 392 246"></svg>
+            <svg class="radar-svg" id="radar" viewBox="0 0 392 258"></svg>
             <div class="radar-foot">
               <span id="radar-weak">가장 약한 영역 · <b>마이크로 보정 41</b></span>
               <span id="radar-note">오늘 추천 1순위 반영</span>
@@ -1176,7 +1230,10 @@ html,body{width:100%;height:100%}
               </div>
             </div>
             <div class="rec-list" id="rec-list"></div>
-            <button class="rec-save" id="rec-save"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-save"/></svg>오늘 기록 저장 · 5칸 점수 로그에 자동 기록</button>
+            <div class="rec-foot">
+              <button class="rec-more" id="rec-more"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>더 연습하기</button>
+              <button class="rec-save" id="rec-save"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-save"/></svg>오늘 기록 저장 · 5칸 점수 로그</button>
+            </div>
           </div>
         </div>
 
@@ -1215,10 +1272,10 @@ html,body{width:100%;height:100%}
         <div class="head">
           <div>
             <h1>오늘의 추천 5종</h1>
-            <div class="sub"><span>40종 실측 시나리오</span><span class="sep">/</span><b id="hd2-trainer">KovaaK's</b><span class="sep">·</span><span id="hd2-weapon">스나 기준</span><span class="sep">·</span><span>약점 우선 정렬</span></div>
+            <div class="sub"><span id="hd2-count">40종 실측 시나리오</span><span class="sep">/</span><b id="hd2-trainer">KovaaK's</b><span class="sep">·</span><span id="hd2-weapon">스나 기준</span><span class="sep">·</span><span>약점 우선 정렬</span></div>
           </div>
           <div class="head-right">
-            <span class="chip amber">정밀 플릭 · 초급 난이도 매칭</span>
+            <span class="chip amber" id="rec-head-chip">정밀 플릭 · 초급 난이도 매칭</span>
             <button class="btn btn-primary" id="run-all-btn"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>5종 연속 실행</button>
           </div>
         </div>
@@ -1234,6 +1291,7 @@ html,body{width:100%;height:100%}
           <div style="margin:0 12px 12px;height:46px;border-radius:9px;display:flex;align-items:center;gap:10px;padding:0 12px;background:linear-gradient(90deg,rgba(245,158,11,.12),rgba(245,158,11,.03));border:1px solid rgba(245,158,11,.24)">
             <span style="font-size:9.5px;font-weight:800;color:#FBD48F;letter-spacing:.04em;white-space:nowrap">오늘의 5종 순서</span>
             <div id="today-order" style="display:flex;align-items:center;gap:5px;flex:1;overflow:hidden"></div>
+            <button class="btn btn-ghost" id="rec-more-2" style="height:26px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>더 연습하기</button>
             <button class="btn btn-primary" id="score-input-btn" style="height:26px"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>5칸 점수 입력</button>
           </div>
         </div>
@@ -1340,7 +1398,7 @@ html,body{width:100%;height:100%}
               <span>닉네임</span>
               <span>주 무기</span>
               <span>솔로 티어 · RP</span>
-              <span class="r">파티 RP</span>
+              <span>파티 티어 · RP</span>
               <span class="r">최근 K/D</span>
               <span class="r">평균 딜량</span>
               <span class="r">승률</span>
@@ -1352,7 +1410,7 @@ html,body{width:100%;height:100%}
           <div class="lb-sum">
             <div class="lb-tile">
               <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-trophy"/></svg></div>
-              <div class="tx"><span>내 순위</span><b><span id="sum-mine">1</span>위 <i>/ 10명</i></b></div>
+              <div class="tx"><span>내 순위</span><b><span id="sum-mine">1</span>위 <i id="sum-mine-n">/ 10명</i></b></div>
             </div>
             <div class="lb-tile c2">
               <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-up"/></svg></div>
@@ -1566,6 +1624,37 @@ html,body{width:100%;height:100%}
     </div>
   </div>
 
+  <div class="mask" id="scen-mask">
+    <div class="modal">
+      <div class="modal-hd">
+        <div><h3 id="scen-title">시나리오</h3><span id="scen-sub">점수를 저장하면 통합 점수 · 5영역 · 티어에 바로 반영됩니다</span></div>
+        <button class="x" data-close="scen-mask">✕</button>
+      </div>
+      <div class="modal-bd">
+        <div class="scen-tags">
+          <span class="area" id="scen-area">정밀 플릭</span>
+          <span class="chip" id="scen-diff">초급</span>
+          <span class="chip cyan" id="scen-trainer">KovaaK's · 스나</span>
+        </div>
+        <div class="scen-stats">
+          <div class="scen-stat hl"><span>오늘 내 점수</span><b id="scen-today">미기록</b></div>
+          <div class="scen-stat"><span>최근 기록</span><b id="scen-last">—</b></div>
+          <div class="scen-stat"><span>최고 기록</span><b id="scen-best">—</b></div>
+        </div>
+        <div class="mfield">
+          <label>오늘 점수 입력 / 수정</label>
+          <input id="scen-score" type="number" min="0" step="any" inputmode="decimal" placeholder="예: 152 (코박스) · 92500 (에임랩)">
+          <div class="scen-note" id="scen-note">점수를 비우면 저장하지 않습니다 · 저장 즉시 통합 프로필에 반영</div>
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" data-close="scen-mask">닫기</button>
+        <button class="btn btn-cyan" id="scen-play"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>게임에서 재생</button>
+        <button class="btn btn-primary" id="scen-save">점수 저장</button>
+      </div>
+    </div>
+  </div>
+
   <div class="mask" id="cloud-mask">
     <div class="modal">
       <div class="modal-hd">
@@ -1640,6 +1729,28 @@ const SOLO_BANDS = [
 ];
 function bandOf(rp){ let b=SOLO_BANDS[0]; SOLO_BANDS.forEach(x=>{ if(rp>=x.min) b=x; }); return b; }
 
+/* 랭크전 파티 = 본섭 공식 파티 티어 마크 (party_10 ~ party_16) */
+const PARTY_BANDS = [
+  {min:0,    n:'언랭크', img:'solo_100'},
+  {min:1600, n:'실버 III', img:'party_10'},
+  {min:1800, n:'골드 I', img:'party_10'},
+  {min:2000, n:'골드 II', img:'party_10'},
+  {min:2200, n:'골드 III', img:'party_10'},
+  {min:2400, n:'마스터 I', img:'party_10'},
+  {min:2600, n:'마스터 II', img:'party_11'},
+  {min:2800, n:'마스터 III', img:'party_12'},
+  {min:3000, n:'그랜드마스터 I', img:'party_13'},
+  {min:3200, n:'그랜드마스터 II', img:'party_14'},
+  {min:3400, n:'그랜드마스터 III', img:'party_15'},
+  {min:3600, n:'레전드', img:'party_16'}
+];
+function partyBandOf(rp){
+  if(!rp || rp<=0) return PARTY_BANDS[0];
+  let b=PARTY_BANDS[1]||PARTY_BANDS[0];
+  PARTY_BANDS.forEach(x=>{ if(rp>=x.min) b=x; });
+  return b;
+}
+
 /* 한국 본섭 공식 원형 티어 마크 (work/tier/kr_all → assets) · solo_100 = 언랭크 '?' */
 const TIER_MARK = ['solo_101','solo_102','solo_103','solo_104','solo_105','solo_106',
                    'solo_107','solo_108','solo_109','solo_110','solo_111','solo_112',
@@ -1677,6 +1788,20 @@ let RECS = {
     {name:'Strafetrack', area:3, diff:'중급', score:null, done:false},
     {name:'Switchtrack', area:4, diff:'중급', score:null, done:false}
   ]
+};
+
+/* 오늘 내가 적은 시나리오 점수 (서버 state.today_scores) */
+let TODAY_SCORES = {};
+
+/* 무기별 추천 철학 (서버 state.philosophy 로 갱신) */
+let PHILOSOPHY = {
+  sniper: '스나 맞춤 · 롱 트래킹 제외 · 플릭/마이크로/반응·동체/스위칭',
+  rifle: '라플 맞춤 · 트래킹/스위칭/헤드라인·마이크로/플릭'
+};
+
+/* `+ 더 연습하기` 로 추가된 시나리오 (브리지가 state.summaries[..].more 로 채운다) */
+let RECS_MORE = {
+  'kovak-sniper': [], 'kovak-rifle': [], 'aimlab-sniper': [], 'aimlab-rifle': []
 };
 
 const LIB = {
@@ -1749,7 +1874,9 @@ let lbSort='solo';
 
 /* ================= RADAR ================= */
 function drawRadar(){
-  const svg=$('#radar'); const W=392,H=246,cx=W/2,cy=H/2-2,R=86;
+  /* v1.1.0: viewBox 392×258 · 중심을 아래로 내리고 반지름을 줄여 맨 위 꼭짓점의
+     영역 이름·점수가 SVG 위쪽 경계에 잘리지 않게 했다. */
+  const svg=$('#radar'); const W=392,H=258,cx=W/2,cy=130,R=82;
   const n=5, ang=i=>-Math.PI/2+i*2*Math.PI/n;
   const pt=(i,r)=>[cx+Math.cos(ang(i))*r, cy+Math.sin(ang(i))*r];
   let s='';
@@ -1804,9 +1931,20 @@ function drawSpark(){
    <circle cx="${p[p.length-1][0]}" cy="${p[p.length-1][1]}" r="2" fill="#A7F3D0"/>`;
 }
 
+/* 카드 크기에 맞춰 viewBox 를 1:1 로 — preserveAspectRatio=none 로 늘리면
+   글자가 세로로 찌그러져 축 라벨(1,062 · 50.8)이 겹쳐 보인다. */
+function fitSvg(svg, defW, defH){
+  const box=svg.getBoundingClientRect();
+  const W=box.width>80?Math.round(box.width):defW;
+  const H=box.height>60?Math.round(box.height):defH;
+  svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  return {W,H};
+}
+
 /* ================= TREND CHART ================= */
 function drawTrend(){
-  const svg=$('#chart-trend'), W=300,H=120;
+  const svg=$('#chart-trend');
+  const {W,H}=fitSvg(svg,300,120);
   const labels=TREND.labels||[];
   const raw=TREND.values||[];
   const data=raw.map(v=>v===null?null:Number(v));
@@ -1835,16 +1973,17 @@ function drawTrend(){
     if(!q) return;
     const last=i===pts.length-1;
     s+=`<circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="${last?3.6:2.1}" fill="${last?'#FDE68A':'#0B111D'}" stroke="#F59E0B" stroke-width="1.5"/>`;
-    s+=`<text x="${q[0].toFixed(1)}" y="${H-5}" text-anchor="middle" font-family="Chakra" font-size="7.5" fill="#5E6E85">${(labels[i]||'').slice(-5)}</text>`;
+    s+=`<text x="${q[0].toFixed(1)}" y="${H-5}" text-anchor="middle" font-family="Chakra" font-size="8.5" fill="#5E6E85">${(labels[i]||'').slice(-5)}</text>`;
   });
   const lastPts=pts.filter(Boolean).slice(-1)[0];
-  if(lastPts) s+=`<text x="${lastPts[0].toFixed(1)}" y="${(lastPts[1]-8).toFixed(1)}" text-anchor="end" font-family="Chakra" font-size="9" font-weight="700" fill="#FDE68A">${known[known.length-1].toLocaleString()}</text>`;
+  if(lastPts) s+=`<text x="${lastPts[0].toFixed(1)}" y="${(lastPts[1]-8).toFixed(1)}" text-anchor="end" font-family="Chakra" font-size="10" font-weight="700" fill="#FDE68A">${known[known.length-1].toLocaleString()}</text>`;
   svg.innerHTML=s;
 }
 
 /* ================= GAME CHART ================= */
 function drawGame(){
-  const svg=$('#chart-game'), W=300,H=120;
+  const svg=$('#chart-game');
+  const {W,H}=fitSvg(svg,300,120);
   const labels=GAME_TREND.labels||[];
   const kd=(GAME_TREND.kd||[]).map(v=>v===null?null:Number(v));
   const dmg=(GAME_TREND.dmg||[]).map(v=>v===null?null:Number(v));
@@ -1866,16 +2005,16 @@ function drawGame(){
   for(let k=0;k<=2;k++){
     const v=dmin+dspan*k/2;
     s+=`<line x1="${padL}" y1="${YD(v).toFixed(1)}" x2="${W-padR}" y2="${YD(v).toFixed(1)}" stroke="rgba(148,163,184,.09)" stroke-width="1" stroke-dasharray="2 5"/>`;
-    s+=`<text x="${padL-4}" y="${(YD(v)+3).toFixed(1)}" text-anchor="end" font-family="Chakra" font-size="7.5" fill="#5E6E85">${Math.round(v)}</text>`;
+    s+=`<text x="${padL-4}" y="${(YD(v)+3).toFixed(1)}" text-anchor="end" font-family="Chakra" font-size="8.5" fill="#5E6E85">${Math.round(v)}</text>`;
     const kv=kmin+kspan*k/2;
-    s+=`<text x="${W-padR+4}" y="${(YK(kv)+3).toFixed(1)}" text-anchor="start" font-family="Chakra" font-size="7.5" fill="#4E6A7A">${kv.toFixed(1)}</text>`;
+    s+=`<text x="${W-padR+4}" y="${(YK(kv)+3).toFixed(1)}" text-anchor="start" font-family="Chakra" font-size="8.5" fill="#4E6A7A">${kv.toFixed(1)}</text>`;
   }
   dmg.forEach((v,i)=>{
     if(v===null) return;
     const x=padL+i*bw+bw*0.26, w=bw*0.48, y=YD(v), h=(H-padB)-y;
     s+=`<rect x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1,h).toFixed(1)}" rx="2.5" fill="url(#bg1)"/>`;
   });
-  labels.forEach((lb,i)=>{ s+=`<text x="${(padL+i*bw+bw/2).toFixed(1)}" y="${H-5}" text-anchor="middle" font-family="Chakra" font-size="7.5" fill="#5E6E85">${String(lb).slice(-5)}</text>`; });
+  labels.forEach((lb,i)=>{ s+=`<text x="${(padL+i*bw+bw/2).toFixed(1)}" y="${H-5}" text-anchor="middle" font-family="Chakra" font-size="8.5" fill="#5E6E85">${String(lb).slice(-5)}</text>`; });
   const pts=kd.map((v,i)=>v===null?null:[padL+i*bw+bw/2, YK(v)]).filter(Boolean);
   if(pts.length>1){
     const line=pts.map((q,i)=>(i?'L':'M')+q[0].toFixed(1)+' '+q[1].toFixed(1)).join(' ');
@@ -1885,7 +2024,7 @@ function drawGame(){
   const lastK=knownK[knownK.length-1];
   if(lastK!==undefined && pts.length){
     const q=pts[pts.length-1];
-    s+=`<text x="${(q[0]-6).toFixed(1)}" y="${(q[1]-7).toFixed(1)}" text-anchor="end" font-family="Chakra" font-size="9" font-weight="700" fill="#BAE6FD">${lastK.toFixed(1)}%</text>`;
+    s+=`<text x="${(q[0]-6).toFixed(1)}" y="${(q[1]-7).toFixed(1)}" text-anchor="end" font-family="Chakra" font-size="10" font-weight="700" fill="#BAE6FD">${lastK.toFixed(1)}%</text>`;
   }
   svg.innerHTML=s;
 }
@@ -1912,27 +2051,60 @@ function drawLadder(){
 }
 
 /* ================= REC LIST (dashboard) ================= */
+function todayScore(name){
+  if(TODAY_SCORES && TODAY_SCORES[name]!==undefined && TODAY_SCORES[name]!==null) return TODAY_SCORES[name];
+  const list=RECS[`${game}-${weapon}`]||[];
+  const hit=list.find(r=>r.name===name);
+  if(hit){ const t=recTodayScore(hit); if(t!==null&&t!==undefined) return t; }
+  const more=(RECS_MORE&&RECS_MORE[`${game}-${weapon}`])||[];
+  const hit2=more.find(r=>r.name===name);
+  if(hit2){ const t=recTodayScore(hit2); if(t!==null&&t!==undefined) return t; }
+  return null;
+}
+function recTodayScore(r){
+  if(r && r.today_score!==null && r.today_score!==undefined) return r.today_score;
+  if(r && r.done && r.score!==null && r.score!==undefined) return r.score;
+  return null;
+}
+function escAttr(v){
+  return String(v==null?'':v).replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+function recRowHtml(r,i,mark){
+  const a=AREAS[r.area]||AREAS[0];
+  const fmt=v=>Number(v).toLocaleString('ko-KR');
+  const delta=(r.delta===null||r.delta===undefined)?'':` · <span class="up" style="color:${r.delta>=0?'#6EE7C0':'#F7AFAE'}">${r.delta>=0?'▲':'▼'} ${Math.abs(r.delta).toFixed(1)}</span>`;
+  const meta = (r.score!==null&&r.score!==undefined)
+    ? `최근 <span class="dl">${fmt(r.score)}</span> · ${r.diff}${delta}`
+    : `${r.diff} · 미측정 · 첫 기록`;
+  const today=recTodayScore(r);
+  const cell = (today===null||today===undefined)
+    ? `<div class="rec-today none">미기록</div>`
+    : `<div class="rec-today"><span class="lb">오늘</span>${fmt(today)}<i>점</i></div>`;
+  return `<div class="rec ${r.done?'done':''}" data-rec="${i}" data-name="${escAttr(r.name)}" data-areakey="${a.key}" title="클릭 → 점수 입력/수정 + 게임에서 재생">
+    <div class="rec-idx">${mark}</div>
+    <div style="min-width:0">
+      <div class="rec-name">${r.name}</div>
+      <div class="rec-meta">${meta}</div>
+    </div>
+    <span class="area ${a.cls}">${a.name}</span>
+    ${cell}
+    <button class="run" data-run="${i}"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>실행</button>
+  </div>`;
+}
+
 function drawRecs(){
   const key=`${game}-${weapon}`;
   const list=RECS[key]||[];
-  if(!list.length){ $('#rec-list').innerHTML='<div class="empty">추천을 계산하려면 <b>훈련 기록</b>이 필요합니다<br>아래 <b>오늘 기록 저장</b>으로 첫 점수를 남겨 주세요</div>'; return; }
-  $('#rec-list').innerHTML=list.map((r,i)=>{
-    const a=AREAS[r.area]||AREAS[0];
-    const delta=(r.delta===null||r.delta===undefined)?'':`<span class="up" style="color:${r.delta>=0?'#6EE7C0':'#F7AFAE'}">${r.delta>=0?'▲':'▼'} ${Math.abs(r.delta).toFixed(1)}</span>`;
-    const meta = (r.score!==null&&r.score!==undefined)
-      ? `최근 <span class="dl">${r.score}</span> · ${r.diff} · ${delta}`
-      : `${r.diff} · 미측정 · 첫 기록`;
-    return `<div class="rec ${r.done?'done':''}" data-rec="${i}">
-      <div class="rec-idx">${r.done?'✓':i+1}</div>
-      <div style="min-width:0">
-        <div class="rec-name">${r.name}</div>
-        <div class="rec-meta">${meta}</div>
-      </div>
-      <span class="area ${a.cls}">${a.name}</span>
-      <button class="run" data-run="${i}"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>스팀 실행</button>
-      ${(r.score!==null&&r.score!==undefined)?`<div class="score">${r.score}<span>점</span></div>`:`<div class="score empty">점수 입력</div>`}
-    </div>`;
-  }).join('');
+  const more=((typeof RECS_MORE!=='undefined'&&RECS_MORE&&RECS_MORE[key])||[]);
+  const body=$('#rec-list');
+  if(!body) return;
+  if(!list.length){ body.innerHTML='<div class="empty">추천을 계산하려면 <b>훈련 기록</b>이 필요합니다<br>시나리오를 눌러 <b>첫 점수</b>를 남겨 주세요</div>'; return; }
+  let html=list.map((r,i)=>recRowHtml(r,i,r.done?'✓':i+1)).join('');
+  if(more.length){
+    html+=`<div class="rec-sep"><span>약점 보완 · 더 연습 ${more.length}종</span></div>`
+        + more.map((r,i)=>recRowHtml(r,i,'+')).join('');
+  }
+  body.innerHTML=html;
 }
 
 /* ================= REC GRID (library screen) ================= */
@@ -1964,9 +2136,15 @@ function drawRecGrid(){
   const sub=$('#rec-grid-sub');
   if(sub){
     const total=Object.values(lib).reduce((a,b)=>a+b.length,0);
-    sub.textContent = game==='aimlab'
-      ? `Aim Lab ${weapon==='sniper'?'스나':'라플'} 5종 · 영역별 1종씩 · 클릭하면 바로 실행`
-      : `코박스 ${weapon==='sniper'?'스나':'라플'} ${total}종 · 메인 10종 + 영역별 보완 · 지금 티어에 맞는 난이도만 활성화됩니다`;
+    const ph=(typeof PHILOSOPHY!=='undefined'&&PHILOSOPHY&&PHILOSOPHY[weapon])||'';
+    sub.textContent = `${game==='aimlab'?'Aim Lab':"KovaaK's"} ${weapon==='sniper'?'스나':'라플'} ${total}종 · ${ph||'약점 우선 추천'} · 클릭하면 점수 입력 + 바로 실행`;
+  }
+  const headChip=$('#rec-head-chip');
+  if(headChip) headChip.textContent = PHILOSOPHY[weapon] || '약점 우선 정렬';
+  const hdCount=$('#hd2-count');
+  if(hdCount){
+    const total=Object.values(lib).reduce((a,b)=>a+b.length,0);
+    hdCount.textContent=`${game==='aimlab'?'Aim Lab':"KovaaK's"} ${total}종 시나리오`;
   }
   el.innerHTML=AREAS.map((a,i)=>{
     const items=lib[i]||[];
@@ -1981,10 +2159,11 @@ function drawRecGrid(){
       </div>
       ${items.map(n=>{
         const hot=today.includes(n);
+        const mine=todayScore(n);
         return `<div style="display:flex;align-items:center;gap:5px;flex:0 0 23px;min-height:23px;padding:0 6px;border-radius:5px;background:${hot?'rgba(245,158,11,.10)':'rgba(148,163,184,.045)'};border:1px solid ${hot?'rgba(245,158,11,.26)':'transparent'}">
           <span style="width:4px;height:4px;border-radius:50%;background:${hot?'#F59E0B':'#3C4A5E'};flex:0 0 4px"></span>
-          <span data-scen="${n}" title="클릭하면 Steam에서 바로 실행" style="cursor:pointer;font-size:9.5px;color:${hot?'#FDE8BD':'#A9B9CE'};font-weight:${hot?700:500};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${n}</span>
-          <span style="font-size:8px;color:#5E6E85;font-weight:700">${hot?'오늘':''}</span>
+          <span data-scen="${n}" data-scen-area="${a.key}" title="클릭하면 점수 입력 · 게임에서 재생" style="cursor:pointer;font-size:9.5px;color:${hot?'#FDE8BD':'#A9B9CE'};font-weight:${hot?700:500};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${n}</span>
+          <span style="font-family:Chakra;font-size:8px;color:${mine===null?'#5E6E85':'#9AE6C9'};font-weight:700;white-space:nowrap">${mine===null?(hot?'오늘':''):Number(mine).toLocaleString('ko-KR')}</span>
         </div>`;
       }).join('')}
     </div>`;
@@ -1994,9 +2173,17 @@ function drawRecGrid(){
 function drawTodayOrder(){
   const el=$('#today-order'); if(!el) return;
   const list=RECS[`${game}-${weapon}`]||[];
-  el.innerHTML=list.map((r,i)=>`
-    <span style="display:inline-flex;align-items:center;gap:4px;font-size:9.5px;color:${r.done?'#9AE6C9':'#C7D3E4'};background:rgba(7,11,19,.5);border:1px solid rgba(148,163,184,.14);border-radius:5px;padding:3px 6px;white-space:nowrap;max-width:180px;overflow:hidden;text-overflow:ellipsis">
-      <b style="font-family:Chakra;color:${r.done?'#34D399':'#8496AE'}">${r.done?'✓':i+1}</b>${r.name}</span>${i<4?'<span style="color:#4B5A70;font-size:8px">→</span>':''}`).join('');
+  const fmt=v=>Number(v).toLocaleString('ko-KR');
+  el.innerHTML=list.map((r,i)=>{
+    const t=recTodayScore(r);
+    const mark=(t===null||t===undefined)
+      ? `<i style="font-family:Chakra;font-style:normal;color:#5E6E85">-</i>`
+      : `<i style="font-family:Chakra;font-style:normal;font-weight:700;color:#9AE6C9">${fmt(t)}</i>`;
+    return `<span title="${r.name}" style="display:inline-flex;align-items:center;gap:5px;min-width:0;max-width:196px;font-size:9.5px;color:${r.done?'#9AE6C9':'#C7D3E4'};background:rgba(7,11,19,.5);border:1px solid ${r.done?'rgba(52,211,153,.32)':'rgba(148,163,184,.14)'};border-radius:5px;padding:3px 6px">
+      <b style="flex:0 0 auto;font-family:Chakra;color:${r.done?'#34D399':'#8496AE'}">${r.done?'✓':i+1}</b>
+      <span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</span>
+      ${mark}</span>${i<4?'<span style="flex:0 0 auto;color:#4B5A70;font-size:8px">→</span>':''}`;
+  }).join('');
 }
 
 /* ================= GOALS ================= */
@@ -2133,7 +2320,10 @@ function drawLeaderboard(){
           <div class="emb"><img src="assets/${img}.png" alt="${tierName}"></div>
           <div class="tt"><b>${tierName}</b><span>${m.solo>0?Number(m.solo).toLocaleString()+' RP':'언랭크'}</span></div>
         </div>
-        <div class="lb-num ${lbSort==='party'?'':'dim'}">${num(m.party)}</div>
+        <div class="lb-tier party ${lbSort==='party'?'':'dim'}">
+          <div class="emb"><img src="assets/${(m.party>0?partyBandOf(Number(m.party)):UNRANKED).img}.png" alt="${m.party_tier||''}"></div>
+          <div class="tt"><b>${m.party>0?(m.party_tier||partyBandOf(Number(m.party)).n):'언랭크'}</b><span>${m.party>0?Number(m.party).toLocaleString()+' RP':'—'}</span></div>
+        </div>
         <div class="lb-num ${lbSort==='kd'?'':'dim'}">${pct(m.kd)}</div>
         <div class="lb-num ${lbSort==='dmg'?'':'dim'}">${num(m.dmg)}</div>
         <div class="lb-num">${pct(m.win)}</div>
@@ -2163,6 +2353,7 @@ function drawLeaderboard(){
   const meRow=MEMBERS.find(m=>m.me);
   const mePos=list.findIndex(m=>m.me)+1;
   $('#sum-mine').textContent=mePos>0?mePos:'-';
+  const sumMineN=$('#sum-mine-n'); if(sumMineN) sumMineN.textContent=`/ ${n}명`;
   const topRp=list.length?(list[0].solo||0):0;
   $('#sum-gap').textContent=meRow?Math.max(0,topRp-(meRow.solo||0)).toLocaleString():'—';
   const avg=ranked.length?Math.round(ranked.reduce((a,m)=>a+(m.solo||0),0)/ranked.length):0;
@@ -2340,6 +2531,8 @@ $('#s-utils').addEventListener('click', e=>{
 function showScreen(name){
   $$('.nav-item').forEach(b=>b.classList.toggle('on',b.dataset.screen===name));
   $$('.screen').forEach(s=>s.hidden = s.id!=='s-'+name);
+  /* 숨어 있는 동안에는 크기를 잴 수 없어, 다시 보일 때 차트·레이더를 1:1 로 다시 그린다 */
+  if(name==='dashboard'){ drawRadar(); drawSpark(); drawTrend(); drawGame(); }
 }
 $$('.nav-item').forEach(b=>b.addEventListener('click',()=>{ showScreen(b.dataset.screen); if(window.AL&&window.AL.onScreen) window.AL.onScreen(b.dataset.screen); }));
 $$('.seg-game .seg-btn').forEach(b=>b.addEventListener('click',()=>{

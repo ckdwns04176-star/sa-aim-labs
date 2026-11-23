@@ -214,26 +214,39 @@ class Api:
         style = scoring.user_style(records, today=today)
         streak = scoring.streak(records, today)
 
+        more_rows = store.more()
         summaries: dict[str, Any] = {}
         for game in GAMES:
             for weapon in WEAPONS:
                 key = f"{game}-{weapon}"
                 try:
                     summary = scoring.summary(records, game, weapon, today)
-                    recs = scoring.build_recs(
-                        values=summary["values"], records=records, game=game, weapon=weapon,
-                        history=store.rotation(), today=today,
-                    )
+                    recs = self._today_recs(summary["values"], records, game, weapon, today)
                     summary["recs"] = recs
+                    # 오늘 `+ 더 연습하기` 로 연 시나리오 (아직 화면에 남아 있어야 한다)
+                    entry = next((m for m in reversed(more_rows)
+                                  if m.get("date") == today.isoformat()
+                                  and m.get("game") == game and m.get("weapon") == weapon), None)
+                    names = [n for n in ((entry or {}).get("names") or [])
+                             if n not in {r["name"] for r in recs}]
+                    summary["more"] = scoring.recs_for_names(
+                        names, values=summary["values"], records=records,
+                        game=game, weapon=weapon, today=today,
+                    )
                     summary["style"] = style
                     summary["streak"] = streak
                 except Exception:  # noqa: BLE001 - one broken summary must not break boot
                     log.exception("state · summary %s failed", key)
                     summary = scoring.summary([], game, weapon, today)
                     summary["recs"] = []
+                    summary["more"] = []
                     summary["style"] = style
                     summary["streak"] = streak
                 summaries[key] = summary
+
+        # 통합 에임 프로필 — 트레이너/무기와 무관하게 하나의 점수
+        profile = scoring.summary(records, "kovak", "sniper", today)
+        profile["today_scenarios"] = scoring.today_scenario_count(records, today=today)
 
         try:
             barracks = store.barracks_cache().get(settings.get("nickname") or "", None)
@@ -303,6 +316,17 @@ class Api:
             "barracks": barracks,
             "leaderboard": nexon.leaderboard_payload(members),
             "summaries": summaries,
+            "profile": {
+                "values": profile["values"], "score": profile["score"],
+                "tier": profile["tier"], "grade": profile["grade"],
+                "days": profile["days"], "record_count": profile["record_count"],
+                "today_scenarios": profile["today_scenarios"],
+                "trainers": profile["trainers"], "daily": profile["daily"],
+                "week_delta": profile["week_delta"], "integrated": True,
+            },
+            "library": scoring.scenario_library(),
+            "today_scores": scoring.today_scores(records, today),
+            "philosophy": scoring.WEAPON_PHILOSOPHY,
             "style": style,
             "streak": streak,
             "records": records[-200:],
@@ -450,7 +474,8 @@ class Api:
                 area = item.get("area_key") or item.get("area")
                 if area not in scoring.AREA_KEYS:
                     area = _area_for(game, weapon, name)
-                scen_rows.append({"name": name, "area": area, "score": round(value, 1)})
+                scen_rows.append({"name": name, "area": area, "score": round(value, 1),
+                                  "raw_score": round(value, 1), "game": game, "weapon": weapon})
             for key in scoring.AREA_KEYS:
                 if raw_scores.get(key) not in (None, ""):
                     scores[key] = round(float(raw_scores[key]), 1)
@@ -461,23 +486,58 @@ class Api:
                         scores[key] = round(sum(vals) / len(vals), 1)
             if not scores:
                 raise ValueError("저장할 점수가 없습니다")
+            date = str(payload.get("date") or today_str())
 
             record = {
-                "date": payload.get("date") or today_str(),
+                "date": date,
                 "game": game,
+                "trainer": game,          # v1.1.0: 통합 프로필에서도 프로그램 구분은 남긴다
                 "weapon": weapon,
                 "scores": scores,
                 "scenarios": scen_rows,
                 "note": str(payload.get("note") or "")[:200],
             }
+            self._drop_previous(date, game, weapon, [s["name"] for s in scen_rows])
             saved = self.store.add_record(record)
-            names = [s["name"] for s in scen_rows]
-            if names:
-                entry = scoring.rotation_entry([{"name": n} for n in names], game, weapon, _dt.date.fromisoformat(record["date"]))
-                self.store.set_rotation(scoring.push_rotation(self.store.rotation(), entry))
             return {"ok": True, "record": saved, "state": self._build_state()}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
+
+    def _drop_previous(self, date: str, game: str, weapon: str, names: list[str]) -> None:
+        """같은 날 같은 시나리오를 다시 적으면 '수정' — 이전 기록에서 그 항목을 뺀다.
+
+        모달에서 오늘 점수를 고쳐 저장할 때 같은 시나리오가 두 번 쌓여
+        5영역 평균을 왜곡하는 것을 막는다.  시나리오만 있던 기록은 통째로 지운다.
+        """
+        drop = {str(n) for n in names if n}
+        if not drop:
+            return
+        records = self.store.records()
+        kept: list[dict[str, Any]] = []
+        changed = False
+        for rec in records:
+            if rec.get("date") != date or rec.get("game") != game or rec.get("weapon") != weapon:
+                kept.append(rec)
+                continue
+            rows = rec.get("scenarios") or []
+            remain = [s for s in rows if str(s.get("name")) not in drop]
+            if len(remain) == len(rows):
+                kept.append(rec)
+                continue
+            changed = True
+            if not remain:
+                continue          # 이 시나리오만 있던 기록 → 기록째로 삭제
+            rec["scenarios"] = remain
+            scores: dict[str, float] = {}
+            for key in scoring.AREA_KEYS:
+                vals = [float(s["score"]) for s in remain
+                        if s.get("area") == key and s.get("score") is not None]
+                if vals:
+                    scores[key] = round(sum(vals) / len(vals), 1)
+            rec["scores"] = scores
+            kept.append(rec)
+        if changed:
+            self.store.data["records"] = kept
 
     def save_training_session(self, payload: dict[str, Any]) -> dict[str, Any]:
         """UI(ui/bridge.js) 가 부르는 이름 · save_training 과 같은 동작."""
@@ -491,12 +551,11 @@ class Api:
     def regenerate_recs(self, game: str = "kovak", weapon: str = "sniper", offset: int | None = None) -> dict[str, Any]:
         game = game if game in GAMES else "kovak"
         weapon = weapon if weapon in WEAPONS else "sniper"
-        summary = scoring.summary(self.store.records(), game, weapon)
+        records = self.store.records()
+        summary = scoring.summary(records, game, weapon)
         history = self.store.rotation()
-        used_today = next((h for h in history if h.get("date") == today_str()
-                           and h.get("game") == game and h.get("weapon") == weapon), None)
-        step = int(offset) if offset is not None else (len((used_today or {}).get("names") or []) and 1 or 1)
-        recs = scoring.build_recs(values=summary["values"], records=self.store.records(), game=game,
+        step = int(offset) if offset is not None else 1
+        recs = scoring.build_recs(values=summary["values"], records=records, game=game,
                                   weapon=weapon, history=history, offset=step)
         try:
             self.store.set_rotation(scoring.push_rotation(
@@ -504,6 +563,67 @@ class Api:
         except Exception:  # noqa: BLE001
             pass
         return {"ok": True, "recs": recs, "state": self._build_state()}
+
+    def recommend_more(self, game: str = "kovak", weapon: str = "sniper", count: int = 3) -> dict[str, Any]:
+        """`+ 더 연습하기` — 오늘 목록에 없는 시나리오를 가장 약한 영역 위주로.
+
+        연 목록은 data.json(`more`)에 남겨 앱을 다시 켜도 오늘 화면에 그대로 보인다.
+        """
+        try:
+            game = game if game in GAMES else "kovak"
+            weapon = weapon if weapon in WEAPONS else "sniper"
+            count = max(1, min(6, int(count or 3)))
+            records = self.store.records()
+            today = _dt.date.today()
+            summary = scoring.summary(records, game, weapon, today)
+            base = self._today_recs(summary["values"], records, game, weapon, today)
+            rows = self.store.more()
+            entry = next((m for m in reversed(rows)
+                          if m.get("date") == today.isoformat()
+                          and m.get("game") == game and m.get("weapon") == weapon), None)
+            existing = list((entry or {}).get("names") or [])
+            exclude = ([r["name"] for r in base] + existing
+                       + list(scoring.today_scores(records, today).keys()))
+            extra = scoring.build_more(values=summary["values"], records=records, game=game,
+                                       weapon=weapon, exclude=exclude, today=today, count=count)
+            if not extra:
+                return self._ok(recs=[], state=self._build_state(),
+                                message="이 조합에서 더 추천할 시나리오가 없습니다 · 새로고침으로 로테이션을 돌려 보세요")
+            names = existing + [r["name"] for r in extra]
+            if entry is None:
+                rows.append({"date": today.isoformat(), "game": game, "weapon": weapon, "names": names})
+            else:
+                entry["names"] = names
+            self.store.set_more(rows)
+            return self._ok(recs=extra, state=self._build_state(),
+                            message=f"약점 보완 {len(extra)}종을 추가했습니다 · {scoring.WEAPON_PHILOSOPHY.get(weapon, '')}")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def _today_recs(self, values: dict[str, float], records: list[dict[str, Any]], game: str,
+                    weapon: str, today: _dt.date) -> list[dict[str, Any]]:
+        """오늘의 추천 5종 — 하루 동안 고정. 새로고침(regenerate_recs) 때만 바뀝니다.
+
+        오늘 자 로테이션 엔트리가 있으면 그 5종을 그대로 다시 그린다(점수를 적어도
+        목록이 흔들리지 않게). 없으면 약점 우선으로 뽑아 오늘 엔트리로 남긴다.
+        """
+        rows = self.store.rotation()
+        entry = next((h for h in reversed(rows)
+                      if h.get("date") == today.isoformat() and h.get("game") == game
+                      and h.get("weapon") == weapon and h.get("names")), None)
+        if entry:
+            recs = scoring.recs_for_names(entry["names"], values=values, records=records,
+                                          game=game, weapon=weapon, today=today)
+            if len(recs) == len(entry["names"]):
+                return recs
+        recs = scoring.build_recs(values=values, records=records, game=game, weapon=weapon,
+                                  history=rows, today=today)
+        try:
+            self.store.set_rotation(scoring.push_rotation(
+                rows, scoring.rotation_entry(recs, game, weapon, today)))
+        except Exception:  # noqa: BLE001 - 목록 고정은 실패해도 화면은 그린다
+            log.exception("state · rotation save failed for %s-%s", game, weapon)
+        return recs
 
     # ------------------------------------------------------------ launch
     def launch_trainer(self, url: str) -> dict[str, Any]:

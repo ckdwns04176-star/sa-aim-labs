@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app import paths  # noqa: E402  (path setup must come first)
+from app import winutil  # noqa: E402
 
 
 def _setup_logging(debug: bool = False) -> None:
@@ -252,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     # 로그 경로는 bootstrap 응답의 meta.log_file 을 쓴다 — URL 로 넘길 것이 없다.
     url = paths.index_url()
     log_file = paths.log_dir() / "app.log"
-    win_w, win_h = 1200, 750
+    win_w, win_h = winutil.WINDOW_WIDTH, winutil.WINDOW_HEIGHT
     x, y = _center_position(win_w, win_h)
     log.info("window %sx%s at %s,%s", win_w, win_h, x, y)
     window = webview.create_window(
@@ -279,6 +280,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     api.attach(window)
 
+    # ── 창 크기 고정 ──
+    # 서든어택을 4:3 저해상도로 실행했다가 바탕화면(고해상도)으로 돌아오면
+    # DPI·해상도가 바뀌며 창이 커지던 문제.  짧은 간격으로 사각형을 읽어
+    # 논리 1200×750(DPI 환산)에서 벗어나면 즉시 되돌리고, 모니터 작업 영역
+    # 밖으로 나가지 않게 좌표를 보정한다(최소화·최대화는 건드리지 않음).
+    guard = winutil.WindowGuard(paths.APP_TITLE, win_w, win_h)
+    if guard.start():
+        log.info("window guard on · %sx%s 고정 (해상도·DPI 변경 감시)", win_w, win_h)
+    else:
+        log.info("window guard off (Windows 전용)")
+
     def _on_loaded() -> None:
         log.info("ui loaded · bridge should be ready")
 
@@ -297,6 +309,11 @@ def main(argv: list[str] | None = None) -> int:
         log.exception("window failed")
         _fatal(str(exc))
         return 1
+    finally:
+        try:
+            guard.stop()
+        except Exception:  # noqa: BLE001
+            pass
     return 0
 
 

@@ -8,7 +8,7 @@ NEXON Open API 병영수첩·친구 순위표, NVIDIA Drs 최적화 유틸을 �
 main.py                 엔트리 (창 생성 · 정중앙 배치 · --serve 미리보기 · --drs-apply 상승 헬퍼)
 app/api.py              JS ↔ Python 브리지 (window.pywebview.api)
 app/nexon.py            서든어택 오픈 API (전적 · 랭크전 100판 집계 · match-detail 디스크 캐시)
-app/scoring.py          5영역 평점 · 18단계 티어 · 추천 로테이션
+app/scoring.py          통합 에임 프로필 · 5영역 평점 · 18단계 티어 · 무기별 추천 · 에임랩 52종
 app/drs.py              NVIDIA Drs DB 리더/패처 (계단현상 끄기 = AA compatibility 0x00401241)
 app/supabase_sync.py    Supabase Auth + PostgREST (표준 라이브러리만 사용)
 app/nvidia.py           NVIDIA Drs 프로필 백업/적용/복구
@@ -17,6 +17,7 @@ ui/index.html           화면 (정적 디자인 + 샘플 데이터 + 첫 로딩
 ui/bridge.js            화면 ↔ pywebview.api 연결 (실데이터 반영)
 tests/api_test.py       백엔드 테스트 (실응답 캐시 재생 · Drs 패치 · 평점 정규화)
 tests/ui_test.py        Playwright UI 테스트 (목 브리지 · 스크린샷)
+tests/v110_test.py      v1.1.0 검증 (통합 점수 · 추천 UX · 모달 · 스크롤 · 순위표 · 창 고정)
 supabase/schema.sql     user_profiles 테이블 + RLS (SQL Editor 에 1회 실행)
 .github/workflows/      windows-latest 에서 .exe 빌드
 ```
@@ -53,6 +54,26 @@ pyinstaller --noconfirm --onefile --windowed --icon assets/app.ico --name "SA_Ai
 2. Supabase → **SQL Editor** 에 `supabase/schema.sql` 내용을 붙여 1회 실행
    (user_profiles 테이블 + `auth.uid() = user_id` RLS 정책)
 3. 이메일 로그인/회원가입 후 **☁️ 올리기 / 내려받기** 로 PC 간 기록 동기화
+
+## v1.1.0 — 통합 점수 · 에임랩 확충 · 추천 UX
+
+- **통합 에임 프로필**: 코박스 · 에임랩 · 스나 · 라플 기록을 하나로 합쳐 종합 점수 · 18단계
+  티어 · 5영역 밸런스 · 연속/누적 훈련일 · 일별 추이를 계산합니다(`scoring.profile_values`).
+  게임별 점수 단위가 달라 영역마다 0~100 평점으로 환산해 평균합니다.
+- **토글의 의미**: 왼쪽 위 `코박스/에임랩` · `스나/라플` 은 점수를 나누지 않고
+  **오늘의 추천 5종 · 더 연습하기의 시나리오 필터 + 실행 프로그램**만 고릅니다.
+  각 기록에는 `trainer`(game) · `weapon` · `scenarios[].raw_score` 가 남아 스나/라플 유저 판별은 그대로입니다.
+- **무기별 추천 철학**: 스나 = 롱 트래킹 제외(플릭 · 마이크로 · 반응/동체 · 스위칭),
+  라플 = 트래킹 2칸 · 스위칭 · 헤드라인/마이크로 · 플릭.
+- **에임랩 시나리오 52종**(스나 25 · 라플 27, 중복 제외 34종 · 실제 게임 과제명) + 코박스 40종.
+- **추천 5종 UX**: 각 행에 오늘 내 점수(미기록이면 `미기록`) · 클릭하면 모달에서
+  점수 입력/수정 + 저장 + ▶ 게임에서 재생. 같은 시나리오를 다시 적으면 오늘 기록이 갱신(중복 없음).
+- **+ 더 연습하기**: 오늘 목록에 없는 시나리오를 가장 약한 영역 위주로 3종 추가(앱을 다시 켜도 유지).
+- **화면 스크롤**: `.screen` 이 창 높이를 넘으면 스크롤(다크 슬림 스크롤바) — 병영수첩 맨 아래
+  약점 · 맵별 분석까지 도달. 레이더 상단 라벨이 잘리지 않게 viewBox/좌표 조정.
+- **친구 순위표**: 파티 RP 도 솔로와 같은 `엠블럼 + 티어명 + RP` 형태, 같은 정렬 규칙.
+- **창 크기 고정**: 서든어택 저해상도 실행 후 바탕화면 복귀 시 DPI·해상도 변화로 창이 커지지 않게
+  `winutil.WindowGuard` 가 0.3초 간격으로 실측해 논리 1200×750 으로 되돌리고 화면 밖 이탈을 막습니다.
 
 ## 동작 메모
 

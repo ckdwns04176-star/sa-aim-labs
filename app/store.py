@@ -38,6 +38,7 @@ DEFAULTS: dict[str, Any] = {
     "records": [],
     "leaderboard": [],
     "rotation": [],
+    "more": [],
     "barracks": {},
     "utils": {
         "nvidia": {"mode": None, "alias": False, "last_backup": None, "points": []},
@@ -184,6 +185,16 @@ class Store:
 
     def set_rotation(self, rows: list[dict[str, Any]]) -> None:
         self.data["rotation"] = rows
+        self.save()
+
+    # ------------------------------------------------------------ more practice
+    def more(self) -> list[dict[str, Any]]:
+        """`+ 더 연습하기` 로 오늘 연 시나리오 목록 [{date, game, weapon, names}]"""
+        return self.data.setdefault("more", [])
+
+    def set_more(self, rows: list[dict[str, Any]], keep_days: int = 30) -> None:
+        rows = rows[-keep_days * 4:]
+        self.data["more"] = rows
         self.save()
 
     # ------------------------------------------------------------ misc sections

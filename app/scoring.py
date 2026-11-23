@@ -1,14 +1,24 @@
-"""Scoring engine: 5 aim areas, 18-tier ladder, 40-scenario rotation.
+"""Scoring engine: one unified aim profile, 5 areas, 18-tier ladder, 60+ scenarios.
 
 The numbers mirror the "코박스 에임 성장일기" spreadsheet the user built
 (18 tiers of 0 ~ 3,600+ points, 5 areas x 8 scenarios = 40 KovaaK's scenarios,
-Aim Lab 5 + 5).  Everything here is pure Python with no I/O so it can be unit
-tested and reused from the JS side through the bridge.
+Aim Lab 25(스나) + 27(라플) — 중복 제외 34종).  Everything here is pure Python with no
+I/O so it can be unit tested and reused from the JS side through the bridge.
+
+v1.1.0 — 통합 에임 프로필
+  · 종합 점수 / 18단계 티어 / 5영역 밸런스 / 연속·누적 훈련일 / 일별 추이를
+    트레이너(코박스·에임랩)와 무기(스나·라플) 구분 없이 **하나로 합산**한다.
+    (`profile_values` · `summary`)
+  · 각 훈련 로그에는 `game`(trainer) · `weapon` · `scenarios[].name` · raw 점수가
+    그대로 남아, 스나/라플 유저 자동 판별과 시나리오별 기록은 계속 동작한다.
+  · 코박스/에임랩 · 스나/라플 토글은 **추천 5종 · 더 연습하기의 필터 + 실행
+    프로그램**을 고르는 용도다 (`build_recs` · `WEAPON_PLAN`).
 """
 from __future__ import annotations
 
 import datetime as _dt
 import statistics
+from collections import Counter
 from typing import Any, Iterable, Sequence
 
 # ---------------------------------------------------------------- areas
@@ -21,6 +31,7 @@ AREAS: list[dict[str, str]] = [
 ]
 AREA_KEYS = [a["key"] for a in AREAS]
 AREA_INDEX = {a["key"]: i for i, a in enumerate(AREAS)}
+AREA_NAME = {a["key"]: a["name"] for a in AREAS}
 
 # ---------------------------------------------------------------- tiers
 # cut = tier start score.  img = official KR circular mark shipped in ui/assets.
@@ -128,25 +139,82 @@ KOVAAK_SCENARIOS: list[tuple[str, str]] = [
     ("voxTargetSwitch 2 Large", "switch"),
 ]
 
+# Aim Lab — 실제 게임에 있는 인기 과제 이름 그대로 (Ultimate / Precision / Speed).
+# 스나: 정밀·와이드 플릭 + 마이크로 보정 + 반응·동체 + 스위칭 (20종)
 AIMLAB_SCENARIOS: dict[str, list[tuple[str, str]]] = {
     "sniper": [
         ("Sixshot Ultimate", "precision"),
+        ("Sixshot Precision", "precision"),
+        ("Snipershot Precision", "precision"),
+        ("Reflexshot Precision", "precision"),
+        ("Headshot Precision", "precision"),
+        ("Multishot Precision", "precision"),
+        ("Multishot Ultimate", "precision"),
+        ("Gridshot Ultimate", "wide"),
         ("Gridshot Precision", "wide"),
+        ("Spidershot Speed", "wide"),
+        ("Spidershot Ultimate", "wide"),
+        ("Reflexshot Ultimate", "wide"),
         ("Microshot Precision", "micro"),
+        ("Microshot Ultimate", "micro"),
+        ("Microshot Speed", "micro"),
+        ("Microflex Precision", "micro"),
+        ("Blinkshot Ultimate", "micro"),
         ("Motionshot Precision", "track"),
-        ("Strafetrack Ultimate", "switch"),
+        ("Strafetrack Precision", "track"),
+        ("Spidershot 180 Ultimate", "track"),
+        ("Circletrack Ultimate", "track"),
+        ("Spheretrack Precision", "track"),
+        ("Switchtrack Ultimate", "switch"),
+        ("Circletrack Speed", "switch"),
+        ("Circletrack Precision", "switch"),
     ],
+    # 라플: 트래킹 · 스위칭 · 헤드라인/마이크로 · 플릭 (27종)
     "rifle": [
         ("Gridshot Precision", "precision"),
-        ("Microflex", "wide"),
-        ("Headshot Precision", "micro"),
-        ("Strafetrack", "track"),
-        ("Switchtrack", "switch"),
+        ("Sixshot Ultimate", "precision"),
+        ("Sixshot Precision", "precision"),
+        ("Spidershot Precision", "precision"),
+        ("Headshot Precision", "precision"),
+        ("Reflexshot Precision", "precision"),
+        ("Reflexshot Ultimate", "precision"),
+        ("Gridshot Ultimate", "wide"),
+        ("Spidershot Ultimate", "wide"),
+        ("Spidershot Speed", "wide"),
+        ("Multishot Ultimate", "wide"),
+        ("Microflex Standard", "wide"),
+        ("Microflex Precision", "micro"),
+        ("Microshot Speed", "micro"),
+        ("Microshot Precision", "micro"),
+        ("Blinkshot Ultimate", "micro"),
+        ("Strafetrack Ultimate", "track"),
+        ("Strafetrack Speed", "track"),
+        ("Circletrack Ultimate", "track"),
+        ("Spheretrack Ultimate", "track"),
+        ("Motiontrack Ultimate", "track"),
+        ("Reactivetrack Ultimate", "track"),
+        ("Linetrace Ultimate", "track"),
+        ("Motionshot Speed", "track"),
+        ("Switchtrack Ultimate", "switch"),
+        ("Spidershot 180 Ultimate", "switch"),
+        ("Circletrack Precision", "switch"),
     ],
 }
 
 GAMES = {"kovak": "KovaaK's", "aimlab": "Aim Lab"}
 WEAPONS = {"sniper": "스나", "rifle": "라플"}
+
+# 무기별 맞춤 시나리오 철학 — 추천 5종이 뽑히는 영역과 장수.
+#   스나 : 롱 트래킹 제외. 플릭(정밀·와이드) · 마이크로 보정 · 반응/동체 · 스위칭
+#   라플 : 트래킹 · 스위칭 · 헤드라인/마이크로 · 플릭 위주
+WEAPON_PLAN: dict[str, list[str]] = {
+    "sniper": ["precision", "wide", "micro", "switch", "precision"],
+    "rifle": ["track", "track", "switch", "micro", "precision"],
+}
+WEAPON_PHILOSOPHY = {
+    "sniper": "스나 맞춤 · 롱 트래킹 제외 · 플릭/마이크로/반응·동체/스위칭",
+    "rifle": "라플 맞춤 · 트래킹/스위칭/헤드라인·마이크로/플릭",
+}
 
 # difficulty: per-area score thresholds (0-100)
 DIFF_LEVELS = ("초급", "중급", "상급")
@@ -157,14 +225,20 @@ def scenarios_for(game: str, weapon: str) -> list[dict[str, Any]]:
     """All scenarios available for a game/weapon pair, with area + priority."""
     if game == "aimlab":
         pairs = AIMLAB_SCENARIOS.get(weapon) or AIMLAB_SCENARIOS["sniper"]
-        return [{"name": n, "area": a, "area_idx": AREA_INDEX[a], "priority": i} for i, (n, a) in enumerate(pairs)]
+        return [{"name": n, "area": a, "area_key": a, "area_idx": AREA_INDEX[a], "priority": i}
+                for i, (n, a) in enumerate(pairs)]
     out: list[dict[str, Any]] = []
     counters: dict[str, int] = {}
     for name, area in KOVAAK_SCENARIOS:
         p = counters.get(area, 0)
         counters[area] = p + 1
-        out.append({"name": name, "area": area, "area_idx": AREA_INDEX[area], "priority": p})
+        out.append({"name": name, "area": area, "area_key": area, "area_idx": AREA_INDEX[area], "priority": p})
     return out
+
+
+def scenario_library() -> dict[str, int]:
+    """{'game-weapon': 종} — 대시보드/테스트가 라이브러리 규모를 확인할 때."""
+    return {f"{g}-{w}": len(scenarios_for(g, w)) for g in GAMES for w in WEAPONS}
 
 
 def difficulty_for(value: float) -> str:
@@ -269,18 +343,49 @@ def band_progress(rp: int | None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------- training data
-def _sorted_records(records: Iterable[dict[str, Any]], game: str | None = None, weapon: str | None = None) -> list[dict[str, Any]]:
+def _sorted_records(records: Iterable[dict[str, Any]], game: str | None = None,
+                    weapon: str | None = None) -> list[dict[str, Any]]:
     rows = [r for r in records if (game is None or r.get("game") == game) and (weapon is None or r.get("weapon") == weapon)]
     rows.sort(key=lambda r: (r.get("created_at") or r.get("date") or "", r.get("id", "")))
     return rows
 
 
-def area_values(records: Sequence[dict[str, Any]], game: str = "kovak", weapon: str = "sniper", window: int = 5) -> dict[str, float]:
-    """Average of the last ``window`` records per area (0-100 평점, 1 decimal)."""
+def _record_day(record: dict[str, Any]) -> str:
+    return str(record.get("date") or str(record.get("created_at") or "")[:10])
+
+
+def area_values(records: Sequence[dict[str, Any]], game: str = "kovak", weapon: str = "sniper",
+                window: int = 5) -> dict[str, float]:
+    """Average of the last ``window`` records per area (0-100 평점, 1 decimal).
+
+    게임/무기로 거른 뒤의 값 — 개별 트레이너를 들여다볼 때만 쓴다.
+    대시보드·티어는 통합 프로필(:func:`profile_values`)을 쓴다.
+    """
     rows = _sorted_records(records, game, weapon)[-window:]
     values: dict[str, float] = {}
     for key in AREA_KEYS:
         vals = [rating_of(game, r["scores"][key]) for r in rows if r.get("scores", {}).get(key) is not None]
+        values[key] = round(statistics.fmean(vals), 1) if vals else 0.0
+    return values
+
+
+def profile_values(records: Sequence[dict[str, Any]], window: int = 5) -> dict[str, float]:
+    """통합 에임 프로필 — 코박스·에임랩·스나·라플의 모든 기록을 한 값으로.
+
+    영역마다 '가장 최근 window 개의 그 영역 점수'를 게임별 기준값으로 0~100
+    평점으로 바꿔 평균한다.  그래서 코박스 152 와 에임랩 92,500 이 같은 축에 놓인다.
+    """
+    rows = _sorted_records(records)
+    values: dict[str, float] = {}
+    for key in AREA_KEYS:
+        vals: list[float] = []
+        for rec in reversed(rows):
+            raw = (rec.get("scores") or {}).get(key)
+            if raw is None:
+                continue
+            vals.append(rating_of(str(rec.get("game") or "kovak"), raw))
+            if len(vals) >= window:
+                break
         values[key] = round(statistics.fmean(vals), 1) if vals else 0.0
     return values
 
@@ -297,7 +402,8 @@ def score_of_record(record: dict[str, Any]) -> int:
     return overall_score({k: rating_of(game, record.get("scores", {}).get(k)) for k in AREA_KEYS})
 
 
-def latest_record(records: Sequence[dict[str, Any]], game: str, weapon: str) -> dict[str, Any] | None:
+def latest_record(records: Sequence[dict[str, Any]], game: str | None = None,
+                  weapon: str | None = None) -> dict[str, Any] | None:
     rows = _sorted_records(records, game, weapon)
     return rows[-1] if rows else None
 
@@ -313,11 +419,38 @@ def scenario_history(records: Sequence[dict[str, Any]], name: str) -> list[dict[
     return out
 
 
+def today_scores(records: Sequence[dict[str, Any]], today: _dt.date | None = None) -> dict[str, float]:
+    """오늘 내가 적은 시나리오 점수 {'시나리오 이름': 점수}."""
+    day = (today or _dt.date.today()).isoformat()
+    out: dict[str, float] = {}
+    for rec in _sorted_records(records):
+        if _record_day(rec) != day:
+            continue
+        for item in rec.get("scenarios", []):
+            if item.get("name") and item.get("score") is not None:
+                out[str(item["name"])] = float(item["score"])
+    return out
+
+
+def today_scenario_count(records: Sequence[dict[str, Any]], game: str | None = None,
+                         weapon: str | None = None, today: _dt.date | None = None) -> int:
+    day = (today or _dt.date.today()).isoformat()
+    names = set()
+    for rec in _sorted_records(records, game, weapon):
+        if _record_day(rec) != day:
+            continue
+        for item in rec.get("scenarios", []):
+            if item.get("name") and item.get("score") is not None:
+                names.add(str(item["name"]))
+    return len(names)
+
+
 # ---------------------------------------------------------------- rotation
 ROTATION_MEMORY_DAYS = 3  # 오늘 + 이전 3일 동안 같은 시나리오를 다시 내지 않는다
 
 
-def _used_recently(history: Sequence[dict[str, Any]], game: str, weapon: str, today: _dt.date, days: int = ROTATION_MEMORY_DAYS) -> set[str]:
+def _used_recently(history: Sequence[dict[str, Any]], game: str, weapon: str, today: _dt.date,
+                   days: int = ROTATION_MEMORY_DAYS) -> set[str]:
     floor = (today - _dt.timedelta(days=days)).isoformat()
     used: set[str] = set()
     for entry in history:
@@ -327,6 +460,55 @@ def _used_recently(history: Sequence[dict[str, Any]], game: str, weapon: str, to
             continue
         used.update(entry.get("names") or [])
     return used
+
+
+def weapon_slots(weapon: str, values: dict[str, float]) -> list[str]:
+    """무기 철학(WEAPON_PLAN) 대로 오늘 뽑을 영역 순서 — 약한 영역이 먼저.
+
+    각 영역을 한 번씩(약점 순) 뽑고, 같은 영역이 두 번 들어가는 무기는
+    그 두 번째 칸을 맨 뒤에 붙인다.  스나 모드에는 트래킹 칸이 없다.
+    """
+    plan = list(WEAPON_PLAN.get(weapon) or AREA_KEYS)
+    counts = Counter(plan)
+    uniq = [k for k in dict.fromkeys(plan)]
+    uniq.sort(key=lambda k: (values.get(k, 0.0), AREA_INDEX[k]))
+    order = list(uniq)
+    for key in uniq:
+        order.extend([key] * max(0, counts[key] - 1))
+    return order
+
+
+def _rec_row(choice: dict[str, Any], *, values: dict[str, float], records: Sequence[dict[str, Any]],
+             today_scores_map: dict[str, float], extra: bool = False) -> dict[str, Any]:
+    key = choice["area_key"]
+    hist = scenario_history(records, choice["name"])
+    last = hist[-1]["score"] if hist else None
+    prev = hist[-2]["score"] if len(hist) > 1 else None
+    delta = round(last - prev, 1) if (last is not None and prev is not None) else None
+    mine = today_scores_map.get(choice["name"])
+    return {
+        "name": choice["name"],
+        "area": choice["area_idx"],
+        "area_key": key,
+        "area_name": AREA_NAME.get(key, ""),
+        "diff": difficulty_for(values.get(key, 0.0)),
+        "score": None if last is None else round(last, 1),
+        "best": None if not hist else round(max(h["score"] for h in hist), 1),
+        "today_score": None if mine is None else round(mine, 1),
+        "delta": delta,
+        "done": mine is not None,
+        "attempts": len(hist),
+        "extra": extra,
+    }
+
+
+def _pick(pool: Sequence[dict[str, Any]], key: str, *, seen: set[str], used: set[str],
+          offset: int) -> dict[str, Any] | None:
+    cands = [s for s in pool if s["area_key"] == key and s["name"] not in seen]
+    if not cands:
+        return None
+    fresh = [s for s in cands if s["name"] not in used] or cands
+    return fresh[offset % len(fresh)]
 
 
 def build_recs(
@@ -340,44 +522,74 @@ def build_recs(
     offset: int = 0,
     count: int = 5,
 ) -> list[dict[str, Any]]:
-    """Pick today's non-repeating recommendations, weakest area first."""
+    """오늘의 추천 count 종 — 무기 철학(약점 우선 · 4일 비반복)대로 뽑는다."""
     today = today or _dt.date.today()
     pool = scenarios_for(game, weapon)
     used = _used_recently(history, game, weapon, today)
-    today_record = next((r for r in _sorted_records(records, game, weapon) if r.get("date") == today.isoformat()), None)
-    done_names = {i.get("name") for i in (today_record or {}).get("scenarios", [])}
-
-    # weakest area first, then stable area order
-    order = sorted(range(len(AREAS)), key=lambda i: (values.get(AREA_KEYS[i], 0.0), i))
+    mine = today_scores(records, today)
     picked: list[dict[str, Any]] = []
-    for area_idx in order:
-        key = AREA_KEYS[area_idx]
-        candidates = [s for s in pool if s["area_idx"] == area_idx]
-        fresh = [s for s in candidates if s["name"] not in used]
-        if not fresh:
-            fresh = candidates
-        if not fresh:
-            continue
-        # offset rotates through the fresh list when the user asks for other recs
-        choice = fresh[offset % len(fresh)]
-        hist = scenario_history(records, choice["name"])
-        last = hist[-1]["score"] if hist else None
-        prev = hist[-2]["score"] if len(hist) > 1 else None
-        delta = round(last - prev, 1) if (last is not None and prev is not None) else None
-        picked.append({
-            "name": choice["name"],
-            "area": area_idx,
-            "area_key": key,
-            "area_name": AREAS[area_idx]["name"],
-            "diff": difficulty_for(values.get(key, 0.0)),
-            "score": None if last is None else round(last, 1),
-            "delta": delta,
-            "done": choice["name"] in done_names,
-            "attempts": len(hist),
-        })
+    seen: set[str] = set()
+    for key in weapon_slots(weapon, values):
         if len(picked) >= count:
             break
+        choice = _pick(pool, key, seen=seen, used=used, offset=offset)
+        if not choice:
+            continue
+        seen.add(choice["name"])
+        picked.append(_rec_row(choice, values=values, records=records, today_scores_map=mine))
     return picked
+
+
+def build_more(
+    *,
+    values: dict[str, float],
+    records: Sequence[dict[str, Any]],
+    game: str = "kovak",
+    weapon: str = "sniper",
+    exclude: Sequence[str] = (),
+    today: _dt.date | None = None,
+    count: int = 3,
+) -> list[dict[str, Any]]:
+    """`+ 더 연습하기` — 오늘 리스트에 없는 시나리오 중 가장 약한 영역 위주."""
+    today = today or _dt.date.today()
+    pool = scenarios_for(game, weapon)
+    mine = today_scores(records, today)
+    seen = {str(n) for n in exclude if n}
+    picked: list[dict[str, Any]] = []
+    # 약한 영역 순으로 두 바퀴 — 한 영역에서만 뽑히지 않게
+    order = weapon_slots(weapon, values) + list(weapon_slots(weapon, values))
+    for key in order:
+        if len(picked) >= count:
+            break
+        cands = [s for s in pool if s["area_key"] == key and s["name"] not in seen]
+        if not cands:
+            continue
+        choice = cands[0]
+        seen.add(choice["name"])
+        picked.append(_rec_row(choice, values=values, records=records, today_scores_map=mine, extra=True))
+    return picked
+
+
+def recs_for_names(
+    names: Sequence[str],
+    *,
+    values: dict[str, float],
+    records: Sequence[dict[str, Any]],
+    game: str = "kovak",
+    weapon: str = "sniper",
+    today: _dt.date | None = None,
+) -> list[dict[str, Any]]:
+    """저장된 '더 연습하기' 이름들을 다시 화면용 행으로."""
+    today = today or _dt.date.today()
+    by_name = {s["name"]: s for s in scenarios_for(game, weapon)}
+    mine = today_scores(records, today)
+    out = []
+    for name in names:
+        choice = by_name.get(str(name))
+        if not choice:
+            continue
+        out.append(_rec_row(choice, values=values, records=records, today_scores_map=mine, extra=True))
+    return out
 
 
 def rotation_entry(recs: Sequence[dict[str, Any]], game: str, weapon: str, today: _dt.date) -> dict[str, Any]:
@@ -398,7 +610,7 @@ def push_rotation(history: Sequence[dict[str, Any]], entry: dict[str, Any], keep
 
 # ---------------------------------------------------------------- streaks & trend
 def record_dates(records: Sequence[dict[str, Any]]) -> set[str]:
-    return {str(r.get("date")) for r in records if r.get("date")}
+    return {_record_day(r) for r in records if r.get("date") or r.get("created_at")}
 
 
 def streak(records: Sequence[dict[str, Any]], today: _dt.date | None = None) -> dict[str, Any]:
@@ -436,15 +648,40 @@ def streak(records: Sequence[dict[str, Any]], today: _dt.date | None = None) -> 
 
 
 def daily_scores(records: Sequence[dict[str, Any]], days: int = 7, today: _dt.date | None = None) -> list[dict[str, Any]]:
+    """그 날 기록만으로 계산한 종합 점수(참고용 · 한 영역만 적은 날은 낮게 나온다)."""
     today = today or _dt.date.today()
     out = []
     for i in range(days - 1, -1, -1):
         day = (today - _dt.timedelta(days=i)).isoformat()
-        rows = [r for r in records if r.get("date") == day]
+        rows = [r for r in records if _record_day(r) == day]
         out.append({
             "date": day,
             "score": int(round(statistics.fmean(score_of_record(r) for r in rows))) if rows else None,
             "records": len(rows),
+        })
+    return out
+
+
+def daily_profile(records: Sequence[dict[str, Any]], days: int = 7, today: _dt.date | None = None) -> list[dict[str, Any]]:
+    """통합 프로필의 일별 추이 — 그날까지의 모든 기록으로 계산한 종합 점수.
+
+    하루에 시나리오 1~2개만 적어도 점수가 반토막 나지 않고, 프로필이 쌓이며
+    오르는 모습이 그대로 보인다(통합 점수 정책).
+    """
+    today = today or _dt.date.today()
+    out = []
+    for i in range(days - 1, -1, -1):
+        day = today - _dt.timedelta(days=i)
+        stamp = day.isoformat()
+        upto = [r for r in records if _record_day(r) <= stamp]
+        on_day = [r for r in upto if _record_day(r) == stamp]
+        values = profile_values(upto)
+        filled = any(v > 0 for v in values.values())
+        out.append({
+            "date": stamp,
+            "score": overall_score(values) if (on_day and filled) else None,
+            "records": len(on_day),
+            "total_records": len(upto),
         })
     return out
 
@@ -455,7 +692,7 @@ def user_style(records: Sequence[dict[str, Any]], days: int = 30, today: _dt.dat
     floor = (today - _dt.timedelta(days=days - 1)).isoformat()
     counts = {"sniper": 0, "rifle": 0}
     for r in records:
-        if str(r.get("date", "")) < floor:
+        if _record_day(r) < floor:
             continue
         w = r.get("weapon")
         if w in counts:
@@ -469,18 +706,41 @@ def user_style(records: Sequence[dict[str, Any]], days: int = 30, today: _dt.dat
     }
 
 
-def summary(records: Sequence[dict[str, Any]], game: str, weapon: str, today: _dt.date | None = None) -> dict[str, Any]:
-    """Everything the dashboard needs for one game/weapon selection."""
+def trainer_breakdown(records: Sequence[dict[str, Any]], today: _dt.date | None = None) -> dict[str, Any]:
+    """통합 프로필 구성 — 어느 프로그램·무기로 얼마나 쌓았는지(표시용)."""
     today = today or _dt.date.today()
-    values = area_values(records, game, weapon)
+    by_game = {g: {"records": 0, "today": 0} for g in GAMES}
+    by_weapon = {w: {"records": 0, "today": 0} for w in WEAPONS}
+    stamp = today.isoformat()
+    for rec in records:
+        g = str(rec.get("game") or "")
+        w = str(rec.get("weapon") or "")
+        on_today = _record_day(rec) == stamp
+        if g in by_game:
+            by_game[g]["records"] += 1
+            by_game[g]["today"] += 1 if on_today else 0
+        if w in by_weapon:
+            by_weapon[w]["records"] += 1
+            by_weapon[w]["today"] += 1 if on_today else 0
+    return {"by_game": by_game, "by_weapon": by_weapon}
+
+
+def summary(records: Sequence[dict[str, Any]], game: str, weapon: str,
+            today: _dt.date | None = None) -> dict[str, Any]:
+    """Dashboard numbers for the *unified* aim profile.
+
+    ``game``/``weapon`` no longer split the score — they only describe which
+    recommendation filter is in front of the user right now.
+    """
+    today = today or _dt.date.today()
+    values = profile_values(records)
     score = overall_score(values)
     tier = tier_of(score)
     nxt = next_tier(score)
-    daily = daily_scores(records, 7, today)
+    daily = daily_profile(records, 7, today)
     filled = [d for d in daily if d["score"] is not None]
-    week_delta = None
-    if len(filled) >= 2:
-        week_delta = filled[-1]["score"] - filled[0]["score"]
+    week_delta = filled[-1]["score"] - filled[0]["score"] if len(filled) >= 2 else None
+    scope = f"{GAMES.get(game, 'KovaaK\'s')} · {WEAPONS.get(weapon, '스나')}"
     return {
         "values": values,
         "score": score,
@@ -494,5 +754,12 @@ def summary(records: Sequence[dict[str, Any]], game: str, weapon: str, today: _d
         "streak": streak(records, today),
         "style": user_style(records, today=today),
         "records": len([r for r in records if r.get("game") == game and r.get("weapon") == weapon]),
-        "last": latest_record(records, game, weapon),
+        "record_count": len(records),
+        "days": len(record_dates(records)),
+        "today_scenarios": today_scenario_count(records, game, weapon, today),
+        "trainers": trainer_breakdown(records, today),
+        "integrated": True,
+        "scope": scope,
+        "philosophy": WEAPON_PHILOSOPHY.get(weapon, ""),
+        "last": latest_record(records),
     }
