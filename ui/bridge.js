@@ -33,7 +33,7 @@
   const style = document.createElement('style');
   style.textContent = [
     '.field input.inp{width:100%;outline:none;font-family:var(--num);font-size:11px;color:#CBD8E8}',
-    '.field input.inp::placeholder{color:#4E5E74}',
+    '.field input.inp::placeholder{color:transparent}',
     '.field input.inp:focus{border-color:rgba(56,189,248,.55);box-shadow:0 0 0 2px rgba(56,189,248,.10)}',
     '.set-card{overflow:auto;min-height:0;gap:7px;padding:11px 13px}',
     '.set-card .rowline{padding:6px 0}',
@@ -63,20 +63,22 @@
 
   /* ------------------------------------------------------------------ 토스트 */
   let toastTimer = null;
-  function toast(message, ok) {
+  function toast(message, ok, ms) {
     const t = $('#app-toast');
     if (!t) return;
     t.textContent = message;
     t.classList.toggle('ok', !!ok);
     t.classList.add('show');
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+    toastTimer = setTimeout(() => t.classList.remove('show'), ms || (ok ? 2600 : 4200));
   }
   AL.toast = toast;
 
   function fail(result, fallback) {
     const message = (result && result.message) || fallback || '요청을 처리하지 못했습니다';
-    toast(message, false);
+    const quota = !!(result && (result.quota || /한도|OPENAPI00007/.test(message)));
+    toast(quota ? (message || '오늘 넥슨 API 일일 호출 한도(1,000건)를 초과했어요. 자정 이후 초기화됩니다')
+                : message, false, quota ? 8000 : 4200);
     return result;
   }
 
@@ -381,7 +383,8 @@
     paintSummaryExtras(summary);
 
     renderUtilsState(utils);
-    renderBarracks(barracks, st);
+    if (AL.peek) renderPeek();
+    else renderBarracks(barracks, st);
     renderSettings(st);
     renderCloudState(st);
   }
@@ -617,8 +620,8 @@
             <div class="card-sub">서든어택 병영수첩 · 친구 순위표</div></div>
           <span class="ustate ${nexon.connected ? 'on' : 'warn'}">${nexon.connected ? '키 등록됨' : '키 필요'}</span>
         </div>
-        ${inputRow('set-nick', '서든어택 닉네임', set.nickname || '', { maxlength: 12, placeholder: '휴가중.' })}
-        ${inputRow('set-key', 'NEXON Open API 키', '', { type: 'password', placeholder: set.api_key_masked || 'test_...' , hint: '발급: open.api.nexon.com · test_ 키는 본인 계정 전용입니다' })}
+        ${inputRow('set-nick', '서든어택 닉네임', set.nickname || '', { maxlength: 12 })}
+        ${inputRow('set-key', 'NEXON Open API 키', '', { type: 'password', hint: '발급: open.api.nexon.com · test_ 키는 본인 계정 전용입니다' })}
         <div class="set-actions">
           <button class="btn btn-primary" id="set-api-save">저장</button>
           <button class="btn btn-ghost" id="set-api-test">저장 후 전적 확인</button>
@@ -647,23 +650,39 @@
     /* ---------- 카드 3 · Supabase ---------- */
     const cl = $('#set-cloud');
     if (cl) {
+      const useDefault = !(set.supabase || {}).url || (set.supabase || {}).url === (cloud.url || '');
       cl.innerHTML = `
         <div class="card-hd" style="padding:0">
-          <div><div class="card-title"><span class="bar"></span>Supabase 클라우드</div>
-            <div class="card-sub">이메일 로그인 · 기록 백업/복원</div></div>
-          <span class="ustate ${cloud.signed_in ? 'on' : cloud.configured ? 'warn' : ''}">${cloud.signed_in ? '로그인됨' : cloud.configured ? '로그인 전' : '설정 필요'}</span>
+          <div><div class="card-title"><span class="bar"></span>클라우드 저장소</div>
+            <div class="card-sub">이메일 로그인 한 번이면 다른 PC 에서도 기록이 이어집니다</div></div>
+          <span class="ustate ${cloud.signed_in ? 'on' : cloud.configured ? 'warn' : ''}">${cloud.signed_in ? '로그인됨' : cloud.configured ? '로그인 전' : '설정 준비됨'}</span>
         </div>
-        ${inputRow('set-sb-url', 'Project URL', cloud.url || '', { placeholder: 'https://xxxx.supabase.co' })}
-        ${inputRow('set-sb-key', 'Publishable key', '', { type: 'password', placeholder: (set.supabase || {}).anon_key_masked || 'sb_publishable_...', hint: 'anon 공개 키입니다 · 데이터는 RLS 로 본인 행만 보호됩니다' })}
-        <div class="set-status ${cloud.signed_in ? 'on' : ''}">${cloud.signed_in ? `☁️ ${cloud.email || ''} · 마지막 동기화 ${fmtLabel(cloud.last_sync)}` : '로그인하면 다른 PC 와 기록이 이어집니다'}</div>
+        <div class="set-note" style="margin:2px 0 6px;font-size:10px;line-height:1.6;color:#A9B9CE">
+          집 · PC방 어디서나 <b>내 에임 기록과 순위표</b>를 이어서 쓰는 클라우드 저장소입니다.
+          이메일로 로그인하면 훈련 기록·순위표가 계정에 저장되고, 다른 PC 에서 <b>내려받기</b>로 그대로 이어갈 수 있습니다.
+        </div>
+        <div class="set-status ${cloud.signed_in ? 'on' : ''}">${cloud.signed_in ? `☁️ ${cloud.email || ''} · 마지막 동기화 ${fmtLabel(cloud.last_sync)}` : '로그인 전 · 이 PC 에는 기록이 로컬로 저장되고 있습니다'}</div>
         <div class="set-actions">
           ${cloud.signed_in
             ? '<button class="btn btn-ghost" id="set-cloud-out">로그아웃</button>'
             : '<button class="btn btn-primary" id="set-cloud-login">로그인 / 회원가입</button>'}
-          <button class="btn btn-ghost" id="set-cloud-check">연결 확인</button>
           <button class="btn btn-cyan" id="set-cloud-push">☁️ 올리기</button>
           <button class="btn btn-ghost" id="set-cloud-pull">내려받기</button>
-        </div>`;
+        </div>
+        <details id="set-cloud-adv" style="margin-top:6px">
+          <summary style="cursor:pointer;font-size:9.5px;font-weight:700;color:#7E8FA6;list-style:none;outline:none">
+            ⚙ 고급 서버 설정 ${useDefault ? '· 기본 서버 사용 중' : '· 직접 입력됨'}
+          </summary>
+          <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+            <div class="set-note" style="font-size:9px;color:#64748B;line-height:1.5">
+              앱에 기본 서버 주소와 공개 키가 이미 들어 있어 <b>그대로 두면 됩니다</b>.
+              본인 Supabase 프로젝트를 쓸 때만 아래를 바꾸세요.
+            </div>
+            ${inputRow('set-sb-url', '프로젝트 URL', cloud.url || '')}
+            ${inputRow('set-sb-key', '공개 키 (publishable / anon)', '', { type: 'password', hint: 'anon 공개 키입니다 · 데이터는 RLS 로 본인 행만 보호됩니다' })}
+            <button class="btn btn-ghost" id="set-cloud-check" style="align-self:flex-start;height:24px;font-size:10px">서버 연결 확인</button>
+          </div>
+        </details>`;
     }
 
     /* ---------- 카드 4 · 목표 · 정보 ---------- */
@@ -692,12 +711,12 @@
   function renderCloudState(st) {
     const cloud = (st && st.cloud) || {};
     const sub = $('#set-cloud-sub');
-    if (sub) sub.textContent = cloud.signed_in ? `Supabase · ${cloud.email || '로그인됨'}` : 'Supabase 클라우드';
+    if (sub) sub.textContent = cloud.signed_in ? `클라우드 · ${cloud.email || '로그인됨'}` : '클라우드 저장소';
     const note = $('#cloud-note');
     if (note) {
-      note.innerHTML = cloud.configured
-        ? `프로젝트 <b>${String(cloud.url || '').replace('https://', '')}</b> · 로그인하면 10명 순위표와 훈련 기록이 같은 계정에 저장됩니다.`
-        : '설정 탭에서 Supabase URL 과 publishable key 를 먼저 저장해 주세요.';
+      note.innerHTML = cloud.signed_in
+        ? `프로젝트 <b>${String(cloud.url || '').replace('https://', '')}</b> · 10명 순위표와 훈련 기록이 계정에 저장되어 다른 PC 에서 이어집니다.`
+        : '앱에 기본 클라우드 서버가 이미 들어 있습니다 · 이메일로 로그인하면 다른 PC 와 기록이 이어집니다.';
     }
   }
 
@@ -734,8 +753,8 @@
     body.innerHTML = recs.map((r, i) => `
       <div class="score-row" data-row="${i}">
         <div><div class="nm">${i + 1}. ${r.name}</div><div class="ar">${(AREAS[r.area] || AREAS[0]).name} · ${r.diff || '초급'}</div></div>
-        <input type="number" min="0" max="100" step="0.1" inputmode="decimal" value=""
-          placeholder="${r.score === null || r.score === undefined ? '0 ~ 100' : '최근 ' + r.score}"
+        <input type="number" min="0" step="any" inputmode="decimal" value=""
+          placeholder="${r.score === null || r.score === undefined ? '' : '최근 ' + r.score}"
           data-name="${String(r.name).replace(/"/g, '&quot;')}" data-area="${(AREAS[r.area] || AREAS[0]).key}">
         <div class="unit">점</div>
       </div>`).join('');
@@ -754,9 +773,9 @@
       if (!input) continue;
       const raw = String(input.value || '').trim();
       if (raw === '') continue;
-      const value = Number(raw);
-      if (Number.isNaN(value) || value < 0 || value > 100) {
-        toast(`${input.dataset.name} 점수는 0 ~ 100 사이로 입력해 주세요`, false);
+      const value = Number(raw.replace(/,/g, ''));
+      if (Number.isNaN(value) || value < 0) {
+        toast(`${input.dataset.name} 점수는 0 이상의 숫자로 입력해 주세요`, false);
         input.focus();
         return;
       }
@@ -812,39 +831,149 @@
   }
 
   async function fetchBarracks(andTest) {
-    const key = $('#set-key');
-    if (key && key.value.trim()) {
-      const saved = await call('save_settings', { api_key: key.value.trim() });
-      if (saved && saved.state) applyState(saved.state);
-      key.value = '';
+    if (!AL.real) {
+      return toast('미리보기 화면입니다 · .exe 로 실행하면 전적을 불러옵니다', false);
     }
-    busy(true, '병영수첩을 불러오는 중… (최근 100판 집계)');
-    const result = await call('fetch_barracks');
+    const nickEl = $('#set-nick');
+    const keyEl = $('#set-key');
+    const nick = nickEl ? String(nickEl.value || '').trim() : '';
+    const key = keyEl ? String(keyEl.value || '').trim() : '';
+    if (key) {
+      const saved = await call('save_settings', { api_key: key });
+      if (saved && saved.state) applyState(saved.state);
+      if (keyEl) keyEl.value = '';
+    }
+    busy(true, '병영수첩을 불러오는 중… (최근 100판 · 이미 받은 경기는 캐시 재사용)');
+    const result = await call('fetch_barracks', nick || null, key || null);
     busy(false);
     if (!result || !result.ok) {
       const message = (result && result.message) || '전적을 불러오지 못했습니다';
-      if (/API 키/.test(message)) {
-        toast(`${message} · 설정 탭에서 키를 저장해 주세요`, false);
+      if (/닉네임|API 키/.test(message)) {
         if (typeof showScreen === 'function') showScreen('settings');
-      } else {
-        toast(message, false);
       }
+      fail(result, message);
       return;
     }
     if (result.state) applyState(result.state);
+    AL.peek = null;
+    renderPeek();
     const b = result.barracks || {};
-    toast(`🪖 ${b.nickname || '전적'} 최신화 · ${n0((b.stats || {}).games)}판 · 승률 ${n0((b.stats || {}).win, 1)}%`, true);
+    const calls = typeof result.calls === 'number' ? result.calls : null;
+    toast(
+      `🪖 ${b.nickname || '전적'} 최신화 · ${n0((b.stats || {}).games)}판 · 승률 ${n0((b.stats || {}).win, 1)}%`
+      + (calls !== null ? ` · API ${calls}회` : ''),
+      true
+    );
   }
 
   async function fetchLeaderboard() {
+    if (!AL.real) return toast('미리보기 화면입니다 · .exe 로 실행하면 순위표를 갱신합니다', false);
     const names = (MEMBERS || []).map((m) => m.name).filter(Boolean).slice(0, 10);
-    busy(true, '순위표 전적을 갱신하는 중…');
+    busy(true, '순위표 전적을 갱신하는 중… (ouid 기준 · 상세는 캐시만 사용)');
     const result = await call('fetch_leaderboard', names);
     busy(false);
     if (!result || !result.ok) return fail(result, '순위표를 갱신하지 못했습니다');
     if (result.state) applyState(result.state);
-    toast(`🔄 ${names.length}명 전적 일괄 갱신 완료`, true);
+    toast(result.message || `🔄 ${names.length}명 전적 일괄 갱신 완료`, true);
   }
+
+  /* ==================================================================
+     병영수첩 · 닉네임 검색 (임시 조회)
+     ================================================================== */
+  const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+
+  function bandImg(rp) {
+    try { return (bandOf(Number(rp) || 0) || { img: 'solo_100' }).img || 'solo_100'; }
+    catch (e) { return 'solo_100'; }
+  }
+
+  function searchResultBox(html) {
+    const box = $('#br-search-result');
+    if (!box) return;
+    box.hidden = false;
+    box.innerHTML = html;
+  }
+
+  async function searchUser() {
+    const input = $('#br-search-input');
+    const nick = input ? String(input.value || '').trim() : '';
+    if (!nick) return toast('검색할 서든어택 닉네임을 입력해 주세요', false);
+    if (!AL.real) return toast('미리보기 화면입니다 · .exe 로 실행하면 검색됩니다', false);
+    searchResultBox('<div class="sr-none">조회 중…</div>');
+    busy(true, `'${nick}' 계정을 확인하는 중…`);
+    const result = await call('search_user', nick);
+    busy(false);
+    if (!result || !result.ok) {
+      searchResultBox(`<div class="sr-none">${esc((result && result.message) || '조회하지 못했습니다')}</div>`);
+      return;
+    }
+    if (!result.found) {
+      searchResultBox(`<div class="sr-none"><b>'${esc(nick)}'</b> · 조회 결과 없음</div>`);
+      return;
+    }
+    const u = result.user || {};
+    searchResultBox(`
+      <div class="sr-hit" data-peek="1" data-nick="${esc(u.name)}" data-ouid="${esc(u.ouid)}">
+        <div class="emb"><img src="assets/${bandImg(u.solo)}.png" alt="${esc(u.solo_tier || '')}"></div>
+        <div style="min-width:0">
+          <div class="nm">${esc(u.name)}</div>
+          <div class="meta">솔로 ${esc(u.solo_tier || '언랭크')} · ${n0(u.solo)} RP · ${esc(u.clan && u.clan !== '-' ? u.clan + ' 클랜' : '클랜 없음')}${u.party ? ' · 파티 ' + n0(u.party) + ' RP' : ''}</div>
+        </div>
+        <span class="go">클릭해서 병영수첩 보기 ›</span>
+      </div>`);
+  }
+
+  async function openPeek(nick, ouid) {
+    if (!AL.real) return toast('미리보기 화면입니다', false);
+    busy(true, `'${nick}' 병영수첩을 불러오는 중… (최근 100판)`);
+    const result = await call('lookup_barracks', nick, ouid);
+    busy(false);
+    if (!result || !result.ok) return fail(result, '병영수첩을 불러오지 못했습니다');
+    AL.peek = result.barracks || null;
+    renderPeek();
+    if (typeof showScreen === 'function') showScreen('barracks');
+    toast(`🪖 ${(AL.peek || {}).nickname || nick} 병영수첩을 보고 있습니다`, true);
+  }
+
+  function peekGoals(barracks) {
+    const st = (barracks && barracks.stats) || {};
+    const tier = (barracks && barracks.tier) || {};
+    const g = ((AL.state && AL.state.settings) || {}).goals || {};
+    const rows = [
+      ['목표 승률', Number(st.win || 0), Number(g.win || 55), '%'],
+      ['목표 K/D', Number(st.kd || 0), Number(g.kd || 60), '%'],
+      ['목표 평균 딜량', Number(st.dmg || 0), Number(g.dmg || 1400), ''],
+      ['목표 솔로 RP', Number(((tier.solo || {}).rp) || 0), Number(g.rp || 4000), '']
+    ];
+    GOALS = rows.map(([label, cur, tgt, unit]) => {
+      const gap = cur - tgt;
+      return { label, cur: Math.round(cur * 10) / 10, tgt, unit, gap,
+               gaptxt: `${Math.abs(gap).toFixed(1)}`.replace(/\.0$/, '') };
+    });
+    if (typeof drawGoals === 'function') drawGoals();
+  }
+
+  function renderPeek() {
+    const bar = $('#br-peek-bar');
+    const nameEl = $('#br-peek-name');
+    const on = !!AL.peek;
+    if (bar) bar.hidden = !on;
+    if (nameEl) nameEl.textContent = on ? (AL.peek.nickname || '—') : '—';
+    if (on) {
+      renderBarracks(AL.peek, AL.state);
+      peekGoals(AL.peek);
+    } else if (AL.state) {
+      renderBarracks(AL.state.barracks, AL.state);
+      if (Array.isArray(AL.state.goals)) {
+        GOALS = AL.state.goals.map((g) => ({ label: g.label, cur: g.cur, tgt: g.tgt,
+          unit: g.unit || '', gap: g.gap, gaptxt: g.gaptxt }));
+        if (typeof drawGoals === 'function') drawGoals();
+      }
+    }
+  }
+  AL.renderPeek = renderPeek;
 
   /* ==================================================================
      최적화 유틸
@@ -1025,6 +1154,20 @@
     if (bound) return;
     bound = true;
 
+    /* ---------- 창 이동 (OS 네이티브 · 지연 없음) ---------- */
+    const titlebar = $('#titlebar');
+    if (titlebar) {
+      titlebar.addEventListener('mousedown', (e) => {
+        if (!AL.real || e.button !== 0) return;
+        if (e.target.closest('.winbtns')) return;
+        call('drag_window');
+      });
+      titlebar.addEventListener('dblclick', (e) => {
+        if (!AL.real || e.target.closest('.winbtns')) return;
+        call('toggle_maximize');
+      });
+    }
+
     /* ---------- 창 제어 ---------- */
     const winMin = $('#win-min');
     if (winMin) winMin.addEventListener('click', (e) => { e.stopPropagation(); if (AL.real) call('minimize_window'); });
@@ -1100,14 +1243,46 @@
 
     /* ---------- 병영수첩 ---------- */
     const brRefresh = $('#br-refresh');
-    if (brRefresh) brRefresh.addEventListener('click', () => { if (AL.real) fetchBarracks(); });
+    if (brRefresh) brRefresh.addEventListener('click', () => { fetchBarracks(); });
     const brExport = $('#br-export');
     if (brExport) brExport.addEventListener('click', () => { if (AL.real) backupNow(); });
+
+    /* ---------- 병영수첩 닉네임 검색 ---------- */
+    const searchBtn = $('#br-search-btn');
+    if (searchBtn) searchBtn.addEventListener('click', searchUser);
+    const searchInput = $('#br-search-input');
+    if (searchInput) {
+      searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); searchUser(); }
+      });
+    }
+    const resultBox = $('#br-search-result');
+    if (resultBox) {
+      resultBox.addEventListener('click', (e) => {
+        const hit = e.target.closest('[data-peek]');
+        if (!hit) return;
+        openPeek(hit.dataset.nick, hit.dataset.ouid || null);
+      });
+    }
+    const peekBack = $('#br-peek-back');
+    if (peekBack) peekBack.addEventListener('click', () => {
+      AL.peek = null;
+      renderPeek();
+      const box = $('#br-search-result');
+      if (box) { box.hidden = true; box.innerHTML = ''; }
+      toast('내 병영수첩으로 돌아왔습니다', true);
+    });
+    const peekAdd = $('#br-peek-add');
+    if (peekAdd) peekAdd.addEventListener('click', async () => {
+      if (!AL.peek) return;
+      await AL.addMember(AL.peek.nickname, AL.peek.ouid);
+    });
+
     $$('#br-view-seg button').forEach((b) => {
       b.addEventListener('click', () => {
         $$('#br-view-seg button').forEach((x) => x.classList.toggle('on', x === b));
         AL.view = b.dataset.view;
-        const b_ = AL.state && AL.state.barracks;
+        const b_ = (AL.peek || (AL.state && AL.state.barracks));
         if (!b_) return;
         if (AL.view === 'matches') renderMatches(b_);
         else renderMaps(b_);
@@ -1207,6 +1382,7 @@
     AL.onScreen = function (name) {
       if (!AL.state) return;
       if (name === 'barracks') {
+        if (AL.peek) { renderPeek(); return; }
         const b = AL.state.barracks;
         if (AL.view === 'matches' && b) renderMatches(b);
         else if (b) renderMaps(b);
@@ -1217,14 +1393,14 @@
       if (!AL.state) return;
       applySummaryOnly();
     };
-    AL.addMember = async function (name) {
+    AL.addMember = async function (name, ouid) {
       if (!AL.real) return;
       busy(true, `'${name}' 전적을 불러오는 중…`);
-      const result = await call('add_leaderboard_member', name, 20);
+      const result = await call('add_leaderboard_member', name, 0, ouid || null);
       busy(false);
       if (!result || !result.ok) return fail(result, `'${name}' 등록 실패`);
       if (result.state) applyState(result.state);
-      toast(`'${name}' 등록 완료 · 전적 동기화됨`, true);
+      toast(result.message || `'${name}' 등록 완료 · 전적 동기화됨`, true);
     };
     AL.removeMember = async function (name) {
       if (!AL.real) return;
@@ -1280,18 +1456,38 @@
     if (!hasApi('bootstrap')) return;
     booted = true;
     AL.real = true;
+    const splash = window.SPLASH;
+    if (splash) splash.set(18, '앱 데이터를 불러오는 중…');
     busy(true, '앱 데이터를 불러오는 중…');
     const result = await call('bootstrap');
     busy(false);
     if (!result || !result.ok) {
       AL.real = false;
+      if (splash) splash.set(100, '불러오지 못했습니다');
+      setTimeout(() => { if (splash) splash.finish(); }, 500);
       toast((result && result.message) || '앱 데이터를 불러오지 못했습니다', false);
       return;
     }
     if (result.state) {
+      if (splash) splash.set(58, '훈련 기록 · 티어 계산 중…');
       applyState(result.state);
       AL.ready = true;
     }
+    if (splash) splash.set(74, '화면을 그리는 중…');
+    requestAnimationFrame(() => {
+      /* 첫 프레임을 먼저 보여 준 뒤 무거운 확인(DRS DB 스캔 · 마우스 설정)을 돌린다 */
+      if (splash) splash.set(82, '그래픽 설정 확인 중…');
+      setTimeout(async () => {
+        const nv = await call('get_nvidia_state');
+        if (nv && nv.utils) {
+          AL.utils = nv.utils;
+          renderUtilsState(nv.utils);
+          if (nv.state) applyState(nv.state);
+        }
+        if (splash) splash.set(96, '마무리 중…');
+        splash && splash.finish();
+      }, 60);
+    });
   }
 
   document.addEventListener('DOMContentLoaded', () => {
@@ -1300,6 +1496,13 @@
     else setTimeout(() => { if (hasApi('bootstrap')) boot(); }, 700);
   });
   window.addEventListener('pywebviewready', boot);
+  /* 브리지가 끝내 안 올라오면 스플래시가 멈춰 있지 않게 한다 */
+  setTimeout(() => {
+    if (!booted && window.SPLASH) {
+      window.SPLASH.set(100, '미리보기 모드');
+      window.SPLASH.finish();
+    }
+  }, 2600);
   if (document.readyState !== 'loading') {
     bind();
     boot();

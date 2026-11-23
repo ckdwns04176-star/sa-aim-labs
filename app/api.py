@@ -55,7 +55,7 @@ class Api:
 
     def _err(self, exc: Exception | str, **payload: Any) -> dict[str, Any]:
         message = str(exc)
-        return {"ok": False, "message": message, **payload}
+        return {"ok": False, "message": message, "quota": bool(getattr(exc, "quota", False)), **payload}
 
     # ------------------------------------------------------------ window controls
     def minimize_window(self) -> dict[str, Any]:
@@ -81,9 +81,67 @@ class Api:
             self.window.destroy()
         return self._ok()
 
+    def drag_window(self) -> dict[str, Any]:
+        """Native, zero-lag window move for the frameless title bar.
+
+        JS mousemove → MoveWindow round trips (pywebview's drag region) lag behind
+        the cursor on Windows; handing the drag to the window manager makes the OS
+        move the window itself, so it tracks the pointer exactly.
+        """
+        if os.name != "nt" or not self.window:
+            return self._ok(supported=False)
+        try:
+            import ctypes
+
+            handle = self._hwnd()
+            if not handle:
+                return self._ok(supported=False)
+            ctypes.windll.user32.ReleaseCapture()  # type: ignore[attr-defined]
+            ctypes.windll.user32.SendMessageW(  # type: ignore[attr-defined]
+                ctypes.c_void_p(handle), 0x00A1, 2, 0   # WM_NCLBUTTONDOWN, HTCAPTION
+            )
+            return self._ok(supported=True)
+        except Exception as exc:  # noqa: BLE001 - drag is best effort
+            return self._err(exc, supported=False)
+
+    def _hwnd(self) -> int | None:
+        native = getattr(self.window, "native", None)
+        if native is None:
+            return None
+        try:
+            handle = getattr(native, "Handle", None)
+            if handle is not None:
+                return int(handle.ToInt64() if hasattr(handle, "ToInt64") else handle)
+            handle = getattr(native, "_hwnd", None)
+            if handle:
+                return int(handle)
+        except Exception:  # noqa: BLE001
+            return None
+        return None
+
+    def window_bounds(self) -> dict[str, Any]:
+        """Position/size helper (DPR-safe centering check)."""
+        if not self.window:
+            return self._ok()
+        try:
+            return self._ok(x=self.window.x, y=self.window.y, width=self.window.width, height=self.window.height)
+        except Exception:  # noqa: BLE001
+            return self._ok()
+
     # ------------------------------------------------------------ state
     def bootstrap(self) -> dict[str, Any]:
-        return self.get_state()
+        """First paint payload: everything the UI needs, minus the slow probes.
+
+        The DRS state (tasklist + sha256 over two ~2 MB databases) and the mouse
+        registry read are skipped here and fetched right after the window is
+        painted through :meth:`get_nvidia_state`, which is what used to make the
+        app stutter for a second on launch.
+        """
+        try:
+            return self._ok(state=self._build_state(light=True))
+        except Exception as exc:  # noqa: BLE001
+            traceback.print_exc()
+            return self._err(exc)
 
     def get_state(self) -> dict[str, Any]:
         try:
@@ -92,7 +150,7 @@ class Api:
             traceback.print_exc()
             return self._err(exc)
 
-    def _build_state(self) -> dict[str, Any]:
+    def _build_state(self, light: bool = False) -> dict[str, Any]:
         store = self.store
         records = store.records()
         today = _dt.date.today()
@@ -119,10 +177,22 @@ class Api:
             barracks = list(store.barracks_cache().values())[-1]
         members = self._ensure_me(barracks)
 
-        utils_state = self._drs_summary()
-        utils_state["accel"] = winutil.get_mouse_accel() if os.name == "nt" else self.store.utils().get("accel")
-        utils_state["last_backup_at"] = store.utils().get("last_backup_at")
-        utils_state["last_restore_at"] = store.utils().get("last_restore_at")
+        if light:
+            utils_state = {
+                "pending": True, "supported": os.name == "nt", "mode": None, "alias": False,
+                "backups": [], "points": [], "modes": {}, "missing": [], "last_backup": None,
+                "game_running": None, "writable": False, "drs_exists": False, "drs_dir": "",
+                "error": None, "needs_admin": False, "accel": None,
+                "stairfix": {"ready": False, "applied": False, "value": None, "label": "확인 중",
+                             "target": "0x00401241"},
+                "last_backup_at": store.utils().get("last_backup_at"),
+                "last_restore_at": store.utils().get("last_restore_at"),
+            }
+        else:
+            utils_state = self._drs_summary()
+            utils_state["accel"] = winutil.get_mouse_accel() if os.name == "nt" else self.store.utils().get("accel")
+            utils_state["last_backup_at"] = store.utils().get("last_backup_at")
+            utils_state["last_restore_at"] = store.utils().get("last_restore_at")
 
         return {
             "meta": {
@@ -197,11 +267,14 @@ class Api:
         me = next((m for m in members if m.get("me")), None)
         if name:
             if me is None:
-                me = {"name": name, "me": True, "clan": ((barracks or {}).get("basic") or {}).get("clan") or "리드",
+                me = {"name": name, "me": True, "ouid": (barracks or {}).get("ouid"),
+                      "clan": ((barracks or {}).get("basic") or {}).get("clan") or "리드",
                       "weapon": "sniper", "solo": 0, "party": None, "kd": None, "dmg": None, "win": None}
                 members.insert(0, me)
             else:
                 me["name"] = name
+                if (barracks or {}).get("ouid"):
+                    me["ouid"] = barracks["ouid"]
             if barracks:
                 st = barracks.get("stats") or {}
                 tier = barracks.get("tier") or {}
@@ -228,6 +301,14 @@ class Api:
         return out[:10]
 
     # ------------------------------------------------------------ settings
+    _MASK_CHARS = ("\u2022", "*", "…")
+
+    @classmethod
+    def _looks_masked(cls, value: str) -> bool:
+        """Never let the masked preview string overwrite the real secret."""
+        text = (value or "").strip()
+        return bool(text) and any(ch in text for ch in cls._MASK_CHARS)
+
     def save_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         allowed = {"nickname", "api_key", "kovak_path", "aimlab_path", "auto_sync", "auto_launch",
                    "tray_background", "notify", "autosave", "goals", "cloud_email"}
@@ -239,6 +320,8 @@ class Api:
                 value = str(value).strip()[:12]
             elif key == "api_key":
                 value = str(value).strip()
+                if not value or self._looks_masked(value):
+                    continue      # 화면에 보이는 마스킹 문자열은 저장하지 않는다
             elif key == "goals" and isinstance(value, dict):
                 value = {k: float(v) for k, v in value.items() if k in ("win", "kd", "dmg", "rp") and str(v).strip() != ""}
             elif isinstance(value, bool):
@@ -276,8 +359,9 @@ class Api:
                     value = float(value)
                 except (TypeError, ValueError):
                     continue
-                if value < 0 or value > 100:
-                    raise ValueError(f"{name} 점수는 0~100 사이여야 합니다")
+                if value < 0 or value != value or value in (float("inf"), float("-inf")):
+                    raise ValueError(f"{name} 점수는 0 이상의 숫자로 입력해 주세요")
+                # 시나리오마다 단위가 달라(코박스 152 · 에임랩 92,500) 상한을 두지 않는다.
                 area = item.get("area_key") or item.get("area")
                 if area not in scoring.AREA_KEYS:
                     area = _area_for(game, weapon, name)
@@ -352,71 +436,156 @@ class Api:
         return winutil.open_folder(str(paths.data_dir()))
 
     # ------------------------------------------------------------ NEXON
-    def _client(self, api_key: str | None = None) -> nexon.NexonClient:
+    def _client(self, api_key: str | None = None, *, force: bool = False) -> nexon.NexonClient:
         key = (api_key if api_key is not None else self.store.settings.get("api_key") or "").strip()
         if api_key:
             self.store.update_settings({"api_key": key})
-        return nexon.NexonClient(key, progress=self._progress)
+        return nexon.NexonClient(key, progress=self._progress, force=force)
+
+    def _resolve_inputs(self, nickname: str | None, api_key: str | None) -> tuple[str, str | None]:
+        """화면 입력값을 우선 쓰고, 저장된 값으로 채운 뒤 함께 저장한다."""
+        nick = (nickname or "").strip()[:12]
+        key = (api_key or "").strip()
+        if key and self._looks_masked(key):
+            key = ""
+        saved_nick = (self.store.settings.get("nickname") or "").strip()
+        patch: dict[str, Any] = {}
+        if nick and nick != saved_nick:
+            patch["nickname"] = nick
+        if key:
+            patch["api_key"] = key
+            self.store.update_settings({"api_key": key})
+        elif patch:
+            self.store.update_settings(patch)
+        if not nick:
+            nick = saved_nick
+        if not nick:
+            raise ValueError("서든어택 닉네임을 입력해 주세요")
+        if not (self.store.settings.get("api_key") or "").strip():
+            raise ValueError("NEXON Open API 키를 입력해 주세요 · 설정 탭에서 저장할 수 있습니다")
+        return nick, key or None
 
     def fetch_barracks(self, nickname: str | None = None, api_key: str | None = None) -> dict[str, Any]:
+        """내 병영수첩 최신화 — 화면에 입력된 닉네임/키도 그대로 받아 쓴다."""
         try:
-            nick = (nickname or self.store.settings.get("nickname") or "").strip()
-            if not nick:
-                raise ValueError("서든어택 닉네임을 입력해 주세요")
-            client = self._client(api_key)
+            nick, key = self._resolve_inputs(nickname, api_key)
+            client = self._client(key, force=True)
             barracks = nexon.build_barracks(client, nick, progress=self._progress)
             self.store.update_settings({"nickname": barracks["nickname"]})
             self.store.barracks_cache()[barracks["nickname"]] = barracks
             self.store.save()
             member = self._member_from_barracks(barracks)
             self._upsert_member(member)
-            return {"ok": True, "barracks": barracks, "state": self._build_state()}
+            return {"ok": True, "barracks": barracks, "state": self._build_state(),
+                    "calls": client.calls, "cache": client.cache_stats(),
+                    "message": f"{barracks['nickname']} 최신화 완료"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def search_user(self, nickname: str, api_key: str | None = None) -> dict[str, Any]:
+        """닉네임 검색 1단계 — 가볍게 존재 여부와 기본 정보만 확인한다."""
+        try:
+            nick = (nickname or "").strip()[:12]
+            if not nick:
+                raise ValueError("검색할 서든어택 닉네임을 입력해 주세요")
+            key = (api_key or "").strip()
+            if key and self._looks_masked(key):
+                key = ""
+            if not (key or (self.store.settings.get("api_key") or "").strip()):
+                raise ValueError("NEXON Open API 키를 먼저 저장해 주세요 · 설정 탭")
+            client = self._client(key or None, force=True)
+            try:
+                ouid = client.resolve_ouid(nick)
+            except nexon.NexonError:
+                return {"ok": True, "found": False, "query": nick,
+                        "message": f"'{nick}' 조회 결과 없음"}
+            basic = client.user_basic(ouid)
+            rank = client.user_rank(ouid)
+            tier = client.user_tier(ouid)
+            solo = int(tier.get("solo_rank_match_score") or 0)
+            party = int(tier.get("party_rank_match_score") or 0)
+            return {
+                "ok": True, "found": True, "query": nick,
+                "user": {
+                    "name": basic.get("user_name") or nick,
+                    "ouid": ouid,
+                    "clan": basic.get("clan_name") or "-",
+                    "created": str(basic.get("user_date_create") or "")[:10].replace("-", "."),
+                    "manner": basic.get("manner_grade") or "-",
+                    "grade": rank.get("grade") or "-",
+                    "grade_ranking": rank.get("grade_ranking"),
+                    "solo": solo,
+                    "party": party,
+                    "solo_tier": nexon.kr_tier(tier.get("solo_rank_match_tier")),
+                    "party_tier": nexon.kr_tier(tier.get("party_rank_match_tier")),
+                },
+            }
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def lookup_barracks(self, nickname: str | None = None, ouid: str | None = None,
+                        api_key: str | None = None) -> dict[str, Any]:
+        """다른 유저 병영수첩 — 내 data.json 은 건드리지 않는 임시 조회."""
+        try:
+            nick = (nickname or "").strip()[:12]
+            key = (api_key or "").strip()
+            if key and self._looks_masked(key):
+                key = ""
+            if not ouid and not nick:
+                raise ValueError("조회할 닉네임이 없습니다")
+            client = self._client(key or None, force=True)
+            if ouid:
+                basic = client.user_basic(str(ouid).strip())
+                nick = str(basic.get("user_name") or "").strip() or nick
+            if not nick:
+                raise ValueError("해당 ouid 의 닉네임을 찾지 못했습니다")
+            barracks = nexon.build_barracks(client, nick, progress=self._progress)
+            return {"ok": True, "barracks": barracks, "peek": True, "calls": client.calls}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
 
     def fetch_leaderboard(self, nicknames: list[str] | None = None, api_key: str | None = None,
                           depth: int | None = None) -> dict[str, Any]:
         try:
-            client = self._client(api_key)
+            client = self._client(api_key, force=True)
             members = self._ensure_me(None)
-            names = [str(n).strip() for n in (nicknames or [m["name"] for m in members]) if str(n).strip()]
-            if not names:
+            if nicknames:
+                wanted = {str(n).strip().lower() for n in nicknames if str(n).strip()}
+                members = [m for m in members if str(m.get("name", "")).strip().lower() in wanted] or members
+            if not members:
                 raise ValueError("순위표에 등록된 닉네임이 없습니다")
-            rows = nexon.build_leaderboard(client, names[:10], progress=self._progress,
+            rows = nexon.build_leaderboard(client, members[:10], progress=self._progress,
                                            depth=nexon.DETAIL_DEPTH if depth is None else int(depth))
-            saved = []
-            by_name = {r["name"].lower(): r for r in rows}
-            for m in members:
-                found = by_name.get(str(m.get("name", "")).lower())
-                if found:
-                    saved.append({**m, **{k: v for k, v in found.items() if k not in ("me",)}})
-                else:
-                    saved.append(m)
-            for r in rows:
-                if r["name"].lower() not in {str(m.get("name", "")).lower() for m in saved}:
-                    saved.append(r)
-            self.store.set_leaderboard(saved[:10])
-            return {"ok": True, "members": rows, "state": self._build_state()}
+            renamed = [r for r in rows if r.get("renamed_from")]
+            self.store.set_leaderboard([{**r} for r in rows[:10]])
+            message = f"{len(rows)}명 전적 일괄 갱신 완료"
+            if renamed:
+                message += " · 닉변 " + ", ".join(f"{r['renamed_from']} → {r['name']}" for r in renamed[:3])
+            return {"ok": True, "members": rows, "renamed": renamed, "message": message,
+                    "state": self._build_state()}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
 
-    def add_leaderboard_member(self, nickname: str, depth: int = 0) -> dict[str, Any]:
+    def add_leaderboard_member(self, nickname: str, depth: int = 0, ouid: str | None = None) -> dict[str, Any]:
         try:
-            name = str(nickname or "").strip()
-            if not name:
+            name = str(nickname or "").strip()[:12]
+            ouid = str(ouid or "").strip() or None
+            if not name and not ouid:
                 raise ValueError("닉네임을 입력해 주세요")
             members = self._ensure_me(None)
             if len(members) >= 10:
                 raise ValueError("10명이 가득 찼습니다 · 한 명을 삭제한 뒤 등록해 주세요")
-            if any(str(m.get("name", "")).lower() == name.lower() for m in members):
+            if any((m.get("ouid") and m.get("ouid") == ouid) or str(m.get("name", "")).lower() == name.lower()
+                   for m in members):
                 raise ValueError("이미 등록된 닉네임입니다")
-            client = self._client()
-            row = nexon.fetch_member(client, name, depth=int(depth), progress=self._progress)
+            client = self._client(force=True)
+            row = nexon.fetch_member(client, name, ouid=ouid, depth=int(depth), progress=self._progress)
             if not row.get("ok"):
                 raise ValueError(row.get("error") or "전적을 불러오지 못했습니다")
             members.append(row)
             self.store.set_leaderboard(members)
-            return {"ok": True, "member": row, "state": self._build_state()}
+            return {"ok": True, "member": row, "state": self._build_state(),
+                    "message": f"'{row['name']}' 순위표에 추가했습니다"}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
 
@@ -440,7 +609,7 @@ class Api:
         tier = barracks.get("tier") or {}
         rec = barracks.get("recent") or {}
         return {
-            "name": barracks["nickname"], "me": True,
+            "name": barracks["nickname"], "ouid": barracks.get("ouid"), "me": True,
             "clan": (barracks.get("basic") or {}).get("clan") or "리드",
             "weapon": "sniper" if float(rec.get("sniper") or 0) >= float(rec.get("assault") or 0) else "rifle",
             "solo": int((tier.get("solo") or {}).get("rp") or 0),
@@ -452,13 +621,16 @@ class Api:
         }
 
     def _upsert_member(self, member: dict[str, Any]) -> None:
+        """내 행은 ouid/닉네임이 같으면 갱신, 아니면 맨 앞에 넣는다."""
         members = self._ensure_me(None)
         for i, m in enumerate(members):
-            if str(m.get("name", "")).lower() == str(member["name"]).lower() or m.get("me"):
-                members[i] = {**m, **member}
+            same_ouid = bool(member.get("ouid")) and m.get("ouid") == member.get("ouid")
+            same_name = str(m.get("name", "")).lower() == str(member.get("name", "")).lower()
+            if same_ouid or same_name or m.get("me"):
+                members[i] = {**m, **member, "me": True}
                 break
         else:
-            members.insert(0, member)
+            members.insert(0, {**member, "me": True})
         self.store.set_leaderboard(members[:10])
 
     # ------------------------------------------------------------ NVIDIA / Windows utils
@@ -489,17 +661,35 @@ class Api:
 
     def apply_nvidia_profile(self, mode: str, elevate: bool = False) -> dict[str, Any]:
         mode = str(mode or "").strip()
-        mgr = self._drs()
         if mode == "alias":
             mode = "stairfix"
         try:
+            mgr = self._drs()
             if mode not in nvidia.MODES:
                 raise nvidia.DrsError(f"알 수 없는 프로필: {mode}")
+            if mode == "stairfix":
+                # 계단현상 끄기 = 내장된 Drs 패치 로직 (프로필 팩 불필요)
+                if not mgr.supported:
+                    raise nvidia.DrsError("계단현상 끄기는 윈도우 NVIDIA 환경에서만 적용됩니다")
+                if not mgr.drs_dir.is_dir():
+                    raise nvidia.DrsError(
+                        "NVIDIA Drs 폴더를 찾지 못했습니다 · NVIDIA 드라이버 설치 후 한 번 실행해 주세요"
+                    )
+                if not mgr.stairfix_ready():
+                    raise nvidia.DrsError(
+                        "Drs DB에서 서든어택(suddenattack.exe) 프로필을 찾지 못했습니다 · "
+                        "서든어택을 한 번 실행하면 프로필이 생성됩니다"
+                    )
+                if elevate:
+                    return {"ok": True, **(mgr.elevate_help(mode)), "state": self._build_state()}
+                result = mgr.apply_stairfix()
+                self._remember_drs("stairfix" if not result.get("unchanged") else "stairfix", result,
+                                   label="계단현상 끄기 적용 전")
+                self._drs_state = None
+                return {"ok": True, **result, "state": self._build_state()}
             if not mgr.available_modes().get(mode):
-                missing = ", ".join(nvidia.DRS_FILES)
                 raise nvidia.DrsError(
-                    f"'{nvidia.MODES[mode]}' Drs 파일이 앱에 내장되어 있지 않습니다 · "
-                    f"assets/profiles/{mode}/ 폴더에 {missing} 파일을 넣으면 바로 적용됩니다"
+                    f"{nvidia.MODES[mode]} 데이터를 읽지 못했습니다 · 앱을 다시 설치해 주세요"
                 )
             if elevate:
                 return {"ok": True, **(mgr.elevate_help(mode)), "state": self._build_state()}

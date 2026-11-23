@@ -36,13 +36,41 @@ MATCH_TYPES = ("랭크전 솔로", "랭크전 파티")
 RECENT_N = 100
 MATCH_ROWS = 20
 MAP_MIN = 5
-DETAIL_DEPTH = 20  # leaderboard: how many recent matches get a damage/map lookup
+DETAIL_DEPTH = 0   # 순위표는 API 상세 호출 0건 (디스크 캐시에 있는 상세만 사용)
 
 Progress = Callable[[int, int, str], None]
 
 
 class NexonError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, quota: bool = False):
+        super().__init__(message)
+        self.quota = quota
+
+
+_ERR_KO = {
+    "OPENAPI00001": "서버 내부 오류입니다 · 잠시 후 다시 시도해 주세요",
+    "OPENAPI00002": "권한이 없습니다 · API 키를 확인해 주세요",
+    "OPENAPI00003": "유효하지 않은 식별자입니다 (ouid)",
+    "OPENAPI00004": "요청 값이 올바르지 않습니다",
+    "OPENAPI00005": "API 키가 올바르지 않습니다 · open.api.nexon.com 에서 다시 발급해 주세요",
+    "OPENAPI00006": "등록되지 않은 API 경로입니다",
+    "OPENAPI00007": "오늘 넥슨 API 일일 호출 한도(1,000건)를 초과했어요. 자정 이후 초기화됩니다",
+    "OPENAPI00009": "데이터를 준비 중입니다 · 잠시 후 다시 시도해 주세요",
+    "OPENAPI00010": "서버 점검 중입니다",
+    "OPENAPI00011": "서비스 점검 중입니다",
+}
+QUOTA_CODES = ("OPENAPI00007",)
+MAX_CALLS_HINT = 1000
+
+
+def friendly_error(message: str) -> str:
+    """NEXON error code → 사용자가 읽을 수 있는 한국어 문장."""
+    text = str(message or "")
+    for code, korean in _ERR_KO.items():
+        if code in text:
+            suffix = f" ({code})" if code not in QUOTA_CODES else f" ({code})"
+            return f"{korean}{suffix}"
+    return text
 
 
 # --------------------------------------------------------------------- tier names
@@ -127,11 +155,13 @@ class NexonClient:
         timeout: float = 20.0,
         min_interval: float | None = None,
         progress: Progress | None = None,
+        force: bool = False,
     ):
         self.api_key = (api_key or "").strip()
         self.timeout = timeout
         self.min_interval = self.MIN_INTERVAL if min_interval is None else min_interval
         self.progress = progress
+        self.force = force          # 전적 새로고침: 목록/프로필 캐시 TTL 무시
         self._lock = threading.Lock()
         self._last = 0.0
         self.calls = 0
@@ -168,18 +198,23 @@ class NexonClient:
                 body = json.loads(raw) if raw else {}
                 if isinstance(body, dict) and body.get("error"):
                     err = body["error"] or {}
-                    raise NexonError(f"{err.get('name', 'ERROR')} · {err.get('message', '')}".strip(" ·"))
+                    raise NexonError(friendly_error(f"{err.get('name', 'ERROR')} · {err.get('message', '')}".strip(" ·")))
                 return body
             except urllib.error.HTTPError as exc:
                 detail = ""
+                code = ""
                 try:
                     payload = json.loads(exc.read().decode("utf-8", "replace"))
                     err = payload.get("error") or {}
+                    code = str(err.get("name") or "")
                     detail = f"{err.get('name', '')} · {err.get('message', '')}".strip(" ·")
                 except Exception:  # noqa: BLE001 - body may be empty
                     pass
-                last_error = NexonError(detail or f"HTTP {exc.code}")
-                if exc.code == 429:
+                last_error = NexonError(
+                    friendly_error(detail or f"HTTP {exc.code}"),
+                    quota=(exc.code == 429 or code in QUOTA_CODES),
+                )
+                if exc.code == 429 or code in QUOTA_CODES:
                     time.sleep(1.2 * (attempt + 1))
                     self.min_interval = min(0.5, self.min_interval * 1.5)
                     continue
@@ -193,6 +228,12 @@ class NexonClient:
         raise last_error or NexonError("NEXON API 요청 실패")
 
     def _cached(self, cache: _DiskCache, key: str, path: str, params: dict[str, Any], ttl: int | None) -> dict[str, Any]:
+        if self.force and cache is self._cache_api:
+            # "전적 불러오기" 를 직접 눌렀을 때는 목록/프로필을 서버에서 다시 받아온다.
+            # (경기 상세는 변하지 않으므로 항상 캐시를 쓴다 — 호출 한도 절약)
+            data = self._request(path, params)
+            cache.put(key, data, ttl)
+            return data
         hit = cache.get(key)
         if hit is not None:
             return hit
@@ -211,6 +252,13 @@ class NexonClient:
         if not ouid:
             raise NexonError(f"닉네임 '{nickname}' 의 전적을 찾지 못했습니다")
         return str(ouid)
+
+    def user_name_of(self, ouid: str) -> str | None:
+        """ouid → 현재 인게임 닉네임 (닉네임 변경 추적용)."""
+        try:
+            return str(self.user_basic(ouid).get("user_name") or "") or None
+        except NexonError:
+            return None
 
     def user_basic(self, ouid: str) -> dict[str, Any]:
         return self._cached(self._cache_api, f"basic:{ouid}", "/suddenattack/v1/user/basic", {"ouid": ouid}, ttl=1800)
@@ -252,9 +300,18 @@ class NexonClient:
             return None
         try:
             return self._cached(self._cache_detail, f"d:{match_id}", "/suddenattack/v1/match-detail",
-                                {"match_id": match_id}, ttl=7 * 24 * 3600)
+                                {"match_id": match_id}, ttl=30 * 24 * 3600)
         except NexonError:
             return None
+
+    def match_detail_cached(self, match_id: str) -> dict[str, Any] | None:
+        """디스크 캐시에 있는 경기 상세만 돌려준다 (API 호출 0건)."""
+        if not match_id:
+            return None
+        return self._cache_detail.get(f"d:{match_id}")
+
+    def cache_stats(self) -> dict[str, int]:
+        return {"api": len(self._cache_api.data), "detail": len(self._cache_detail.data), "calls": self.calls}
 
 
 # --------------------------------------------------------------------- aggregation
@@ -366,12 +423,21 @@ def _match_rows(rows: Sequence[dict[str, Any]], details: Sequence[dict[str, Any]
     return out
 
 
-def _detail_jobs(client: NexonClient, rows: Sequence[dict[str, Any]], progress: Progress | None, label: str, depth: int | None = None) -> list[dict[str, Any] | None]:
+def _detail_jobs(client: NexonClient, rows: Sequence[dict[str, Any]], progress: Progress | None, label: str,
+                 depth: int | None = None, cache_only: bool = False) -> list[dict[str, Any] | None]:
+    """경기 상세 수집 — 이미 본 match_id 는 디스크 캐시에서 꺼내 API 호출을 아낀다."""
     target = rows if depth is None else rows[:depth]
     total = len(target)
     out: list[dict[str, Any] | None] = []
     for i, m in enumerate(target):
-        out.append(client.match_detail(m.get("match_id")))
+        match_id = m.get("match_id")
+        cached = client.match_detail_cached(match_id) if match_id else None
+        if cached is not None:
+            out.append(cached)
+        elif cache_only:
+            out.append(None)
+        else:
+            out.append(client.match_detail(match_id))
         if progress and (i + 1) % 5 == 0:
             progress(i + 1, total, label)
     if progress and total:
@@ -434,17 +500,21 @@ def build_barracks(client: NexonClient, nickname: str, progress: Progress | None
     }
 
 
-def fetch_member(client: NexonClient, nickname: str, *, depth: int = DETAIL_DEPTH, progress: Progress | None = None) -> dict[str, Any]:
+def fetch_member(client: NexonClient, nickname: str, *, ouid: str | None = None,
+                 depth: int = DETAIL_DEPTH, progress: Progress | None = None) -> dict[str, Any]:
+    """One leaderboard row — ouid 가 있으면 닉변해도 끊기지 않는다."""
     nickname = (nickname or "").strip()
     base = {"name": nickname, "updated_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds")}
     try:
-        ouid = client.resolve_ouid(nickname)
+        ouid = str(ouid).strip() if ouid else client.resolve_ouid(nickname)
         basic = client.user_basic(ouid)
+        real_name = str(basic.get("user_name") or "").strip() or nickname
         tier = client.user_tier(ouid)
         recent = client.user_recent(ouid)
         rows = client.recent_matches(ouid, RECENT_N)
-        details = _detail_jobs(client, rows, progress, nickname, depth=depth) if depth else []
-        agg = aggregate(rows, details, nickname)
+        # 순위표: 호출 한도를 아끼려고 캐시된 경기 상세만 사용 (API 호출 0건)
+        details = _detail_jobs(client, rows, progress, real_name, depth=(depth or None), cache_only=True)
+        agg = aggregate(rows, details, real_name)
         solo = int(tier.get("solo_rank_match_score") or 0)
         party = int(tier.get("party_rank_match_score") or 0)
         sniper = float(recent.get("recent_sniper_rate") or 0)
@@ -452,7 +522,9 @@ def fetch_member(client: NexonClient, nickname: str, *, depth: int = DETAIL_DEPT
         return {
             **base,
             "ok": True,
+            "name": real_name,
             "ouid": ouid,
+            "renamed_from": nickname if nickname and nickname != real_name else None,
             "clan": basic.get("clan_name") or "친구",
             "weapon": "sniper" if sniper >= assault else "rifle",
             "solo": solo,
@@ -467,21 +539,32 @@ def fetch_member(client: NexonClient, nickname: str, *, depth: int = DETAIL_DEPT
         }
     except NexonError as exc:
         return {**base, "ok": False, "error": str(exc), "unranked": True, "solo": 0, "party": None,
-                "kd": None, "dmg": None, "win": None, "weapon": "sniper", "clan": "친구"}
+                "kd": None, "dmg": None, "win": None, "weapon": "sniper", "clan": "친구",
+                "ouid": ouid}
 
 
-def build_leaderboard(client: NexonClient, nicknames: Iterable[str], progress: Progress | None = None,
+def build_leaderboard(client: NexonClient, members: Iterable[Any], progress: Progress | None = None,
                       depth: int = DETAIL_DEPTH) -> list[dict[str, Any]]:
-    names = [str(n).strip() for n in nicknames if str(n).strip()][:10]
+    """members may be names or stored member dicts (ouid/me preserved)."""
+    rows = list(members)[:10]
     out: list[dict[str, Any]] = []
-    total = len(names) * 4
-    for i, name in enumerate(names):
+    total = len(rows) * 4
+    for i, entry in enumerate(rows):
+        if isinstance(entry, dict):
+            name = str(entry.get("name") or "").strip()
+            ouid = entry.get("ouid")
+        else:
+            name, ouid = str(entry).strip(), None
+
         def _p(done: int, all_: int, label: str, _i=i) -> None:
             if progress:
                 progress(_i * 4 + min(4, max(1, round(done / max(1, all_) * 4))), total, label)
-        out.append(fetch_member(client, name, depth=depth, progress=_p))
+        row = fetch_member(client, name, ouid=ouid, depth=depth, progress=_p)
+        if isinstance(entry, dict) and entry.get("me"):
+            row["me"] = True
+        out.append(row)
         if progress:
-            progress((i + 1) * 4, total, name)
+            progress((i + 1) * 4, total, row.get("name") or name)
     return out
 
 

@@ -51,3 +51,6 @@ dist/
 .DS_Store
 Thumbs.db
 desktop.ini
+
+# --- 테스트 스크린샷(용량) -------------------------------------------
+tests/shots/

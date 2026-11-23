@@ -27,14 +27,15 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import paths
+from . import drs, paths
 
 DRS_DIR = Path(r"C:\ProgramData\NVIDIA Corporation\Drs")
 DRS_FILES = ("nvdrsdb0.bin", "nvdrsdb1.bin", "nvdrssel.bin", "nvAppTimestamps", "nvdrswr.lk")
 CORE_FILES = ("nvdrsdb0.bin", "nvdrsdb1.bin")
-GAME_EXE = "suddenattack.exe"
+GAME_EXE = drs.GAME_EXE
 KEEP_BACKUPS = 3
 MODES = {"rifle": "라플 프로필", "sniper": "스나 프로필", "stairfix": "계단현상 끄기"}
+PACK_MODES = ("rifle", "sniper")
 RESULT_FILE = "elevated_result.json"
 
 
@@ -107,14 +108,56 @@ class DrsManager:
             return []
         return [root / name for name in DRS_FILES if (root / name).exists()]
 
+    # ------------------------------------------------------------ live DB
+    @property
+    def live_db(self) -> Path:
+        return self.drs_dir / "nvdrsdb0.bin"
+
+    def live_blob(self) -> bytes | None:
+        try:
+            return self.live_db.read_bytes()
+        except OSError:
+            return None
+
+    def stairfix_value(self) -> int | None:
+        """Current Antialiasing compatibility of suddenattack.exe in the live DB."""
+        blob = self.live_blob()
+        if blob is None:
+            return None
+        try:
+            return drs.aa_compat(blob)
+        except drs.DrsFormatError:
+            return None
+
+    def stairfix_ready(self) -> bool:
+        """True when 계단현상 끄기 can be applied with the built-in patch logic."""
+        if not self.supported or not self.drs_dir.is_dir():
+            return False
+        blob = self.live_blob()
+        if blob is None:
+            return False
+        try:
+            return drs.has_profile(blob)
+        except drs.DrsFormatError:
+            return False
+
+    def stairfix_applied(self) -> bool:
+        return self.stairfix_value() == drs.STAIRFIX_VALUE
+
     def available_modes(self) -> dict[str, bool]:
-        return {m: bool(self.profile_files(m)) for m in MODES}
+        modes = {m: bool(self.profile_files(m)) for m in PACK_MODES}
+        # 계단현상 끄기 is a built-in patch of the live Drs DB (no pack needed) —
+        # a shipped assets/profiles/stairfix pack still wins when present.
+        modes["stairfix"] = bool(self.profile_files("stairfix")) or self.stairfix_ready()
+        return modes
 
     def current_mode(self) -> str | None:
-        """Which shipped profile does the live Drs folder match?"""
-        for mode in ("rifle", "sniper", "stairfix"):
+        """Which profile is applied right now?"""
+        if self.stairfix_applied():
+            return "stairfix"
+        live = self.drs_dir / "nvdrsdb0.bin"
+        for mode in PACK_MODES:
             src = self.profiles_root / mode / "nvdrsdb0.bin"
-            live = self.drs_dir / "nvdrsdb0.bin"
             if src.exists() and live.exists():
                 try:
                     if _sha256(src) == _sha256(live):
@@ -138,14 +181,23 @@ class DrsManager:
     def state(self) -> dict[str, Any]:
         modes = self.available_modes()
         backups = self.list_backups()
+        stair_value = self.stairfix_value()
+        mode = self.current_mode()
         return {
             "supported": self.supported,
             "drs_dir": str(self.drs_dir),
             "drs_exists": self.drs_dir.is_dir(),
             "writable": self.writable(),
             "game_running": self.game_running(),
-            "mode": self.current_mode(),
-            "alias": False,
+            "mode": mode,
+            "alias": mode == "stairfix",
+            "stairfix": {
+                "ready": modes.get("stairfix", False),
+                "applied": stair_value == drs.STAIRFIX_VALUE,
+                "value": None if stair_value is None else f"0x{stair_value:08X}",
+                "label": drs.describe(stair_value),
+                "target": f"0x{drs.STAIRFIX_VALUE:08X}",
+            },
             "modes": modes,
             "missing": [m for m, ok in modes.items() if not ok],
             "backups": backups,
@@ -208,11 +260,14 @@ class DrsManager:
         self.ensure_supported()
         if mode not in MODES:
             raise DrsError(f"알 수 없는 프로필: {mode}")
+        if mode == "stairfix" and not self.profile_files("stairfix"):
+            # 계단현상 끄기 = 내장된 Drs 패치 로직 (프로필 팩 없이 동작)
+            return self.apply_stairfix(force=force)
         files = self.profile_files(mode)
         if len(files) < 2 or not (self.profiles_root / mode / "nvdrsdb0.bin").exists():
             raise DrsError(
-                f"'{MODES[mode]}' Drs 파일이 앱에 내장되어 있지 않습니다 · "
-                f"assets/profiles/{mode}/ 에 {', '.join(DRS_FILES)} 를 넣어 주세요"
+                f"{MODES[mode]} 데이터를 읽지 못했습니다 · 앱을 다시 설치해 주세요 "
+                f"(assets/profiles/{mode})"
             )
         if not self.drs_dir.is_dir():
             raise DrsError(f"NVIDIA Drs 폴더를 찾지 못했습니다 · {self.drs_dir}")
@@ -279,12 +334,63 @@ class DrsManager:
         }
 
     # ------------------------------------------------------------ alias / stairfix
+    def apply_stairfix(self, *, force: bool = False) -> dict[str, Any]:
+        """'계단현상 끄기' — patch Antialiasing compatibility to 0x00401241 in place.
+
+        The value lives in a fixed-size setting record, so the live Drs database
+        is rewritten without changing a single offset; the whole folder is backed
+        up first, exactly like the rifle/sniper packs.
+        """
+        self.ensure_supported()
+        if not self.drs_dir.is_dir():
+            raise DrsError(f"NVIDIA Drs 폴더를 찾지 못했습니다 · {self.drs_dir}")
+        blob = self.live_blob()
+        if blob is None:
+            raise DrsError(f"Drs DB를 읽지 못했습니다 · {self.live_db}")
+        try:
+            before = drs.aa_compat(blob)
+        except drs.DrsFormatError as exc:
+            raise DrsError(str(exc)) from exc
+        if before == drs.STAIRFIX_VALUE:
+            return {"ok": True, "mode": "stairfix", "unchanged": True,
+                    "message": "계단현상 끄기가 이미 적용되어 있습니다",
+                    "value": f"0x{drs.STAIRFIX_VALUE:08X}"}
+        if not force and self.game_running():
+            raise DrsError("서든어택이 실행 중입니다 · 게임을 완전히 종료한 뒤 다시 시도해 주세요")
+
+        backup = self._make_backup("계단현상 끄기 적용 전", self.current_mode())
+        try:
+            patched, report = drs.set_stairfix(blob)
+            targets = [p for p in (self.drs_dir / "nvdrsdb0.bin", self.drs_dir / "nvdrsdb1.bin") if p.exists()]
+            for target in targets:
+                if target.name == "nvdrsdb1.bin":
+                    mirror, _ = drs.set_stairfix(target.read_bytes())
+                    target.write_bytes(mirror)
+                else:
+                    target.write_bytes(patched)
+        except PermissionError as exc:
+            raise DrsError(f"관리자 권한이 필요합니다 · {exc}") from exc
+        except (OSError, drs.DrsFormatError) as exc:
+            raise DrsError(f"Drs DB를 쓰지 못했습니다 · {exc}") from exc
+
+        after = self.stairfix_value()
+        if after != drs.STAIRFIX_VALUE:
+            raise DrsError("Drs DB 검증에 실패했습니다 · 적용 후 값을 다시 확인해 주세요")
+        return {
+            "ok": True,
+            "mode": "stairfix",
+            "backup": backup["id"],
+            "changed": report.get("changed", True),
+            "value": f"0x{drs.STAIRFIX_VALUE:08X}",
+            "message": "계단현상 끄기 적용 완료 · Antialiasing compatibility 0x00401241 (계단현상·타격효과·중세철창 제거)",
+            "applied_at": _now(),
+        }
+
     def apply_alias(self, enable: bool) -> dict[str, Any]:
-        """'계단현상 끄기' — needs the dedicated Drs pack (assets/profiles/stairfix)."""
+        """'계단현상 끄기' 토글."""
         if enable:
-            return self.apply("stairfix")
-        result = self.restore_latest()
-        return result
+            return self.apply_stairfix()
+        return self.restore_latest()
 
     def restore_latest(self) -> dict[str, Any]:
         backups = self.list_backups()

@@ -74,6 +74,53 @@ def _serve(port: int) -> int:
     return 0
 
 
+def _work_area() -> tuple[int, int, int, int]:
+    """Primary monitor work area (excludes the taskbar), DPI aware."""
+    if os.name != "nt":
+        return 0, 0, 0, 0
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        SPI_GETWORKAREA = 0x0030
+        if ctypes.windll.user32.SystemParametersInfoW(SPI_GETWORKAREA, 0, ctypes.byref(rect), 0):
+            width = int(rect.right - rect.left)
+            height = int(rect.bottom - rect.top)
+            if width > 200 and height > 200:
+                return int(rect.left), int(rect.top), width, height
+    except Exception:  # noqa: BLE001 - fall through to GetSystemMetrics
+        pass
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        return 0, 0, int(user32.GetSystemMetrics(0)), int(user32.GetSystemMetrics(1))
+    except Exception:  # noqa: BLE001
+        return 0, 0, 0, 0
+
+
+def _center_position(width: int, height: int) -> tuple[int | None, int | None]:
+    """정중앙 좌표. 모니터를 못 읽으면 None 을 돌려 pywebview 기본값을 쓴다."""
+    left, top, screen_w, screen_h = _work_area()
+    if not screen_w or not screen_h:
+        try:
+            import webview
+
+            screens = getattr(webview, "screens", None) or []
+            if screens:
+                area = screens[0]
+                screen_w, screen_h = int(area.width), int(area.height)
+                left, top = int(getattr(area, "x", 0) or 0), int(getattr(area, "y", 0) or 0)
+        except Exception:  # noqa: BLE001
+            return None, None
+    if not screen_w or not screen_h:
+        return None, None
+    x = left + max(0, (screen_w - width) // 2)
+    y = top + max(0, (screen_h - height) // 2)
+    return x, y
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--drs-apply", metavar="MODE", help="internal: apply a Drs profile elevated")
@@ -101,21 +148,29 @@ def main(argv: list[str] | None = None) -> int:
 
     api = Api()
 
-    # Frameless window: only the custom title bar drags (buttons stopPropagation).
+    # 프레임 없는 창의 드래그는 JS 이동 대신 OS에 넘긴다 (api.drag_window → WM_NCLBUTTONDOWN).
     try:
-        webview.settings["DRAG_REGION_SELECTOR"] = ".titlebar"
+        webview.settings.pop("DRAG_REGION_SELECTOR", None)
+    except Exception:  # noqa: BLE001 - older pywebview
+        pass
+    try:
         webview.settings["DRAG_REGION_DIRECT_TARGET_ONLY"] = False
         webview.settings["ALLOW_DOWNLOADS"] = False
     except Exception:  # noqa: BLE001 - older pywebview
         pass
 
     url = paths.index_url()
+    win_w, win_h = 1200, 750
+    x, y = _center_position(win_w, win_h)
+    log.info("window %sx%s at %s,%s", win_w, win_h, x, y)
     window = webview.create_window(
         paths.APP_TITLE,
         url=url,
         js_api=api,
-        width=1200,
-        height=750,
+        width=win_w,
+        height=win_h,
+        x=x,
+        y=y,
         min_size=(1000, 640),
         frameless=True,
         easy_drag=False,
@@ -124,8 +179,28 @@ def main(argv: list[str] | None = None) -> int:
         confirm_close=False,
         text_select=False,
         zoomable=False,
+        hidden=True,          # 첫 프레임이 준비된 뒤에 보여 준다 (시작 버벅임 제거)
     )
     api.attach(window)
+
+    def _show() -> None:
+        try:
+            window.show()
+        except Exception:  # noqa: BLE001 - older pywebview
+            pass
+
+    for event_name in ("loaded", "shown"):
+        try:
+            event = getattr(window.events, event_name, None)
+            if event is not None:
+                event += _show
+        except Exception:  # noqa: BLE001
+            pass
+
+    # loaded 이벤트가 오지 않는 환경에서도 창이 숨어 있지 않도록 안전장치
+    import threading
+
+    threading.Timer(4.0, _show).start()
     log.info("starting %s %s · ui=%s · data=%s", paths.APP_TITLE, paths.APP_VERSION, url, paths.data_file())
 
     try:

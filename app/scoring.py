@@ -168,6 +168,7 @@ def scenarios_for(game: str, weapon: str) -> list[dict[str, Any]]:
 
 
 def difficulty_for(value: float) -> str:
+    """0~100 평점 기준 난이도."""
     if value < DIFF_CUTS[0]:
         return DIFF_LEVELS[0]
     if value < DIFF_CUTS[1]:
@@ -178,6 +179,26 @@ def difficulty_for(value: float) -> str:
 # ---------------------------------------------------------------- basics
 def clamp(v: float, lo: float = 0.0, hi: float = 100.0) -> float:
     return max(lo, min(hi, v))
+
+
+# ---------------------------------------------------------------- scale
+# 훈련 프로그램마다 점수 단위가 완전히 다르다.
+#   · KovaaK's  : 시나리오당 수십~수백 점 (예: 1wall 6targets small 152)
+#   · Aim Lab   : 수만 점 (예: Gridshot Ultimate 92,500)
+# 그래서 입력한 점수는 그대로 저장하고, 레이더·티어용 0~100 평점으로만 환산한다.
+GAME_REF = {"kovak": 200.0, "aimlab": 100000.0}
+
+
+def rating_of(game: str, value: float | None) -> float:
+    """시나리오 점수 → 0~100 평점 (게임별 기준값으로 나눈 뒤 상한)."""
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if number <= 0:
+        return 0.0
+    ref = GAME_REF.get(game, 200.0)
+    return round(max(0.0, min(100.0, number / ref * 100.0)), 1)
 
 
 def grade_of(score: int) -> str:
@@ -255,11 +276,11 @@ def _sorted_records(records: Iterable[dict[str, Any]], game: str | None = None, 
 
 
 def area_values(records: Sequence[dict[str, Any]], game: str = "kovak", weapon: str = "sniper", window: int = 5) -> dict[str, float]:
-    """Average of the last ``window`` records per area (0-100, 1 decimal)."""
+    """Average of the last ``window`` records per area (0-100 평점, 1 decimal)."""
     rows = _sorted_records(records, game, weapon)[-window:]
     values: dict[str, float] = {}
     for key in AREA_KEYS:
-        vals = [float(r["scores"][key]) for r in rows if r.get("scores", {}).get(key) is not None]
+        vals = [rating_of(game, r["scores"][key]) for r in rows if r.get("scores", {}).get(key) is not None]
         values[key] = round(statistics.fmean(vals), 1) if vals else 0.0
     return values
 
@@ -272,7 +293,8 @@ def overall_score(values: dict[str, float]) -> int:
 
 
 def score_of_record(record: dict[str, Any]) -> int:
-    return overall_score({k: float(record.get("scores", {}).get(k) or 0) for k in AREA_KEYS})
+    game = str(record.get("game") or "kovak")
+    return overall_score({k: rating_of(game, record.get("scores", {}).get(k)) for k in AREA_KEYS})
 
 
 def latest_record(records: Sequence[dict[str, Any]], game: str, weapon: str) -> dict[str, Any] | None:
