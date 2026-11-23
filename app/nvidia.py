@@ -63,6 +63,33 @@ def _no_window_flags() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def _same_except_stairfix(a: bytes, b: bytes) -> bool:
+    """두 Drs DB 가 계단현상 끄기(AA compatibility) 값만 다른지.
+
+    팩을 덮어쓴 뒤 AA 값을 0x00401241 로 패치하므로, 라이브 DB 는 팩과
+    4바이트만 달라진다.  '이미 그 팩이 적용되어 있다'를 그렇게 판별한다.
+    """
+    if len(a) != len(b):
+        return False
+    try:
+        pa, pb = drs.profile_offset(a), drs.profile_offset(b)
+        if pa is None or pb is None:
+            return a == b
+        va, vb = dict(drs.values_of(a)), dict(drs.values_of(b))
+        if set(va) != set(vb):
+            return False
+        for key, value in va.items():
+            other = vb[key]
+            if value == other:
+                continue
+            if key == drs.SETTING_AA_COMPAT:
+                continue
+            return False
+        return True
+    except Exception:  # noqa: BLE001 - 판별 실패는 '다르다'로 처리
+        return False
+
+
 class DrsManager:
     def __init__(
         self,
@@ -152,18 +179,30 @@ class DrsManager:
         return modes
 
     def current_mode(self) -> str | None:
-        """Which profile is applied right now?"""
-        if self.stairfix_applied():
-            return "stairfix"
+        """Which profile is applied right now?
+
+        v1.3.0 — 팩 적용과 함께 계단현상 끄기가 병합되므로, 팩 일치를 먼저 보고
+        그다음에 계단현상만 적용된 상태를 본다(팩을 적용해 둔 사람이
+        'stairfix'로 보여 다시 적용되는 일을 막는다).
+        """
         live = self.drs_dir / "nvdrsdb0.bin"
         for mode in PACK_MODES:
             src = self.profiles_root / mode / "nvdrsdb0.bin"
-            if src.exists() and live.exists():
-                try:
-                    if _sha256(src) == _sha256(live):
-                        return mode
-                except OSError:
-                    continue
+            if not (src.exists() and live.exists()):
+                continue
+            try:
+                if _sha256(src) == _sha256(live):
+                    return mode
+            except OSError:
+                continue
+            # 팩 + 계단현상 끄기 병합본도 그 팩으로 본다 — AA 값만 다른 경우
+            try:
+                if self.stairfix_applied() and _same_except_stairfix(src.read_bytes(), live.read_bytes()):
+                    return mode
+            except OSError:
+                continue
+        if self.stairfix_applied():
+            return "stairfix"
         return None
 
     def writable(self) -> bool:
@@ -257,6 +296,13 @@ class DrsManager:
 
     # ------------------------------------------------------------ apply
     def apply(self, mode: str, *, force: bool = False) -> dict[str, Any]:
+        """프로필 팩 적용 + 계단현상 끄기 병합 (v1.3.0).
+
+        예전에는 `라플 최적화` · `스나 최적화` · `계단현상끄기` 세 버튼이 따로
+        있었지만, 이제 프로필을 적용할 때 Antialiasing compatibility
+        (``0x00D55F7D``) 값을 ``0x00401241`` 로 같이 패치해 **두 버튼**으로
+        통일했다.  복구는 기존 백업(적용 전 폴더) 하나로 둘 다 되돌아간다.
+        """
         self.ensure_supported()
         if mode not in MODES:
             raise DrsError(f"알 수 없는 프로필: {mode}")
@@ -276,8 +322,19 @@ class DrsManager:
 
         prev = self.current_mode()
         if prev == mode:
-            return {"ok": True, "mode": mode, "unchanged": True, "message": f"{MODES[mode]}이 이미 적용되어 있습니다"}
+            merged = self._merge_stairfix()
+            if merged.get("changed"):
+                return {
+                    "ok": True, "mode": mode, "merged": True, "stairfix": merged,
+                    "changes": merged.get("changes", []),
+                    "message": f"{MODES[mode]} 유지 · 계단현상 끄기를 함께 적용했습니다",
+                    "applied_at": _now(),
+                }
+            return {"ok": True, "mode": mode, "unchanged": True, "merged": bool(merged.get("ok")),
+                    "stairfix": merged, "changes": [],
+                    "message": f"{MODES[mode]}이 이미 적용되어 있습니다"}
 
+        before_blob = self.live_blob()
         backup = self._make_backup(f"{MODES[mode]} 적용 전", prev)
         try:
             for path in files:
@@ -293,12 +350,73 @@ class DrsManager:
         except OSError as exc:
             raise DrsError(f"Drs 파일을 쓰지 못했습니다 · {exc}") from exc
 
+        merged = self._merge_stairfix()
+        after_blob = self.live_blob()
+        try:
+            changes = drs.change_list(before_blob, after_blob)
+        except Exception:  # noqa: BLE001 - 내역 표시는 최선 노력
+            changes = []
         return {
             "ok": True,
             "mode": mode,
             "backup": backup["id"],
-            "message": f"{MODES[mode]} 적용 완료 · 이전 설정 자동 백업",
+            "merged": bool(merged.get("ok")),
+            "stairfix": merged,
+            "changes": changes,
+            "message": (f"{MODES[mode]} + 계단현상 끄기 적용 완료 · 이전 설정 자동 백업"
+                        if merged.get("ok") else f"{MODES[mode]} 적용 완료 · 이전 설정 자동 백업"),
             "applied_at": _now(),
+        }
+
+    def _merge_stairfix(self) -> dict[str, Any]:
+        """지금 Drs DB 의 서든 프로필에 계단현상 끄기(0x00401241)를 병합한다.
+
+        프로필 팩 DB 의 AA compatibility 는 기본값(``0x00020041``)이라 팩만
+        덮어쓰면 계단현상이 다시 켜진다.  그래서 복사 직후 같은 레코드 값을
+        패치하고(㉠오프셋은 변하지 않음) 실제 적용값을 다시 읽어 검증한다.
+        """
+        blob = self.live_blob()
+        if blob is None:
+            return {"ok": False, "changed": False, "message": "Drs DB를 읽지 못했습니다"}
+        try:
+            before = drs.aa_compat(blob)
+        except drs.DrsFormatError as exc:
+            return {"ok": False, "changed": False, "message": str(exc)}
+        if before is None:
+            return {"ok": False, "changed": False,
+                    "message": "서든 프로필에 Antialiasing compatibility 항목이 없습니다"}
+        if before == drs.STAIRFIX_VALUE:
+            return {"ok": True, "changed": False, "before": f"0x{before:08X}",
+                    "after": f"0x{drs.STAIRFIX_VALUE:08X}", "changes": []}
+        try:
+            patched, report = drs.set_stairfix(blob)
+            for name in ("nvdrsdb0.bin", "nvdrsdb1.bin"):
+                target = self.drs_dir / name
+                if not target.exists():
+                    continue
+                if name == "nvdrsdb1.bin":
+                    # 미러 DB — 서든 프로필이 없는 팩도 있어서 실패는 무시한다
+                    try:
+                        mirror, _ = drs.set_stairfix(target.read_bytes())
+                        target.write_bytes(mirror)
+                    except (OSError, drs.DrsFormatError):
+                        continue
+                else:
+                    target.write_bytes(patched)
+        except PermissionError as exc:
+            return {"ok": False, "changed": False, "message": f"관리자 권한이 필요합니다 · {exc}"}
+        except (OSError, drs.DrsFormatError) as exc:
+            return {"ok": False, "changed": False, "message": str(exc)}
+        after = self.stairfix_value()
+        if after != drs.STAIRFIX_VALUE:
+            return {"ok": False, "changed": False, "message": "계단현상 끄기 값 검증에 실패했습니다"}
+        return {
+            "ok": True, "changed": bool(report.get("changed", True)),
+            "before": f"0x{before:08X}", "after": f"0x{drs.STAIRFIX_VALUE:08X}",
+            "label": drs.describe(drs.STAIRFIX_VALUE),
+            "changes": [{"id": f"0x{drs.SETTING_AA_COMPAT:08X}", "name": "계단현상 끄기",
+                         "en": "Antialiasing compatibility (DX9)",
+                         "before": f"0x{before:08X}", "after": f"0x{drs.STAIRFIX_VALUE:08X}", "key": True}],
         }
 
     def restore(self, backup_id: str) -> dict[str, Any]:
@@ -335,12 +453,6 @@ class DrsManager:
 
     # ------------------------------------------------------------ alias / stairfix
     def apply_stairfix(self, *, force: bool = False) -> dict[str, Any]:
-        """'계단현상 끄기' — patch Antialiasing compatibility to 0x00401241 in place.
-
-        The value lives in a fixed-size setting record, so the live Drs database
-        is rewritten without changing a single offset; the whole folder is backed
-        up first, exactly like the rifle/sniper packs.
-        """
         self.ensure_supported()
         if not self.drs_dir.is_dir():
             raise DrsError(f"NVIDIA Drs 폴더를 찾지 못했습니다 · {self.drs_dir}")
@@ -382,6 +494,10 @@ class DrsManager:
             "backup": backup["id"],
             "changed": report.get("changed", True),
             "value": f"0x{drs.STAIRFIX_VALUE:08X}",
+            "changes": [{"id": f"0x{drs.SETTING_AA_COMPAT:08X}", "name": "계단현상 끄기",
+                         "en": "Antialiasing compatibility (DX9)",
+                         "before": (f"0x{before:08X}" if before is not None else "없음"),
+                         "after": f"0x{drs.STAIRFIX_VALUE:08X}", "key": True}],
             "message": "계단현상 끄기 적용 완료 · Antialiasing compatibility 0x00401241 (계단현상·타격효과·중세철창 제거)",
             "applied_at": _now(),
         }

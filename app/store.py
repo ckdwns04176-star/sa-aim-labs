@@ -44,6 +44,9 @@ DEFAULTS: dict[str, Any] = {
     "rotation": [],
     "more": [],
     "barracks": {},
+    "barracks_history": [],
+    "ui": {"digest_ack": None},
+    "attendance": {},
     "utils": {
         "nvidia": {"mode": None, "alias": False, "last_backup": None, "points": []},
         "accel": None,
@@ -208,6 +211,84 @@ class Store:
 
     def barracks_cache(self) -> dict[str, Any]:
         return self.data.setdefault("barracks", {})
+
+    # ------------------------------------------------------------ barracks snapshots (v1.3.0)
+    def barracks_history(self) -> list[dict[str, Any]]:
+        """병영수첩 최신화 스냅샷 [{date, at, nickname, stats, tier, basic}] — 날짜별 비교용."""
+        return self.data.setdefault("barracks_history", [])
+
+    def add_barracks_snapshot(self, barracks: dict[str, Any], *, keep: int = 60) -> dict[str, Any] | None:
+        """같은 날 같은 최신화 시각의 스냅샷은 하나만 남긴다."""
+        if not isinstance(barracks, dict) or not barracks.get("nickname"):
+            return None
+        snapshot = {
+            "date": today_str(),
+            "at": str(barracks.get("updated_at") or now_iso()),
+            "nickname": barracks.get("nickname"),
+            "stats": barracks.get("stats") or {},
+            "tier": barracks.get("tier") or {},
+            "basic": {"clan": (barracks.get("basic") or {}).get("clan")},
+        }
+        rows = self.barracks_history()
+        if rows and rows[-1].get("date") == snapshot["date"] and rows[-1].get("at") == snapshot["at"]:
+            return rows[-1]
+        rows.append(snapshot)
+        self.data["barracks_history"] = rows[-keep:]
+        self.save()
+        return snapshot
+
+    # ------------------------------------------------------------ attendance (v1.3.0)
+    def attendance(self) -> dict[str, Any]:
+        """날짜별 훈련 흔적 {'YYYY-MM-DD': {'n': 시나리오 수, 'r': 기록 수}}.
+
+        `점수 전체 초기화` 는 연습 점수·PB 만 지우고 **훈련 잔디(출석)** 는 남긴다.
+        그래서 기록과 별도로 날짜별 흔적을 보관한다.
+        """
+        return self.data.setdefault("attendance", {})
+
+    def note_attendance(self, records: list[dict[str, Any]]) -> None:
+        """오늘 기록에서 시나리오 수·기록 수를 다시 세어 보관(줄어들지 않게 max)."""
+        by_day: dict[str, dict[str, Any]] = {}
+        for rec in records:
+            day = str(rec.get("date") or str(rec.get("created_at") or "")[:10])
+            if not day:
+                continue
+            names = {str(s.get("name")) for s in (rec.get("scenarios") or []) if s.get("score") is not None}
+            slot = by_day.setdefault(day, {"n": 0, "r": 0})
+            slot["n"] += len(names) or 1
+            slot["r"] += 1
+        table = self.attendance()
+        changed = False
+        for day, slot in by_day.items():
+            old = table.get(day) or {}
+            merged = {"n": max(int(old.get("n") or 0), int(slot["n"])),
+                      "r": max(int(old.get("r") or 0), int(slot["r"]))}
+            if merged != old:
+                table[day] = merged
+                changed = True
+        if changed:
+            self.save()
+
+    # ------------------------------------------------------------ ui flags
+    def ui(self) -> dict[str, Any]:
+        return self.data.setdefault("ui", {"digest_ack": None})
+
+    # ------------------------------------------------------------ reset (v1.3.0)
+    def reset_scores(self) -> dict[str, int]:
+        """에임 연습 점수·PB·로그만 지운다.
+
+        남기는 것 — 설정(닉네임·API 키·친구 목록·유틸), 순위표, 병영수첩/변화 이력,
+        훈련 잔디(attendance: 날짜별 출석·훈련 흔적).  지우는 것 — 훈련 기록(점수·PB),
+        오늘 추천 로테이션, 더 연습하기 목록.
+        """
+        self.note_attendance(self.records())      # 지우기 직전에 오늘 흔적을 확정
+        removed = {"records": len(self.records()), "rotation": len(self.rotation()), "more": len(self.more())}
+        self.data["records"] = []
+        self.data["rotation"] = []
+        self.data["more"] = []
+        self.data.setdefault("ui", {})["digest_ack"] = None
+        self.save()
+        return removed
 
     def cloud(self) -> dict[str, Any]:
         return self.data.setdefault("cloud", copy.deepcopy(DEFAULTS["cloud"]))

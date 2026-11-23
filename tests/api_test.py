@@ -144,7 +144,12 @@ def main() -> int:
     result = mgr.apply("stairfix")
     check("계단현상 끄기 적용(라이브 DB 패치)", result.get("ok") and result.get("value") == "0x00401241",
           json.dumps({k: result[k] for k in ("ok", "message", "backup") if k in result}, ensure_ascii=False)[:140])
-    check("적용 후 current_mode=stairfix", mgr.current_mode() == "stairfix", str(mgr.current_mode()))
+    # v1.3.0 — 프로필 팩과 계단현상 끄기가 병합되므로, 스나 팩 + AA 패치 상태는
+    # 'sniper' 로 보고한다(팩 적용자가 다시 적용되는 일을 막는다). 실제 값으로 확인.
+    check("적용 후 current_mode = 스나 팩(계단현상 병합)", mgr.current_mode() == "sniper",
+          f"{mgr.current_mode()} · aa={drs.aa_compat(mgr.live_blob()):#010x}")
+    check("적용 후 계단현상 끄기 값 유지", drs.aa_compat(mgr.live_blob()) == 0x00401241,
+          hex(drs.aa_compat(mgr.live_blob()) or 0))
     restored = mgr.restore_latest()
     check("복구 지점으로 되돌리기", restored.get("ok") and drs.aa_compat(mgr.live_blob()) == 0x00020041,
           str(drs.aa_compat(mgr.live_blob())))

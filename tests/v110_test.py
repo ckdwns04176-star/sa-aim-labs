@@ -172,7 +172,7 @@ def mock_js(state: dict) -> str:
 def backend() -> None:
     from app import scoring, winutil, paths
 
-    check("버전 1.2.0", paths.APP_VERSION == "1.2.0", paths.APP_VERSION)
+    check("버전 1.3.0", paths.APP_VERSION == "1.3.0", paths.APP_VERSION)
 
     records = [
         {"date": "2026-11-22", "created_at": "2026-11-22T21:00:00", "game": "kovak", "weapon": "sniper",
@@ -260,8 +260,10 @@ def backend() -> None:
           str(plan))
     keep = winutil.window_fix_plan((40, 40, 1200, 750), work=(0, 0, 1920, 1040))
     check("정상 크기면 건드리지 않음", not keep["resize"] and not keep["moved"], str(keep))
+    # v1.3.0 — 감시자는 크기만 고치고 위치는 절대 옮기지 않는다(드래그·멀티모니터 이동 자유).
     off = winutil.window_fix_plan((300, 900, 1200, 750), work=(0, 0, 1920, 1040))
-    check("화면 밖으로 나간 창은 안으로 보정", off["y"] == 290 and off["moved"], str(off))
+    check("창 위치는 그대로 — 드래그·화면 밖 이동을 막지 않음",
+          off["y"] == 900 and off["x"] == 300 and not off["moved"] and not off["resize"], str(off))
     small = winutil.window_fix_plan((0, 0, 1200, 750), work=(0, 0, 1366, 728))
     check("작업 영역보다 큰 화면에서는 크기를 줄임", small["height"] == 728, str(small))
 
@@ -403,7 +405,7 @@ def ui() -> None:
         page.click('.seg-weapon .seg-btn[data-weapon="sniper"]')
         page.wait_for_timeout(300)
 
-        # 5) 병영수첩 하단 스크롤 (750 · 최소 창 높이 640 둘 다)
+        # 5) 병영수첩 · 맵·약점 분석 화면 분리 (v1.3.0)
         page.click('[data-screen="barracks"]')
         page.wait_for_timeout(500)
         for height in (750, 640):
@@ -414,24 +416,23 @@ def ui() -> None:
                 return {sh: s.scrollHeight, ch: s.clientHeight, can: getComputedStyle(s).overflowY,
                         sbWidth: s.offsetWidth - s.clientWidth};
             }""")
-            check(f"{height}px 창 · 병영수첩이 창 높이를 넘으면 스크롤 가능",
-                  scroll["sh"] > scroll["ch"], json.dumps(scroll))
-            check(f"{height}px 창 · 스크롤바 스타일 적용(overflow-y auto)", scroll["can"] == "auto", scroll["can"])
-            page.evaluate("""() => { const s = document.querySelector('#s-barracks'); s.scrollTop = s.scrollHeight; }""")
-            page.wait_for_timeout(350)
+            check(f"{height}px 창 · 병영수첩 화면 스크롤 준비(overflow-y auto)",
+                  scroll["can"] == "auto", json.dumps(scroll))
+            page.click('[data-screen="maps"]')
+            page.wait_for_timeout(450)
             bottom = page.evaluate("""() => {
-                const s = document.querySelector('#s-barracks');
+                const s = document.querySelector('#s-maps');
                 const t = document.querySelector('#map-table');
                 const r = t.getBoundingClientRect(), sr = s.getBoundingClientRect();
-                return {atBottom: Math.abs(s.scrollTop + s.clientHeight - s.scrollHeight) < 3,
-                        tableVisible: r.top < sr.bottom && r.bottom <= sr.bottom + 2,
+                return {tableVisible: r.top < sr.bottom && r.bottom <= sr.bottom + 2,
                         rows: t.querySelectorAll('tbody tr').length,
                         title: (document.querySelector('#br-table-title') || {}).textContent};
             }""")
-            check(f"{height}px 창 · 맨 아래까지 스크롤됨", bottom["atBottom"], str(bottom))
             check(f"{height}px 창 · 맵별 분석 표가 화면에 보임",
                   bottom["tableVisible"] and bottom["rows"] >= 10, str(bottom))
-            page.screenshot(path=str(SHOTS / f"v110-barracks-bottom-{height}.png"))
+            page.screenshot(path=str(SHOTS / f"v110-maps-{height}.png"))
+            page.click('[data-screen="barracks"]')
+            page.wait_for_timeout(250)
         page.set_viewport_size({"width": 1200, "height": 750})
         page.wait_for_timeout(250)
 

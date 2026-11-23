@@ -165,11 +165,11 @@ def backend_checks() -> None:
     real_fetch = updates.fetch_latest
     try:
         updates.clear()
-        updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.2.1", "name": "v1.2.1",
+        updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.3.1", "name": "v1.3.1",
                                                     "url": "https://github.com/x/y", "download": "https://x/y.exe",
                                                     "published_at": "2026-11-23T00:00:00Z", "notes": ""}
         newer = updates.check(paths.APP_VERSION, force=True)
-        check("새 버전 감지", newer.get("ok") and newer.get("newer") and newer.get("latest") == "1.2.1",
+        check("새 버전 감지", newer.get("ok") and newer.get("newer") and newer.get("latest") == "1.3.1",
               str(newer.get("message")))
         updates.clear()
         updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.0.0", "url": "", "download": ""}
@@ -334,7 +334,7 @@ def backend_checks() -> None:
           str([t["title"] for t in gap]))
 
     # ---- 12. 앱 버전 · API 노출
-    check("APP_VERSION 1.2.0", paths.APP_VERSION == "1.2.0", paths.APP_VERSION)
+    check("APP_VERSION 1.3.0", paths.APP_VERSION == "1.3.0", paths.APP_VERSION)
     import main as app_main
 
     exposed = app_main._public_names(api)
@@ -352,10 +352,10 @@ def ui_state(store) -> dict:
 
     api = Api(store=store)
     state = api._build_state()
-    state["update"] = {"ok": True, "current": "1.2.0", "latest": "1.2.1", "tag": "v1.2.1", "newer": True,
+    state["update"] = {"ok": True, "current": "1.3.0", "latest": "1.3.1", "tag": "v1.3.1", "newer": True,
                        "url": "https://github.com/ckdwns04176-star/sa-aim-labs/releases/latest",
                        "download": "https://example.invalid/SA_Aim_Labs.exe",
-                       "published_at": "2026-11-23T09:00:00+09:00", "message": "새 버전 v1.2.1 이 있습니다"}
+                       "published_at": "2026-11-23T09:00:00+09:00", "message": "새 버전 v1.3.1 이 있습니다"}
     state["tray"] = {"supported": True, "active": True, "icon": True, "hotkey": True,
                      "hotkey_spec": "Ctrl+Shift+A", "error": None, "background": True, "hotkey_enabled": True,
                      "hidden": False}
@@ -549,7 +549,11 @@ def ui_checks() -> None:
                     recRows: document.querySelectorAll('#rec-list .rec').length};
         }""")
         page.screenshot(path=str(SHOTS / "v120-dashboard.png"))
+        page.click(".nav-item[data-screen='records']")
+        page.wait_for_timeout(400)
         page.locator(".insights").screenshot(path=str(SHOTS / "v120-insights.png"))
+        page.click(".nav-item[data-screen='dashboard']")
+        page.wait_for_timeout(300)
         check("잔디 14주 × 7칸 렌더", dash["cells"] == 98 and dash["weeks"] == 14,
               f"{dash['weeks']}주 {dash['cells']}칸")
         check("잔디에 훈련일 색이 들어감", dash["lit"] >= 10, f"{dash['lit']}칸")
@@ -561,7 +565,16 @@ def ui_checks() -> None:
         check("대시보드에 워밍업·코박스·리포트·플레이리스트 버튼",
               all(dash["btns"]) and "5분 워밍업" in dash["btns"][0], str(dash["btns"]))
         check("새 버전 배너 표시", dash["updateShown"] and "새 버전" in dash["updateText"], str(dash["updateText"]))
-        check("인사이트 행이 첫 화면 안에 보임", 0 < dash["insightsTop"] < 720, f"top={dash['insightsTop']}")
+        page.click(".nav-item[data-screen='records']")
+        page.wait_for_timeout(400)
+        ins_top = page.evaluate("""() => {
+            const r = document.querySelector('#s-records .insights').getBoundingClientRect();
+            const s = document.querySelector('#s-records').getBoundingClientRect();
+            return Math.round(r.top - s.top);
+        }""")
+        check("인사이트 행이 기록·분석 화면에 보임", 0 < ins_top < 720, f"top={ins_top}")
+        page.click(".nav-item[data-screen='dashboard']")
+        page.wait_for_timeout(300)
         check("추천 5종 행 유지", dash["recRows"] >= 5, str(dash["recRows"]))
 
         # ---------- 리포트 카드 PNG
@@ -629,7 +642,9 @@ def ui_checks() -> None:
               bool(saved_payload.get("scenarios")) and saved_payload["scenarios"][0].get("score") == 161.5,
               str(saved_payload.get("scenarios")))
 
-        # ---------- 주간 목표 수정
+        # ---------- 주간 목표 수정 (v1.3.0 — 기록·분석 화면)
+        page.click(".nav-item[data-screen='records']")
+        page.wait_for_timeout(300)
         page.click("#week-goal-edit")
         page.wait_for_timeout(300)
         page.fill("#week-days", "6")
@@ -649,44 +664,51 @@ def ui_checks() -> None:
             return {exists: !!card, chip: (document.getElementById('perf-chip')||{}).textContent,
                     state: (document.getElementById('perf-state')||{}).textContent,
                     label: (document.getElementById('perf-label')||{}).textContent,
-                    apply: !!document.getElementById('perf-apply'),
+                    apply: !!document.getElementById('perf-switch'),
                     restore: !!document.getElementById('perf-restore')};
         }""")
         page.screenshot(path=str(SHOTS / "v120-utils.png"))
         check("유틸 탭에 전원/게임 모드 카드", util["exists"] and util["apply"] and util["restore"], str(util))
         check("전원 옵션 현재 상태 표시", "전원 옵션" in (util["label"] or ""), str(util["label"]))
         page.evaluate("() => { window.__CALLS = []; }")
-        page.click("#perf-apply")
-        page.wait_for_timeout(500)
+        page.click("#perf-switch")
+        page.wait_for_timeout(600)
         calls = page.evaluate("() => window.__CALLS")
         chip_after = page.evaluate("() => document.getElementById('perf-chip').textContent")
         check("전원/게임 모드 적용 호출", any(c[0] == "apply_perf_mode" for c in calls), str([c[0] for c in calls]))
         check("적용 후 상태 칩 갱신", "적용됨" in (chip_after or ""), str(chip_after))
 
-        # ---------- 설정 탭
-        page.click(".nav-item[data-screen='settings']")
+        # ---------- 설정 팝업 (v1.3.0 — 좌측 하단 프로필/톱니바퀴)
+        page.evaluate("() => document.querySelector('#profile-card').click()")
         page.wait_for_timeout(500)
         settings = page.evaluate("""() => {
             const q = (id) => { const el = document.getElementById(id); return el ? el.value || el.textContent : null; };
-            return {stats: q('set-kovak-stats'), update: q('set-update-info'), tray: q('set-tray-state'),
-                    autofill: !!document.querySelector('[data-toggle="kovak_autofill"]'),
-                    hotkey: !!document.querySelector('[data-toggle="hotkey_enabled"]'),
-                    trayToggle: !!document.querySelector('[data-toggle="tray_background"]'),
+            return {open: document.getElementById('settings-mask').classList.contains('show'),
+                    stats: q('set-kovak-stats'), update: q('set-update-info'), tray: q('set-tray-state'),
+                    autofill: !!document.querySelector('[data-switch="kovak_autofill"]'),
+                    hotkey: !!document.querySelector('[data-switch="hotkey_enabled"]'),
+                    trayToggle: !!document.querySelector('[data-switch="tray_background"]'),
+                    resetBtn: !!document.getElementById('set-reset-scores'),
                     updBtn: !!document.getElementById('set-update-check'),
-                    trayBtn: !!document.getElementById('set-tray-hide')};
+                    tabs: [...document.querySelectorAll('#set-tabs button')].map((b) => b.textContent.trim())};
         }""")
         page.screenshot(path=str(SHOTS / "v120-settings.png"))
+        check("설정 팝업이 열림(좌측 하단 프로필)", settings["open"], str(settings["open"]))
         check("설정 · 코박스 stats 폴더 입력", settings["stats"] is not None, str(settings["stats"]))
-        check("설정 · 자동 채움/단축키/트레이 토글",
-              settings["autofill"] and settings["hotkey"] and settings["trayToggle"], str(settings))
+        check("설정 · 자동 채움/단축키 토글", settings["autofill"] and settings["hotkey"], str(settings))
+        check("설정 · '닫으면 트레이로 숨기기' 옵션 제거", settings["trayToggle"] is False, str(settings["trayToggle"]))
+        check("설정 · 점수 전체 초기화 버튼", settings["resetBtn"], str(settings["resetBtn"]))
         check("설정 · 업데이트 확인 버튼", settings["updBtn"], str(settings["updBtn"]))
-        check("설정 · 트레이로 숨기기 버튼", settings["trayBtn"], str(settings["trayBtn"]))
         check("설정 · 새 버전 안내 문구", "새 버전" in (settings["update"] or ""), str(settings["update"]))
         page.evaluate("() => { window.__CALLS = []; }")
+        page.evaluate("() => document.querySelector('#set-tabs [data-set-tab=\"more\"]').click()")
+        page.wait_for_timeout(250)
         page.click("#set-tray-hide")
         page.wait_for_timeout(400)
         calls = page.evaluate("() => window.__CALLS")
         check("트레이로 숨기기 호출", any(c[0] == "tray_hide" for c in calls), str([c[0] for c in calls]))
+        page.evaluate("() => document.querySelector('#settings-mask').classList.remove('show')")
+        page.wait_for_timeout(200)
 
         # ---------- 병영수첩 · 최근 100판 플레이 코칭
         page.click(".nav-item[data-screen='barracks']")
@@ -720,7 +742,7 @@ def ui_checks() -> None:
 
         # ---------- 640px 창(최소 크기) 에서도 겹치지 않는지
         page.set_viewport_size({"width": 1200, "height": 640})
-        page.click(".nav-item[data-screen='dashboard']")
+        page.click(".nav-item[data-screen='records']")
         page.wait_for_timeout(400)
         page.screenshot(path=str(SHOTS / "v120-dashboard-640.png"))
         small = page.evaluate("""() => {

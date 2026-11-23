@@ -51,6 +51,70 @@ KNOWN_AA_COMPAT = {
     0x00000000: "해제",
 }
 
+# v1.3.0 — 적용 후 '무엇이 바뀌었는지' 보여줄 설정 이름 (아는 항목만)
+SETTING_NAMES = {
+    SETTING_AA_COMPAT: ("계단현상 끄기", "Antialiasing compatibility (DX9)"),
+    SETTING_AA_COMPAT2: ("안티앨리어싱 호환성 보조값", "Antialiasing compatibility (2)"),
+    0x00D55F49: ("앰비언트 오클루전", "Ambient Occlusion"),
+    0x00D55F4A: ("텍스처 필터링 품질", "Texture filtering quality"),
+    0x00D55F4B: ("수직 동기", "Vertical Sync"),
+    0x00D55F4D: ("최대 사전 렌더 프레임", "Maximum pre-rendered frames"),
+    0x00D55F4E: ("전원 관리 모드", "Power management mode"),
+    0x00D55F50: ("스레드 최적화", "Threaded optimization"),
+    0x00D55F51: ("저지연 모드", "Low latency mode"),
+    0x00D55F52: ("샤프닝", "Image sharpening"),
+    0x00D55F53: ("텍스처 품질", "Texture quality"),
+    0x00D55F55: ("이방성 필터링", "Anisotropic filtering"),
+}
+
+
+def setting_name(setting_id: int) -> tuple[str, str]:
+    """(한글 이름, 영문 이름) — 모르는 ID 는 '0x…' 로 표시한다."""
+    hit = SETTING_NAMES.get(setting_id)
+    if hit:
+        return hit
+    return (f"드라이버 설정 0x{setting_id:08X}", f"setting 0x{setting_id:08X}")
+
+
+def values_of(blob: bytes | bytearray, exe: str = GAME_EXE) -> dict[int, bytes]:
+    """서든어택 프로필의 설정 값 {setting_id: raw value bytes}."""
+    off = profile_offset(blob, exe)
+    if off is None:
+        return {}
+    return {rec["setting_id"]: rec["value"] for rec in iter_settings(blob, off)}
+
+
+def as_text(raw: bytes | None) -> str:
+    """설정 값 표시 — 4바이트면 0x…, 아니면 앞 8바이트 hex."""
+    if raw is None:
+        return "없음"
+    if len(raw) >= 4:
+        return f"0x{int.from_bytes(raw[:4], 'little'):08X}"
+    return raw.hex() or "없음"
+
+
+def change_list(before: bytes | bytearray | None, after: bytes | bytearray | None,
+                exe: str = GAME_EXE) -> list[dict[str, Any]]:
+    """두 Drs DB 사이에서 값이 달라진 서든어택 설정들 — 적용 내역 모달용.
+
+    프로필 팩은 여러 설정을 한 번에 바꾸므로, 아는 이름은 한국어로, 모르는
+    항목은 설정 ID 그대로 돌려준다.  계단현상 끄기(0x00D55F7D)는 항상 맨 앞에
+    온다.
+    """
+    old = values_of(before, exe) if before else {}
+    new = values_of(after, exe) if after else {}
+    rows: list[dict[str, Any]] = []
+    for setting_id in sorted(set(old) | set(new)):
+        was, now = old.get(setting_id), new.get(setting_id)
+        if (was or b"") == (now or b""):
+            continue
+        ko, en = setting_name(setting_id)
+        rows.append({"id": f"0x{setting_id:08X}", "name": ko, "en": en,
+                     "before": as_text(was), "after": as_text(now),
+                     "key": setting_id == SETTING_AA_COMPAT})
+    rows.sort(key=lambda r: (not r["key"], r["id"]))
+    return rows
+
 
 class DrsFormatError(RuntimeError):
     pass

@@ -287,7 +287,8 @@ def main(argv: list[str] | None = None) -> int:
     # 밖으로 나가지 않게 좌표를 보정한다(최소화·최대화는 건드리지 않음).
     guard = winutil.WindowGuard(paths.APP_TITLE, win_w, win_h)
     if guard.start():
-        log.info("window guard on · %sx%s 고정 (해상도·DPI 변경 감시)", win_w, win_h)
+        api.attach_guard(guard)
+        log.info("window guard on · %sx%s 고정 (해상도·DPI 변경 감시 · 이동은 자유)", win_w, win_h)
     else:
         log.info("window guard off (Windows 전용)")
 
@@ -338,25 +339,11 @@ def main(argv: list[str] | None = None) -> int:
             log.info("tray off · %s", tray_icon.error)
             tray_icon = None
 
-    # ── 창 닫기: 설정이 켜져 있고 트레이가 살아 있으면 '종료' 대신 숨기기 ──
-    try:
-        def _on_closing() -> bool:
-            if tray_icon is None or not tray_icon.active:
-                return True
-            if not bool(api.store.settings.get("tray_background")):
-                return True
-            try:
-                window.hide()
-                _set_hidden(True)
-            except Exception:  # noqa: BLE001 - 숨기기 실패하면 그냥 종료
-                return True
-            log.info("closed to tray (트레이로 숨김)")
-            return False
-
-        window.events.closing += _on_closing
-    except Exception:  # noqa: BLE001 - 이벤트 미지원 백엔드
-        log.debug("closing event unavailable", exc_info=True)
-
+    # ── 창 닫기 ──
+    # v1.3.0: '닫으면 트레이로 숨기기' 설정을 없앴다.  X 버튼은 UI 가
+    # "트레이로 숨기기 / 프로그램 종료" 확인 팝업을 띄우고 그 선택으로 닫는다.
+    # (OS 레벨 닫기 · Alt+F4 는 그대로 종료 — 확인창 없이 창만 사라지면
+    #  사용자가 "앱이 꺼졌다"고 오해하므로, UI 실행 중에는 X 로 닫도록 안내한다.)
     def _on_loaded() -> None:
         log.info("ui loaded · bridge should be ready")
 

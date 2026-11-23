@@ -479,13 +479,21 @@ def weapon_slots(weapon: str, values: dict[str, float]) -> list[str]:
 
 
 def _rec_row(choice: dict[str, Any], *, values: dict[str, float], records: Sequence[dict[str, Any]],
-             today_scores_map: dict[str, float], extra: bool = False) -> dict[str, Any]:
+             today_scores_map: dict[str, float], extra: bool = False,
+             game: str = "kovak", next_cut: int | None = None) -> dict[str, Any]:
     key = choice["area_key"]
     hist = scenario_history(records, choice["name"])
     last = hist[-1]["score"] if hist else None
     prev = hist[-2]["score"] if len(hist) > 1 else None
     delta = round(last - prev, 1) if (last is not None and prev is not None) else None
     mine = today_scores_map.get(choice["name"])
+    scores = [float(h["score"]) for h in hist]
+    avg = round(statistics.fmean(scores), 1) if scores else None
+    # 다음 티어 목표 점수 = 그 티어 컴을 5영역 평균으로 만들 때 이 시나리오가 넘어야 할 점수
+    target = None
+    if next_cut:
+        need_rating = clamp(float(next_cut) / 36.0, 0, 100)
+        target = round(GAME_REF.get(game, 200.0) * need_rating / 100.0, 1)
     return {
         "name": choice["name"],
         "area": choice["area_idx"],
@@ -494,10 +502,14 @@ def _rec_row(choice: dict[str, Any], *, values: dict[str, float], records: Seque
         "diff": difficulty_for(values.get(key, 0.0)),
         "score": None if last is None else round(last, 1),
         "best": None if not hist else round(max(h["score"] for h in hist), 1),
+        "avg": avg,
         "today_score": None if mine is None else round(mine, 1),
         "delta": delta,
         "done": mine is not None,
         "attempts": len(hist),
+        "history": [{"date": h["date"], "score": round(float(h["score"]), 1)} for h in hist[-8:]],
+        "next_target": target,
+        "next_tier_cut": next_cut,
         "extra": extra,
     }
 
@@ -527,6 +539,8 @@ def build_recs(
     pool = scenarios_for(game, weapon)
     used = _used_recently(history, game, weapon, today)
     mine = today_scores(records, today)
+    nxt = next_tier(overall_score(values))
+    next_cut = nxt["cut"] if nxt else None
     picked: list[dict[str, Any]] = []
     seen: set[str] = set()
     for key in weapon_slots(weapon, values):
@@ -536,7 +550,8 @@ def build_recs(
         if not choice:
             continue
         seen.add(choice["name"])
-        picked.append(_rec_row(choice, values=values, records=records, today_scores_map=mine))
+        picked.append(_rec_row(choice, values=values, records=records, today_scores_map=mine,
+                               game=game, next_cut=next_cut))
     return picked
 
 
@@ -555,6 +570,8 @@ def build_more(
     pool = scenarios_for(game, weapon)
     mine = today_scores(records, today)
     seen = {str(n) for n in exclude if n}
+    nxt = next_tier(overall_score(values))
+    next_cut = nxt["cut"] if nxt else None
     picked: list[dict[str, Any]] = []
     # 약한 영역 순으로 두 바퀴 — 한 영역에서만 뽑히지 않게
     order = weapon_slots(weapon, values) + list(weapon_slots(weapon, values))
@@ -566,7 +583,8 @@ def build_more(
             continue
         choice = cands[0]
         seen.add(choice["name"])
-        picked.append(_rec_row(choice, values=values, records=records, today_scores_map=mine, extra=True))
+        picked.append(_rec_row(choice, values=values, records=records, today_scores_map=mine,
+                               extra=True, game=game, next_cut=next_cut))
     return picked
 
 
@@ -583,12 +601,15 @@ def recs_for_names(
     today = today or _dt.date.today()
     by_name = {s["name"]: s for s in scenarios_for(game, weapon)}
     mine = today_scores(records, today)
+    nxt = next_tier(overall_score(values))
+    next_cut = nxt["cut"] if nxt else None
     out = []
     for name in names:
         choice = by_name.get(str(name))
         if not choice:
             continue
-        out.append(_rec_row(choice, values=values, records=records, today_scores_map=mine, extra=True))
+        out.append(_rec_row(choice, values=values, records=records, today_scores_map=mine,
+                            extra=True, game=game, next_cut=next_cut))
     return out
 
 
@@ -609,13 +630,21 @@ def push_rotation(history: Sequence[dict[str, Any]], entry: dict[str, Any], keep
 
 
 # ---------------------------------------------------------------- streaks & trend
-def record_dates(records: Sequence[dict[str, Any]]) -> set[str]:
-    return {_record_day(r) for r in records if r.get("date") or r.get("created_at")}
+def _attendance_dates(attendance: dict[str, Any] | None) -> set[str]:
+    return {str(d) for d, v in (attendance or {}).items() if d and (int((v or {}).get("n") or 0) > 0
+                                                                 or int((v or {}).get("r") or 0) > 0)}
 
 
-def streak(records: Sequence[dict[str, Any]], today: _dt.date | None = None) -> dict[str, Any]:
+def record_dates(records: Sequence[dict[str, Any]], attendance: dict[str, Any] | None = None) -> set[str]:
+    """기록이 있는 날 + 훈련 잔디(attendance)에 남은 날의 합집합."""
+    days = {_record_day(r) for r in records if r.get("date") or r.get("created_at")}
+    return days | _attendance_dates(attendance)
+
+
+def streak(records: Sequence[dict[str, Any]], today: _dt.date | None = None,
+           attendance: dict[str, Any] | None = None) -> dict[str, Any]:
     today = today or _dt.date.today()
-    dates = sorted(record_dates(records))
+    dates = sorted(record_dates(records, attendance))
     if not dates:
         return {"current": 0, "best": 0, "week": 0, "last": None, "days7": [False] * 7}
     dset = set(dates)
@@ -768,7 +797,8 @@ def new_pbs(records: Sequence[dict[str, Any]], scenarios: Sequence[dict[str, Any
 
 
 def heatmap(records: Sequence[dict[str, Any]], weeks: int = 14,
-            today: _dt.date | None = None) -> dict[str, Any]:
+            today: _dt.date | None = None,
+            attendance: dict[str, Any] | None = None) -> dict[str, Any]:
     """최근 N주 훈련 잔디 — 요일(행) × 주(열) 격자, 4단계 색.
 
     그날 기록한 **시나리오 개수**로 단계를 나눈다(0 / 1~2 / 3~5 / 6+).
@@ -781,6 +811,9 @@ def heatmap(records: Sequence[dict[str, Any]], weeks: int = 14,
         day = _record_day(rec)
         names = {str(s.get("name")) for s in (rec.get("scenarios") or []) if s.get("score") is not None}
         per_day[day] = per_day.get(day, 0) + (len(names) or 1)
+    # 점수 초기화 뒤에도 잔디가 남도록 날짜별 흔적을 함께 본다 (큰 쪽 사용)
+    for day, slot in (attendance or {}).items():
+        per_day[str(day)] = max(per_day.get(str(day), 0), int((slot or {}).get("n") or 0))
 
     def level(count: int) -> int:
         if count <= 0:
@@ -831,7 +864,8 @@ WEEK_GOAL_DEFAULTS = {"days": 5, "games": 25}
 
 
 def weekly_progress(records: Sequence[dict[str, Any]], goals: dict[str, Any] | None = None,
-                    today: _dt.date | None = None) -> dict[str, Any]:
+                    today: _dt.date | None = None,
+                    attendance: dict[str, Any] | None = None) -> dict[str, Any]:
     """이번 주(월~일) 목표 달성률 — 출석 일수 + 훈련 판수."""
     today = today or _dt.date.today()
     goals = {**WEEK_GOAL_DEFAULTS, **(goals or {})}
@@ -853,6 +887,9 @@ def weekly_progress(records: Sequence[dict[str, Any]], goals: dict[str, Any] | N
         if week_start.isoformat() <= day <= week_end.isoformat():
             days.add(day)
             games += 1
+    for day in _attendance_dates(attendance):
+        if week_start.isoformat() <= day <= week_end.isoformat():
+            days.add(day)
     days_done = len(days)
     pct_days = min(100.0, days_done / goal_days * 100)
     pct_games = min(100.0, games / goal_games * 100)
@@ -1004,7 +1041,7 @@ def friend_compare(me: dict[str, Any] | None, friend: dict[str, Any] | None) -> 
         "score": {"me": me_wins, "friend": friend_wins},
         "verdict": ("내가 우세" if me_wins > friend_wins else
                     "친구가 우세" if friend_wins > me_wins else "접전"),
-        "note": "저장된 순위표·병영수첩 데이터만 비교합니다 · 넥슨 API 를 다시 부르지 않습니다",
+        "note": "이미 받아 둔 전적과 저장된 훈련 기록으로만 비교합니다",
     }
 
 
@@ -1201,3 +1238,232 @@ def summary(records: Sequence[dict[str, Any]], game: str, weapon: str,
         "philosophy": WEAPON_PHILOSOPHY.get(weapon, ""),
         "last": latest_record(records),
     }
+
+
+# ================================================================ v1.3.0
+# 티어 분포 · 18단계 티어 상세 · 병영수첩 일일 변화 · 맵별 가이드
+
+# 18단계 티어의 기준 분포(%) — 실제 사용자 집계가 부족할 때 쓰는 폴백.
+# 아래쪽 넓은 구간에 사람이 몰리고 위로 갈수록 급격히 줄어드는 모양이다.
+TIER_BASELINE: list[float] = [
+    12.0, 9.0, 8.0, 8.0, 7.0, 7.0, 7.0, 6.0, 6.0,
+    6.0, 5.0, 4.0, 4.0, 3.0, 2.5, 2.0, 2.0, 1.5,
+]
+
+
+def tier_distribution(counts: Sequence[int] | None = None, *, source: str = "baseline",
+                      total_users: int | None = None) -> dict[str, Any]:
+    """18단계 티어 분포율(%) — 실제 집계(counts)가 있으면 그것을, 없으면 기준 분포.
+
+    counts 는 TIERS 순서와 같은 18개입니다.  총 인원이 너무 적으면(20명 미만)
+    비율이 0/100 으로 튀어서 읽기 어려우므로 기준 분포를 섞어 부드럽게 한다.
+    """
+    if counts and sum(int(c or 0) for c in counts) >= 20:
+        total = sum(int(c or 0) for c in counts)
+        rows = [{"tier": t["n"], "count": int(c or 0), "pct": round(int(c or 0) / total * 100, 1)}
+                for t, c in zip(TIERS, list(counts) + [0] * (len(TIERS) - len(counts)))]
+        return {"source": "live", "total": total, "rows": rows,
+                "note": f"실제 사용자 {total:,}명의 종합 점수 분포"}
+    base_total = sum(TIER_BASELINE)
+    rows = [{"tier": t["n"], "count": None, "pct": round(p / base_total * 100, 1)}
+            for t, p in zip(TIERS, TIER_BASELINE)]
+    note = "아직 집계된 사용자가 적어 기준 분포로 표시합니다"
+    if total_users:
+        note = f"집계된 사용자 {total_users}명 · 표본이 적어 기준 분포로 표시합니다"
+    return {"source": source if source != "baseline" else "baseline", "total": total_users or 0,
+            "rows": rows, "note": note}
+
+
+def tier_detail(index: int, score: int, distribution: dict[str, Any] | None = None,
+                values: dict[str, float] | None = None) -> dict[str, Any]:
+    """18단계 티어표에서 한 티어를 눌렀을 때 보여줄 상세 정보."""
+    index = max(0, min(len(TIERS) - 1, int(index)))
+    tier = TIERS[index]
+    nxt = TIERS[index + 1] if index + 1 < len(TIERS) else None
+    same_cut = [t for t in TIERS if t["cut"] == tier["cut"]]
+    span = (nxt["cut"] - tier["cut"]) if (nxt and nxt["cut"] > tier["cut"]) else None
+    # 상위 % — 기준 분포에서 이 티어 위쪽 비율의 합
+    dist = distribution or tier_distribution()
+    pct_rows = dist.get("rows") or []
+    above = sum(float(r.get("pct") or 0) for r in pct_rows[index + 1:])
+    my_pct = round(above + float(pct_rows[index].get("pct") or 0) if index < len(pct_rows) else above, 1)
+    tips: list[str] = []
+    weak = None
+    if values:
+        weak = min(AREAS, key=lambda a: values.get(a["key"], 0.0))
+        tips.append(f"가장 약한 영역은 {weak['name']} {round(values.get(weak['key'], 0))} — "
+                    f"이 영역 시나리오를 하루 2종만 더 해도 종합 점수가 크게 움직입니다.")
+    if span:
+        need_mean = clamp(tier["cut"] / 36.0, 0, 100)
+        tips.append(f"이 티어 구간은 {tier['cut']:,} ~ {nxt['cut'] - 1:,}점 · 5영역 평균 "
+                    f"{need_mean:.0f} 이상이면 진입합니다.")
+    current_index = tier_index(score)
+    if index < current_index:
+        tips.append(f"이미 지나온 구간입니다 · 현재 {TIERS[current_index]['n']} {score:,}점. "
+                    f"아래 티어로 다시 떨어지지 않게 하위 영역을 유지하세요.")
+    elif index == current_index and nxt:
+        tips.append(f"다음 {nxt['n']}까지 {max(0, nxt['cut'] - score):,}점 남았습니다. "
+                    f"약점 영역 평균을 {min(100, round(nxt['cut'] / 36))}까지 올리는 것이 가장 빠릅니다.")
+    elif nxt:
+        tips.append(f"이 구간에 들어가려면 {max(0, tier['cut'] - score):,}점이 더 필요합니다. "
+                    f"약점 영역 평균을 {min(100, round(tier['cut'] / 36))}까지 올려 보세요.")
+    else:
+        tips.append("최상위 구간입니다. 이제는 점수보다 경기 승률·생존을 지표로 보세요.")
+    return {
+        "index": index, "tier": tier, "score": score,
+        "range": (f"{tier['cut']:,} ~ {nxt['cut'] - 1:,}" if span else f"{tier['cut']:,}+"),
+        "next": nxt, "points_to_next": max(0, (nxt["cut"] - score)) if nxt else 0,
+        "share_pct": round(float(pct_rows[index].get("pct") or 0), 1) if index < len(pct_rows) else None,
+        "above_pct": round(above, 1),
+        "top_pct": tier.get("top_pct"),
+        "same_cut": [t["n"] for t in same_cut],
+        "tips": tips[:3],
+        "is_current": tier_index(score) == index,
+        "distribution_source": dist.get("source"),
+        "weak_area": weak["key"] if weak else None,
+    }
+
+
+def _num_or_none(value: Any) -> float | None:
+    try:
+        if value is None or value == "":
+            return None
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def barracks_digest(snapshots: Sequence[dict[str, Any]], today: _dt.date | None = None) -> dict[str, Any]:
+    """오늘 첫 실행용 — 직전 에임 연습일 대비 병영수첩 변화 + 한마디 충고.
+
+    snapshots 는 날짜별 병영수첩 스냅샷([{date, at, stats, tier}])이며, 오늘 것과
+    가장 가까운 이전 날짜의 것을 비교한다.  두 날짜가 없으면 available=False.
+    """
+    today = today or _dt.date.today()
+    rows = [s for s in snapshots if s.get("stats")]
+    if not rows:
+        return {"available": False, "reason": "병영수첩을 아직 불러오지 않았습니다"}
+    rows = sorted(rows, key=lambda s: (str(s.get("date") or ""), str(s.get("at") or "")))
+    current = rows[-1]
+    cur_date = str(current.get("date") or "")
+    prev = None
+    for snap in reversed(rows[:-1]):
+        if str(snap.get("date") or "") < cur_date:
+            prev = snap
+            break
+    if prev is None:
+        return {"available": False, "reason": "비교할 이전 연습일 기록이 없습니다",
+                "current_date": cur_date, "nickname": current.get("nickname")}
+
+    def stat(snap: dict[str, Any], key: str) -> float | None:
+        return _num_or_none((snap.get("stats") or {}).get(key))
+
+    def rp(snap: dict[str, Any], mode: str) -> float | None:
+        return _num_or_none(((snap.get("tier") or {}).get(mode) or {}).get("rp"))
+
+    metrics = []
+    for key, label, unit in (("win", "승률", "%"), ("kd", "K/D", "%"), ("dmg", "평균 딜량", "")):
+        before, after = stat(prev, key), stat(current, key)
+        metrics.append({"key": key, "label": label, "unit": unit, "before": before, "after": after,
+                        "diff": None if (before is None or after is None) else round(after - before, 1)})
+    for mode, label in (("solo", "솔로 RP"), ("party", "파티 RP")):
+        before, after = rp(prev, mode), rp(current, mode)
+        metrics.append({"key": mode, "label": label, "unit": "RP", "before": before, "after": after,
+                        "diff": None if (before is None or after is None) else round(after - before, 0)})
+
+    ups = [m for m in metrics if (m["diff"] or 0) > 0]
+    downs = [m for m in metrics if (m["diff"] or 0) < 0]
+
+    def fmt(m: dict[str, Any]) -> str:
+        v = abs(m["diff"] or 0)
+        return f"{m['label']} {'+' if (m['diff'] or 0) > 0 else '-'}{v:,.1f}{m['unit']}".replace(".0%", "%")
+
+    if ups and not downs:
+        advice = f"{fmt(ups[0])} · 전반적으로 좋아졌습니다. 이 루틴을 오늘도 그대로 이어가세요."
+        tone = "good"
+    elif downs and not ups:
+        advice = (f"{fmt(downs[0])} 흐름이 내려갔습니다. 오늘은 5분 워밍업으로 감각을 올린 뒤 "
+                  f"약점 영역 2종만 짧게 돌리고, 초반 선진입을 줄여 보세요.")
+        tone = "warn"
+    elif ups and downs:
+        good = max(ups, key=lambda m: abs(m["diff"] or 0))
+        bad = max(downs, key=lambda m: abs(m["diff"] or 0))
+        advice = (f"{good['label']}은 올랐고 {bad['label']}은 내려갔습니다. "
+                  f"오늘은 {bad['label']}을(를) 되돌리는 데 집중하세요.")
+        tone = "info"
+    else:
+        advice = "지표가 거의 그대로입니다. 점수보다 한 가지 목표(첫 교전 각·생존)만 정해 보세요."
+        tone = "info"
+    if cur_date and cur_date != today.isoformat():
+        advice += f" (오늘 병영수첩을 한 번 최신화하면 오늘 기준으로 다시 비교합니다)"
+    return {
+        "available": True, "tone": tone, "advice": advice, "metrics": metrics,
+        "from_date": prev.get("date"), "to_date": cur_date,
+        "nickname": current.get("nickname"),
+        "days_between": None,
+    }
+
+
+# 맵별 연습 포인트 — 이름에 담긴 구조(폭파/심플/랩)로 갈래를 나눈다.
+def map_family(name: str) -> str:
+    text = str(name or "")
+    if "폭파" in text:
+        return "폭파"
+    if "심플" in text:
+        return "심플"
+    return "일반"
+
+
+def youtube_search(query: str) -> str:
+    from urllib.parse import quote_plus
+
+    return "https://www.youtube.com/results?search_query=" + quote_plus(query)
+
+
+def map_guide(row: dict[str, Any]) -> dict[str, Any]:
+    """약점 TOP3 클릭 → 맵 연습 포인트 + 유튜브 공략 검색 링크.
+
+    검증되지 않은 영상 ID 를 지어내지 않고, 실제로 열리는 유튜브 **검색** 링크와
+    맵 구조에 맞춘 연습 포인트를 준다.
+    """
+    name = str((row or {}).get("map") or "")
+    clean = name.split("-")[0].split("(")[0].strip() or name
+    fam = map_family(name)
+    kd = _num_or_none((row or {}).get("kd"))
+    win = _num_or_none((row or {}).get("win"))
+    dmg = _num_or_none((row or {}).get("dmg"))
+    games = int(_num_or_none((row or {}).get("games")) or 0)
+    tips: list[str] = []
+    if fam == "폭파":
+        tips.append("폭파전은 설치·해체 각이 승패를 가릅니다. 연습할 때는 설치 지점 각을 미리 잡고 "
+                    "해체 각을 끊는 위치를 2곳만 정해 두세요.")
+    elif fam == "심플":
+        tips.append("심플 맵은 길이 좁고 교전 거리가 짧습니다. 첫 각을 오래 잡기보다 한 발 쏘고 "
+                    "바로 엄폐로 돌아오는 리듬이 안전합니다.")
+    else:
+        tips.append("맵 구조가 넓습니다. 초동에 각을 크게 잡기보다 소리·정보를 먼저 모으고 "
+                    "아군과 같이 들어가는 편이 좋습니다.")
+    if kd is not None and kd < 48:
+        tips.append(f"K/D {kd:.1f}% — 이 맵에서는 먼저 죽는 비율이 높습니다. 1:1을 피하고 "
+                    f"각을 받는 포지션(엄폐·복도 끝)에서만 교전하세요.")
+    if win is not None and win < 45:
+        tips.append(f"승률 {win:.1f}% — 라운드 초반 무리한 진입을 줄이고, 남은 인원·시간을 보고 "
+                    f"회전 타이밍을 한 박자 늦추세요.")
+    if dmg is not None and dmg < 900:
+        tips.append(f"평균 딜량 {dmg:,.0f} — 타격은 들어가는데 마무리가 약합니다. 같은 자리에서 "
+                    f"두 번 쏘지 말고 각을 바꿔 한 번에 끝내는 연습이 필요합니다.")
+    if games:
+        tips.append(f"최근 표본 {games}판 · 약점 지수 {(row or {}).get('weak', '—')} — "
+                    f"이 맵만 3~5판 연속으로 돌면 지표가 눈에 보이게 바뀝니다.")
+    query = f"서든어택 {clean} 공략"
+    return {
+        "map": name, "clean": clean, "family": fam, "games": games,
+        "stats": {"win": win, "kd": kd, "dmg": dmg, "weak": (row or {}).get("weak")},
+        "tips": tips[:4],
+        "youtube": {"label": f"유튜브에서 '{query}' 검색", "search": youtube_search(query),
+                    "url": youtube_search(query)},
+    }
+
+
+def map_guides(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [map_guide(r) for r in (rows or [])]

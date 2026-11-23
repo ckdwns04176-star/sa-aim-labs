@@ -212,8 +212,12 @@ def window_fix_plan(rect: tuple[int, int, int, int], logical: tuple[int, int] = 
 
     서든어택을 4:3 저해상도로 실행했다가 바탕화면으로 돌아오면 DPI·해상도가
     바뀌면서 창이 커지는 현상이 있었다.  논리 1200×750 을 실제 DPI 로 환산한
-    크기에서 벗어나면 그 크기로 되돌리고, 모니터 작업 영역 밖으로 나가지 않게
-    좌표를 보정한 값을 돌려준다.
+    크기에서 벗어나면 그 크기로 되돌린다.
+
+    v1.3.0 — **위치는 절대 건드리지 않는다.**  예전에는 작업 영역 안으로 좌표를
+    보정했는데, 드래그 중에 감시자가 마지막으로 읽은 좌표를 다시 써 넣어 창이
+    커서를 따라오지 못하고 제자리에 붙어 있었다(사용자 제보).  드래그·멀티모니터
+    이동은 전적으로 사용자 몫이고, 감시자는 크기만 1200×750 으로 유지한다.
     """
     x, y, w, h = (int(v) for v in rect)
     scale = (float(dpi) / 96.0) if dpi else 1.0
@@ -225,19 +229,13 @@ def window_fix_plan(rect: tuple[int, int, int, int], logical: tuple[int, int] = 
             target_w = min(target_w, area_w)
             target_h = min(target_h, area_h)
     resize = abs(w - target_w) > tolerance or abs(h - target_h) > tolerance
-    nx, ny = x, y
-    if work:
-        left, top, area_w, area_h = work
-        if area_w > 200 and area_h > 200:
-            nx = max(left, min(x, left + area_w - target_w))
-            ny = max(top, min(y, top + area_h - target_h))
     return {
         "resize": resize,
         "width": target_w,
         "height": target_h,
-        "x": nx,
-        "y": ny,
-        "moved": (nx, ny) != (x, y),
+        "x": x,
+        "y": y,
+        "moved": False,
     }
 
 
@@ -461,9 +459,17 @@ class WindowGuard:
         self.height = int(height)
         self.interval = float(interval)
         self.fixes = 0
+        self.moves = 0
         self.last: dict[str, Any] | None = None
+        self._last_rect: tuple[int, int, int, int] | None = None
+        self._pause_until = 0.0
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
+
+    # -- public
+    def pause(self, seconds: float = 1.2) -> None:
+        """드래그가 시작될 때 감시를 잠깐 멈춘다 (제목표시줄 mousedown → drag_window)."""
+        self._pause_until = max(self._pause_until, time.monotonic() + max(0.0, float(seconds)))
 
     # -- public
     def start(self) -> bool:
@@ -502,14 +508,24 @@ class WindowGuard:
                 dpi = int(user32.GetDpiForWindow(hwnd)) or 96
             except Exception:  # noqa: BLE001 - older Windows
                 dpi = 96
+            # 드래그 중(좌표가 방금 바뀐 순간)에는 크기 보정도 하지 않는다 —
+            # SetWindowPos 가 이동 루프와 부딪히면 창이 커서를 놓친다.
+            moving = self._last_rect is not None and (box[0], box[1]) != (self._last_rect[0], self._last_rect[1])
+            self._last_rect = box
+            if moving or time.monotonic() < self._pause_until:
+                self.moves += 1
+                self.last = {"skipped": "moving"}
+                return self.last
             plan = window_fix_plan(box, (self.width, self.height), dpi, work_area_of_point(box[0] + 40, box[1] + 20))
             self.last = plan
-            if plan["resize"] or plan["moved"]:
+            if plan["resize"]:
+                # SWP_NOMOVE — 크기만 되돌리고 위치는 사용자가 둔 그대로 둔다.
                 SWP_NOZORDER = 0x0004
                 SWP_NOACTIVATE = 0x0010
-                user32.SetWindowPos(hwnd, 0, int(plan["x"]), int(plan["y"]),
+                SWP_NOMOVE = 0x0002
+                user32.SetWindowPos(hwnd, 0, 0, 0,
                                     int(plan["width"]), int(plan["height"]),
-                                    SWP_NOZORDER | SWP_NOACTIVATE)
+                                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOMOVE)
                 self.fixes += 1
             return plan
         except Exception:  # noqa: BLE001 - 감시는 최선 노력

@@ -50,6 +50,15 @@ def tray_ref() -> Any:
     return _TRAY_REF
 
 
+_GUARD_REF: Any = None
+
+
+def attach_guard(guard: Any) -> None:
+    """창 크기 감시자 — 드래그가 시작될 때 잠깐 멈추는 데 쓴다 (v1.3.0)."""
+    global _GUARD_REF
+    _GUARD_REF = guard
+
+
 class Api:
     def __init__(self, store: Store | None = None):
         self.store = Store() if store is None else store
@@ -77,6 +86,12 @@ class Api:
 
     # JS 에서 호출될 이유가 없다 — pywebview 노출 목록에서도 뺀다.
     attach._serializable = False  # type: ignore[attr-defined]
+
+    def attach_guard(self, guard) -> None:
+        """창 크기 감시자를 연결한다 — drag_window 가 드래그 중 감시를 잠깐 멈춘다."""
+        attach_guard(guard)
+
+    attach_guard._serializable = False  # type: ignore[attr-defined]
 
     @property
     def _win(self):
@@ -144,6 +159,10 @@ class Api:
             handle = self._hwnd()
             if not handle:
                 return self._ok(supported=False)
+            # 드래그 시작 → 감시자가 크기를 건드리지 않게 잠깐 멈춘다 (창이 커서를 놓치지 않게)
+            guard = _GUARD_REF
+            if guard is not None and hasattr(guard, "pause"):
+                guard.pause(1.2)
             ctypes.windll.user32.ReleaseCapture()  # type: ignore[attr-defined]
             ctypes.windll.user32.SendMessageW(  # type: ignore[attr-defined]
                 ctypes.c_void_p(handle), 0x00A1, 2, 0   # WM_NCLBUTTONDOWN, HTCAPTION
@@ -234,7 +253,8 @@ class Api:
         today = _dt.date.today()
         settings = store.public_settings()
         style = scoring.user_style(records, today=today)
-        streak = scoring.streak(records, today)
+        attendance = store.attendance()
+        streak = scoring.streak(records, today, attendance)
 
         more_rows = store.more()
         summaries: dict[str, Any] = {}
@@ -279,7 +299,7 @@ class Api:
             log.exception("state · barracks/leaderboard failed")
             barracks, members = None, []
         if isinstance(barracks, dict):
-            # 🧭 최근 100판 플레이 코칭 — 저장된 지표만으로 매번 새로 계산(추가 API 0건)
+            # 🧭 최근 100판 플레이 코칭 — 이미 받아 둔 지표만으로 매번 새로 계산
             try:
                 barracks["play_coaching"] = scoring.play_coaching(barracks)
             except Exception:  # noqa: BLE001
@@ -306,6 +326,7 @@ class Api:
                 utils_state["accel"] = None
             utils_state["last_backup_at"] = store.utils().get("last_backup_at")
             utils_state["last_restore_at"] = store.utils().get("last_restore_at")
+        utils_state["last_changes"] = (store.utils().get("nvidia") or {}).get("last_changes")
 
         try:
             cloud_state = self._cloud_state()
@@ -321,12 +342,12 @@ class Api:
 
         # ── v1.2.0 · 잔디 히트맵 · 주간 목표 · 훈련 전후 비교 (모두 로컬 계산) ──
         try:
-            heatmap_state = scoring.heatmap(records, 14, today)
+            heatmap_state = scoring.heatmap(records, 14, today, attendance)
         except Exception:  # noqa: BLE001
             log.exception("state · heatmap failed")
             heatmap_state = None
         try:
-            week_state = scoring.weekly_progress(records, self.store.settings.get("week_goals"), today)
+            week_state = scoring.weekly_progress(records, self.store.settings.get("week_goals"), today, attendance)
         except Exception:  # noqa: BLE001
             log.exception("state · weekly goals failed")
             week_state = None
@@ -335,6 +356,23 @@ class Api:
         except Exception:  # noqa: BLE001
             log.exception("state · training impact failed")
             impact_state = None
+
+        # ── v1.3.0 · 18단계 티어 분포 · 오늘 첫 실행 병영수첩 변화 · 맵 가이드 ──
+        try:
+            distribution = self._tier_distribution(profile)
+        except Exception:  # noqa: BLE001
+            log.exception("state · tier distribution failed")
+            distribution = scoring.tier_distribution()
+        try:
+            digest = self._digest()
+        except Exception:  # noqa: BLE001
+            log.exception("state · digest failed")
+            digest = {"available": False, "reason": "병영수첩 변화를 계산하지 못했습니다"}
+        try:
+            guides = scoring.map_guides((barracks or {}).get("maps") or [])
+        except Exception:  # noqa: BLE001
+            log.exception("state · map guides failed")
+            guides = []
 
         return {
             "meta": {
@@ -388,8 +426,68 @@ class Api:
             "impact": impact_state,
             "update": updates.cached(),
             "tray": self._tray_state(),
+            "digest": digest,
+            "tier_distribution": distribution,
+            "tier_details": [scoring.tier_detail(i, profile["score"], distribution, profile["values"])
+                             for i in range(len(scoring.TIERS))],
+            "map_guides": guides,
             "v120": True,
+            "v130": True,
         }
+
+    # ------------------------------------------------------------ v1.3.0 helpers
+    def _digest(self) -> dict[str, Any]:
+        """오늘 첫 실행용 직전 연습일 대비 병영수첩 변화 + 한마디 총고."""
+        digest = scoring.barracks_digest(self.store.barracks_history())
+        ack = (self.store.ui() or {}).get("digest_ack")
+        digest["ack"] = ack == today_str()
+        digest["show"] = bool(digest.get("available")) and digest["ack"] is False
+        digest["today"] = today_str()
+        return digest
+
+    def ack_digest(self) -> dict[str, Any]:
+        """오늘의 병영수첩 변화 팝업을 닫았다고 기록 (하루 한 번만 자동 표시)."""
+        ui = self.store.ui()
+        ui["digest_ack"] = today_str()
+        self.store.save()
+        return self._ok(state=self._build_state())
+
+    def _tier_distribution(self, profile: dict[str, Any]) -> dict[str, Any]:
+        """18단계 티어 사용자 분포 — Supabase 집계 → 부족하면 기준 분포."""
+        counts: list[int] | None = None
+        total = 0
+        source = "baseline"
+        try:
+            url, key = self._cloud_credentials()
+            rows = supabase_sync.SupabaseClient(url, key).aim_scores(2000)
+            if rows:
+                buckets = [0] * len(scoring.TIERS)
+                for row in rows:
+                    try:
+                        buckets[scoring.tier_index(int(float(row.get("score") or 0)))] += 1
+                    except (TypeError, ValueError):
+                        continue
+                total = sum(buckets)
+                if total >= 20:
+                    counts, source = buckets, "live"
+        except Exception:  # noqa: BLE001 - 집계 실패는 기준 분포로
+            log.debug("tier distribution · live aggregation unavailable", exc_info=True)
+        if counts is None:
+            # 실제 집계가 없으면 기준 분포 — 내 점수는 티어표에서 따로 강조한다.
+            total = 0
+        return scoring.tier_distribution(counts, source=source, total_users=total or None)
+
+    def reset_scores(self, confirm: str = "") -> dict[str, Any]:
+        """에임 연습 점수·로그 전체 초기화 — UI 가 두 번 확인한 뒤에만 부른다."""
+        if str(confirm).strip() != "초기화":
+            return self._err("확인 문구가 일치하지 않습니다 · '초기화'를 입력해 주세요", cancelled=True)
+        try:
+            removed = self.store.reset_scores()
+            self._drs_state = None
+            return self._ok(removed=removed, state=self._build_state(),
+                            message=f"점수 기록 {removed.get('records', 0)}건을 초기화했습니다 · 설정·순위표는 그대로입니다")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
 
     def _goals(self, barracks: dict[str, Any] | None) -> list[dict[str, Any]]:
         g = self.store.settings.get("goals") or {}
@@ -572,6 +670,7 @@ class Api:
                 pbs = []
             self._drop_previous(date, game, weapon, [s["name"] for s in scen_rows])
             saved = self.store.add_record(record)
+            self.store.note_attendance(self.store.records())
             return {"ok": True, "record": saved, "pbs": pbs, "state": self._build_state()}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
@@ -751,6 +850,7 @@ class Api:
             barracks = nexon.build_barracks(client, nick, progress=self._progress)
             self.store.update_settings({"nickname": barracks["nickname"]})
             self.store.barracks_cache()[barracks["nickname"]] = barracks
+            self.store.add_barracks_snapshot(barracks)
             self.store.save()
             member = self._member_from_barracks(barracks)
             self._upsert_member(member)
@@ -1020,6 +1120,10 @@ class Api:
             point = {"at": now_iso(), "label": label, "backup": result.get("backup")}
             points = [p for p in (nv.get("points") or []) if p.get("backup") != point["backup"]]
             nv["points"] = [point, *points][:3]
+            changes = result.get("changes") or []
+            if changes:
+                nv["last_changes"] = {"at": now_iso(), "mode": mode, "label": label,
+                                       "rows": changes[:24], "count": len(changes)}
         if mode is None:
             nv["mode"] = None
         nv["alias"] = bool(mode == "stairfix")
@@ -1133,7 +1237,17 @@ class Api:
                 "exported_at": now_iso(),
                 "app_version": paths.APP_VERSION,
             }
-            supabase_sync.SupabaseClient(url, key).upsert_profile(token, user_id, payload)
+            client = supabase_sync.SupabaseClient(url, key)
+            client.upsert_profile(token, user_id, payload)
+            try:
+                # 18단계 티어 분포 집계 — 점수·티어 한 줄만 올린다 (기록 payload 는 위 테이블에만)
+                profile = scoring.summary(self.store.records(), "kovak", "sniper")
+                client.upsert_aim_score(token, user_id,
+                                        (self.store.settings.get("nickname") or "").strip(),
+                                        int(profile.get("score") or 0),
+                                        str((profile.get("tier") or {}).get("n") or ""))
+            except Exception:  # noqa: BLE001 - 집계 테이블이 없어도 동기화는 성공
+                log.debug("cloud_push · aim_scores upsert skipped", exc_info=True)
             cloud["last_sync"] = now_iso()
             self.store.save()
             return {"ok": True, "message": "☁️ 클라우드에 기록을 올렸습니다", "state": self._build_state()}
@@ -1348,7 +1462,7 @@ class Api:
 
     # ------------------------------------------------------------ 1:1 비교
     def compare_friend(self, nickname: str) -> dict[str, Any]:
-        """저장된 순위표 값만으로 나 vs 친구 (추가 API 호출 0건)."""
+        """저장된 순위표 값만으로 나 vs 친구."""
         try:
             members = self._ensure_me(None)
             key = str(nickname or "").strip().lower()

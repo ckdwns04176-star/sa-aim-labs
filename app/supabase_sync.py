@@ -21,6 +21,7 @@ from typing import Any
 from . import paths
 
 TABLE = "user_profiles"
+AIM_TABLE = "aim_scores"   # v1.3.0 — 18단계 티어 분포 집계용 (닉네임·점수·티어만)
 
 # 사용자가 발급받은 프로젝트 (publishable 키는 공개용 · RLS가 데이터를 보호합니다)
 DEFAULT_URL = "https://ujnffbskudzkatskbmwc.supabase.co"
@@ -173,6 +174,29 @@ class SupabaseClient:
         if isinstance(body, list) and body:
             return body[0]
         return None
+
+    # ------------------------------------------------------------ tier distribution (v1.3.0)
+    def upsert_aim_score(self, access_token: str, user_id: str, nickname: str,
+                         score: int, tier_name: str) -> dict[str, Any]:
+        """내 종합 점수 한 줄을 공개 집계 테이블에 올린다 (점수·티어만, 기록은 안 올림)."""
+        row = {"user_id": user_id, "nickname": (nickname or "")[:12],
+               "score": int(score or 0), "tier": tier_name or "",
+               "updated_at": _utc_now()}
+        body = self._request(
+            "POST", f"/rest/v1/{AIM_TABLE}",
+            body=[row], token=access_token,
+            query={"on_conflict": "user_id"},
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
+        return body or {}
+
+    def aim_scores(self, limit: int = 2000) -> list[dict[str, Any]]:
+        """공개 집계 테이블에서 점수만 읽는다 (RLS: select 공개, 쓰기는 본인 행만)."""
+        body = self._request(
+            "GET", f"/rest/v1/{AIM_TABLE}",
+            query={"select": "score,tier", "limit": str(max(1, min(5000, int(limit))))},
+        )
+        return body if isinstance(body, list) else []
 
 
 def _utc_now() -> str:

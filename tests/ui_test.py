@@ -187,9 +187,9 @@ def main() -> int:
         calls = page.evaluate("window.__CALLS.map(c=>c[0])")
         check("타이틀바 드래그 → drag_window 호출", "drag_window" in calls, str(calls[:6]))
 
-        # 2) 설정 화면: 닉네임/API 키 placeholder 제거
-        page.click('[data-screen="settings"]')
-        page.wait_for_timeout(250)
+        # 2) 설정 팝업(v1.3.0): 좌측 하단 프로필/톱니바퀴 클릭 → 닉네임/API 키 placeholder 제거
+        page.click("#profile-card")
+        page.wait_for_timeout(300)
         ph = page.evaluate("""() => {
             const nick = document.querySelector('#set-nick');
             const key = document.querySelector('#set-key');
@@ -211,6 +211,8 @@ def main() -> int:
         check("서버 URL/키는 접힌 고급 설정 안에", cloud_card.get("advOpen") is False and cloud_card.get("hasUrlInput"),
               str({k: cloud_card.get(k) for k in ("advOpen", "hasUrlInput")}))
         page.screenshot(path=str(SHOTS / "settings.png"))
+        page.evaluate("() => document.querySelector('#settings-mask').classList.remove('show')")
+        page.wait_for_timeout(150)
 
         # 3) 사이드바: 뱃지/이모지 없이 동일 스타일
         nav = page.evaluate("""() => {
@@ -308,17 +310,22 @@ def main() -> int:
         restored = page.evaluate("document.querySelector('#br-peek-bar').hidden")
         check("내 병영수첩으로 돌아가기", restored is True, f"hidden={restored}")
 
-        # 9) 계단현상 끄기 적용 — '내장되어 있지 않다' 오류 없음
+        # 9) v1.3.0 — 계단현상 끄기는 라플/스나 최적화에 병합 (버튼 2개)
         page.click('[data-screen="utils"]')
         page.wait_for_timeout(300)
         check("최적화 유틸 화면에 폭파미션 없음", "폭파미션" not in page.inner_text("#s-utils"), "")
-        page.click('[data-apply="alias"]')
-        page.wait_for_timeout(600)
+        rows = page.evaluate("() => [...document.querySelectorAll('#s-utils [data-apply]')].map(b => b.dataset.apply)")
+        check("엔비디아 최적화 버튼 2개(라플·스나)로 통일", rows == ["rifle", "sniper"], str(rows))
+        check("계단현상 단독 버튼 제거", "alias" not in rows, str(rows))
+        page.click('[data-apply="sniper"]')
+        page.wait_for_timeout(700)
         toast = page.eval_on_selector("#app-toast", "el => el.textContent")
         apply_calls = page.evaluate("window.__CALLS.filter(c=>c[0]==='apply_nvidia_profile').map(c=>c[1])")
-        check("계단현상 끄기 적용 호출", "stairfix" in apply_calls or "alias" in apply_calls, str(apply_calls))
+        check("스나 최적화 적용 호출", "sniper" in apply_calls, str(apply_calls))
         check("'내장되어 있지 않다' 오류 없음", "내장" not in toast, toast)
         page.screenshot(path=str(SHOTS / "utils-applied.png"))
+        page.evaluate("() => document.querySelector('#changes-mask').classList.remove('show')")
+        page.wait_for_timeout(150)
 
         # 10) 레이아웃 스크린샷
         page.click('[data-screen="dashboard"]')

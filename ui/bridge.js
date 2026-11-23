@@ -180,6 +180,11 @@
       score: r.score === null || r.score === undefined ? null : Math.round(r.score * 10) / 10,
       today_score: r.today_score === null || r.today_score === undefined ? null : Math.round(r.today_score * 10) / 10,
       best: r.best === null || r.best === undefined ? null : Math.round(r.best * 10) / 10,
+      avg: r.avg === null || r.avg === undefined ? null : Math.round(r.avg * 10) / 10,
+      attempts: typeof r.attempts === 'number' ? r.attempts : null,
+      next_target: r.next_target === null || r.next_target === undefined ? null : Math.round(r.next_target * 10) / 10,
+      next_tier_cut: r.next_tier_cut === null || r.next_tier_cut === undefined ? null : r.next_tier_cut,
+      history: Array.isArray(r.history) ? r.history.map((h) => ({ date: h.date, score: h.score })) : [],
       done: !!r.done,
       extra: !!r.extra,
       delta: typeof r.delta === 'number' ? r.delta : null
@@ -192,6 +197,34 @@
     RECS[key] = mapRecs(summary && summary.recs);
     RECS_MORE[key] = mapRecs(summary && summary.more);
     if (AL.state && AL.state.philosophy) PHILOSOPHY = AL.state.philosophy;
+  }
+
+  /* v1.3.0 — 기록 한 건의 종합 점수 (0~3,600) · 저장된 원점수를 게임 기준값으로 환산 */
+  const GAME_REF = { kovak: 200, aimlab: 100000 };
+  const AREA_KEYS = ['precision', 'wide', 'micro', 'track', 'switch'];
+  function recordScore(rec) {
+    const scores = (rec && rec.scores) || {};
+    const ref = GAME_REF[rec && rec.game] || 200;
+    let sum = 0, n = 0;
+    AREA_KEYS.forEach((k) => {
+      const v = Number(scores[k]);
+      if (!isFinite(v) || v <= 0) return;
+      sum += Math.min(100, (v / ref) * 100);
+      n += 1;
+    });
+    return n ? Math.round((sum / n) * 36) : 0;
+  }
+  AL.recordScore = recordScore;
+
+  let digestShown = false;
+  function maybeShowDigest() {
+    const d = AL.state && AL.state.digest;
+    if (!d || !d.show || digestShown) return;
+    if (AL.peek) return;
+    digestShown = true;
+    if (typeof renderDigest === 'function') renderDigest(d);
+    const mask = $('#digest-mask');
+    if (mask) mask.classList.add('show');
   }
 
   function applyState(st) {
@@ -221,7 +254,7 @@
       const cloud = st.cloud || {};
       sync.innerHTML = cloud.signed_in
         ? `<span class="pulse"></span>클라우드 로그인 · ${fmtLabel(cloud.last_sync) === '—' ? '동기화 전' : '마지막 ' + fmtLabel(cloud.last_sync)}`
-        : `<span class="pulse"></span>로컬 저장 · ${fmtLabel(meta.now)}`;
+        : `<span class="pulse"></span>기록 자동 저장 · ${fmtLabel(meta.now)}`;
     }
 
     const barracks = st.barracks || null;
@@ -401,6 +434,19 @@
     const lbMe = $('#lb-me-name');
     if (lbMe) lbMe.textContent = nick || '—';
 
+    /* ---------- v1.3.0 · 티어 분포 · 병영수첩 변화 · 맵 가이드 · 기록 표 ---------- */
+    if (st.tier_distribution) TIER_DIST = st.tier_distribution;
+    if (Array.isArray(st.tier_details)) TIER_DETAILS = st.tier_details;
+    if (Array.isArray(st.map_guides)) {
+      MAP_GUIDES = {};
+      st.map_guides.forEach((g) => { if (g && g.map) MAP_GUIDES[g.map] = g; });
+    }
+    if (st.digest) DIGEST = st.digest;
+    RECORDS_ROWS = (st.records || []).map((r) => ({
+      ...r,
+      score: recordScore(r)
+    }));
+
     /* ---------- 다시 그리기 ---------- */
     if (typeof refreshAll === 'function') refreshAll();
     /* recalc() 는 5영역 평균×36 으로 점수를 다시 계산하므로, 서버가 계산한 점수로 덮어쓴다 */
@@ -428,6 +474,7 @@
     renderInsights(st);
     renderUpdate(st.update);
     renderTray(st.tray);
+    maybeShowDigest();
   }
   AL.applyState = applyState;
 
@@ -445,6 +492,17 @@
     }
     const chipToday = $('#chip-today');
     if (chipToday) chipToday.textContent = (summary.recs || []).filter((r) => r.done).length;
+    const recChip = $('#rec-delta-chip');
+    if (recChip) {
+      const d = summary.week_delta;
+      recChip.innerHTML = d === null || d === undefined ? '최근 7일 <b>—</b>'
+        : `최근 7일 <b>${d > 0 ? '+' : ''}${n0(d)}</b>`;
+    }
+    const recRange = $('#rec-date-range');
+    if (recRange && (summary.daily || []).length) {
+      const daily = summary.daily;
+      recRange.textContent = `${mdLabel(daily[0].date)} ~ ${mdLabel(daily[daily.length - 1].date)}`;
+    }
     const delta = summary.week_delta;
     const dEl = $('#kpi-delta');
     if (dEl) {
@@ -459,6 +517,7 @@
   }
 
   function renderUtilsState(utils) {
+    if (utils && utils.last_changes) LAST_CHANGES = utils.last_changes;
     const points = (utils.points || []);
     const box = $('#nv-points');
     if (box) {
@@ -558,7 +617,7 @@
       const solo = (tier.solo || {}).rp || 0;
       const party = (tier.party || {}).rp || 0;
       sub.textContent = `솔로 ${Number(solo).toLocaleString()} RP · 파티 ${Number(party).toLocaleString()} RP`
-        + ' · 저장된 최근 100판만 사용 (추가 API 0건)';
+        + ' · 최근 100판 기준';
     }
   }
   AL.renderCoach = renderCoach;
@@ -593,7 +652,7 @@
     const tier = barracks.tier || { solo: { rp: 0, name: '언랭크' }, party: { rp: 0, name: '언랭크' } };
     const stats = barracks.stats || {};
     const band = bandOf(Number(tier.solo.rp || 0));
-    const weaponLabel = (barracks.recent || {}).sniper >= (barracks.recent || {}).assault ? '스나 유저' : '라플 유저';
+    const weaponLabel = (barracks.recent || {}).sniper >= (barracks.recent || {}).assault ? '주무기 스나' : '주무기 라플';
     const initial = (barracks.nickname || '?').charAt(0);
 
     if (banner) {
@@ -603,7 +662,7 @@
           <div class="bn-ava">${initial}<i></i></div>
           <div>
             <div class="bn-name"><h2>${barracks.nickname}</h2>
-              <span class="tag ${weaponLabel === '스나 유저' ? 'amber' : 'cyan'}" id="bn-user">${weaponLabel}</span>
+              <span class="tag ${weaponLabel === '주무기 스나' ? 'amber' : 'cyan'}" id="bn-user">${weaponLabel}</span>
               <span class="tag dim">${tier.solo.name}</span></div>
             <div class="bn-sub"><span>${basic.clan && basic.clan !== '-' ? basic.clan + ' 클랜' : '클랜 없음'}</span>
               <span class="sep">·</span><span>OUID ${String(barracks.ouid || '').slice(0, 10)}…</span>
@@ -619,8 +678,9 @@
         </div>`;
     }
     if (ranks) ranks.innerHTML = rankCard('solo', tier.solo) + rankCard('party', tier.party);
-    if (AL.view === 'matches') renderMatches(barracks);
-    else renderMaps(barracks);
+    /* 맵·약점 분석은 별도 화면 — 데이터만 갱신해 둔다 */
+    MAPS = barracks.maps || [];
+    if (typeof drawMaps === 'function') drawMaps();
   }
 
   function renderMatches(barracks) {
@@ -646,25 +706,9 @@
   }
 
   function renderMaps(barracks) {
-    const table = $('#map-table');
-    if (!table) return;
-    const rows = (barracks && barracks.maps) || [];
-    if (!rows.length) {
-      table.innerHTML = '<tbody><tr><td class="l" style="color:#6E7F95">맵 표본이 부족합니다</td></tr></tbody>';
-      return;
-    }
-    table.innerHTML = `
-      <thead><tr><th class="l" style="width:18px">#</th><th class="l">맵</th><th>판수</th><th>승률</th><th>K/D</th><th>평균 딜량</th><th class="l">약점 지수</th></tr></thead>
-      <tbody>${rows.map((m) => `
-        <tr class="${m.rk === 1 ? 'cur' : ''}">
-          <td class="rk">${m.rk}</td>
-          <td class="l map">${m.map}</td>
-          <td>${m.games}판</td>
-          <td class="${m.win < 45 ? 'neg' : m.win >= 55 ? 'pos' : ''}">${n0(m.win, 1)}%</td>
-          <td class="${m.kd < 48 ? 'neg' : m.kd >= 55 ? 'pos' : ''}">${n0(m.kd, 1)}%</td>
-          <td>${n0(m.dmg)}</td>
-          <td class="l"><span class="wbar"><i style="width:${Math.min(100, m.weak)}%"></i></span>${n0(m.weak, 1)}</td>
-        </tr>`).join('')}</tbody>`;
+    /* 정렬·약점 클릭은 index.html 의 drawMaps 가 담당한다 (v1.3.0) */
+    MAPS = (barracks && barracks.maps) || MAPS || [];
+    if (typeof drawMaps === 'function') drawMaps();
   }
 
   /* ==================================================================
@@ -689,22 +733,23 @@
     const cloud = (st && st.cloud) || {};
     const goals = set.goals || {};
     const meta = (st && st.meta) || {};
+    const count = (st && st.record_count) || 0;
 
-    /* ---------- 카드 1 · NEXON API ---------- */
+    /* ---------- 카드 1 · NEXON API · 병영수첩 ---------- */
     const api = $('#set-api');
     if (api) {
       api.innerHTML = `
         <div class="card-hd" style="padding:0">
-          <div><div class="card-title"><span class="bar"></span>NEXON Open API · 병영수첩 목표</div>
-            <div class="card-sub">서든어택 병영수첩 · 친구 순위표 · 목표 4종</div></div>
+          <div><div class="card-title"><span class="bar"></span>넥슨 API · 서든 닉네임</div>
+            <div class="card-sub">병영수첩 · 친구 순위표 · 목표 4종</div></div>
           <span class="ustate ${nexon.connected ? 'on' : 'warn'}">${nexon.connected ? '키 등록됨' : '키 필요'}</span>
         </div>
         ${inputRow('set-nick', '서든어택 닉네임', set.nickname || '', { maxlength: 12 })}
         ${inputRow('set-key', 'NEXON Open API 키', '', { type: 'password', hint: '발급: open.api.nexon.com · test_ 키는 본인 계정 전용입니다' })}
-        <div class="set-note" style="margin-top:2px">병영수첩 목표 <b>4종</b> — 대시보드·병영수첩 게이지에 바로 반영됩니다</div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px">
-          ${inputRow('set-goal-win', '승률 (%)', goals.win ?? 55, { type: 'number' })}
-          ${inputRow('set-goal-kd', 'K/D (%)', goals.kd ?? 60, { type: 'number' })}
+        <div class="set-note">목표 <b>4종</b>은 대시보드·병영수첩 게이지에 바로 반영됩니다</div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
+          ${inputRow('set-goal-win', '승률 %', goals.win ?? 55, { type: 'number' })}
+          ${inputRow('set-goal-kd', 'K/D %', goals.kd ?? 60, { type: 'number' })}
           ${inputRow('set-goal-dmg', '딜량', goals.dmg ?? 1400, { type: 'number' })}
           ${inputRow('set-goal-rp', '솔로 RP', goals.rp ?? 4000, { type: 'number' })}
         </div>
@@ -715,42 +760,42 @@
         </div>`;
     }
 
-    /* ---------- 카드 2 · 실행 · 자동화 ---------- */
+    /* ---------- 카드 2 · 실행 · 코박스 폴더 ---------- */
     const run = $('#set-run');
     if (run) {
       run.innerHTML = `
         <div class="card-hd" style="padding:0">
-          <div><div class="card-title"><span class="bar"></span>실행 · 자동화</div>
-            <div class="card-sub">트레이너 실행 경로 · 저장 동작</div></div>
+          <div><div class="card-title"><span class="bar"></span>실행 · 코박스 점수</div>
+            <div class="card-sub">트레이너 실행 경로 · stats 폴더</div></div>
           <span class="chip" style="height:20px;font-size:9.5px">${meta.steam ? 'Steam 감지' : 'Steam 미감지'}</span>
         </div>
         ${inputRow('set-kovak', "KovaaK's 경로", set.kovak_path || '')}
         ${inputRow('set-aimlab', 'Aim Lab 경로', set.aimlab_path || '')}
         ${inputRow('set-kovak-stats', '코박스 stats 폴더 (선택)', set.kovak_stats_path || '')}
-        <div class="set-note">비워 두면 <b>Steam 기본 경로</b>로 실행하고(steam://run/…), 코박스 통계는 <b>자동 탐색</b>합니다 · 📥 코박스 점수 인식에 사용</div>
-        ${toggleRow('auto_launch', '추천 시나리오 자동 실행', '▶ 버튼으로 Steam 원클릭 실행', !!set.auto_launch)}
-        ${toggleRow('autosave', '점수 자동 저장', '입력 후 저장 버튼 없이 기록', !!set.autosave)}
+        <div class="set-note">비워 두면 <b>Steam 기본 경로</b>로 실행하고, 코박스 통계는 <b>자동 탐색</b>합니다 · 📥 코박스 점수 인식에 사용</div>
+        ${switchRow('auto_launch', '추천 시나리오 자동 실행', '▶ 버튼으로 Steam 원클릭 실행', !!set.auto_launch)}
+        ${switchRow('autosave', '점수 자동 저장', '입력 후 저장 버튼 없이 기록', !!set.autosave)}
+        ${switchRow('kovak_autofill', '코박스 점수 자동 채움', '앱으로 돌아올 때 오늘 플레이 기록을 자동 저장', !!set.kovak_autofill)}
         <div class="set-actions">
           <button class="btn btn-primary" id="set-run-save">저장</button>
           <button class="btn btn-ghost" id="set-open-folder">기록 폴더 열기</button>
         </div>`;
     }
 
-    /* ---------- 카드 3 · Supabase ---------- */
+    /* ---------- 카드 3 · 클라우드 ---------- */
     const cl = $('#set-cloud');
     if (cl) {
       const useDefault = !(set.supabase || {}).url || (set.supabase || {}).url === (cloud.url || '');
       cl.innerHTML = `
         <div class="card-hd" style="padding:0">
           <div><div class="card-title"><span class="bar"></span>클라우드 저장소</div>
-            <div class="card-sub">이메일 로그인 한 번이면 다른 PC 에서도 기록이 이어집니다</div></div>
+            <div class="card-sub">다른 PC 에서도 기록이 이어집니다</div></div>
           <span class="ustate ${cloud.signed_in ? 'on' : cloud.configured ? 'warn' : ''}">${cloud.signed_in ? '로그인됨' : cloud.configured ? '로그인 전' : '설정 준비됨'}</span>
         </div>
-        <div class="set-note" style="margin:2px 0 6px;font-size:10px;line-height:1.6;color:#A9B9CE">
-          집 · PC방 어디서나 <b>내 에임 기록과 순위표</b>를 이어서 쓰는 클라우드 저장소입니다.
-          이메일로 로그인하면 훈련 기록·순위표가 계정에 저장되고, 다른 PC 에서 <b>내려받기</b>로 그대로 이어갈 수 있습니다.
+        <div class="set-note" style="margin:0">
+          집 · PC방 어디서나 <b>내 에임 기록과 순위표</b>를 이어서 쓰는 저장소입니다.
+          ${cloud.signed_in ? `☁️ ${cloud.email || ''} · 마지막 동기화 ${fmtLabel(cloud.last_sync)}` : '로그인 전 · 이 PC 에는 기록이 자동 저장되고 있습니다'}
         </div>
-        <div class="set-status ${cloud.signed_in ? 'on' : ''}">${cloud.signed_in ? `☁️ ${cloud.email || ''} · 마지막 동기화 ${fmtLabel(cloud.last_sync)}` : '로그인 전 · 이 PC 에는 기록이 로컬로 저장되고 있습니다'}</div>
         <div class="set-actions">
           ${cloud.signed_in
             ? '<button class="btn btn-ghost" id="set-cloud-out">로그아웃</button>'
@@ -758,43 +803,63 @@
           <button class="btn btn-cyan" id="set-cloud-push">☁️ 올리기</button>
           <button class="btn btn-ghost" id="set-cloud-pull">내려받기</button>
         </div>
-        <details id="set-cloud-adv" style="margin-top:6px">
-          <summary style="cursor:pointer;font-size:9.5px;font-weight:700;color:#7E8FA6;list-style:none;outline:none">
+        <details id="set-cloud-adv" style="margin-top:2px">
+          <summary style="cursor:pointer;font-size:10px;font-weight:700;color:#7E8FA6;list-style:none;outline:none">
             ⚙ 고급 서버 설정 ${useDefault ? '· 기본 서버 사용 중' : '· 직접 입력됨'}
           </summary>
           <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
-            <div class="set-note" style="font-size:9px;color:#64748B;line-height:1.5">
-              앱에 기본 서버 주소와 공개 키가 이미 들어 있어 <b>그대로 두면 됩니다</b>.
-              본인 Supabase 프로젝트를 쓸 때만 아래를 바꾸세요.
-            </div>
             ${inputRow('set-sb-url', '프로젝트 URL', cloud.url || '')}
-            ${inputRow('set-sb-key', '공개 키 (publishable / anon)', '', { type: 'password', hint: 'anon 공개 키입니다 · 데이터는 RLS 로 본인 행만 보호됩니다' })}
+            ${inputRow('set-sb-key', '공개 키 (publishable / anon)', '', { type: 'password' })}
             <button class="btn btn-ghost" id="set-cloud-check" style="align-self:flex-start;height:24px;font-size:10px">서버 연결 확인</button>
           </div>
         </details>`;
     }
 
-    /* ---------- 카드 4 · 목표 · 정보 ---------- */
+    /* ---------- 카드 4 · 트레이 · 업데이트 ---------- */
     const more = $('#set-more');
     if (more) {
       more.innerHTML = `
         <div class="card-hd" style="padding:0">
           <div><div class="card-title"><span class="bar"></span>앱 · 트레이 · 업데이트</div>
-            <div class="card-sub">단축키 · 자동 채움 · 새 버전</div></div>
-          <span class="chip" style="height:20px;font-size:9.5px">v${meta.version || '1.0.0'}</span>
+            <div class="card-sub">단축키 · 새 버전</div></div>
+          <span class="chip" style="height:20px;font-size:9.5px">v${meta.version || '1.3.0'}</span>
         </div>
-        ${toggleRow('kovak_autofill', '코박스 점수 자동 채움', '앱으로 돌아올 때 오늘 플레이 기록을 자동 저장 (추가 API 0건)', !!set.kovak_autofill)}
-        ${toggleRow('hotkey_enabled', 'Ctrl+Shift+A 창 부르기', '어디서든 단축키로 창을 숨기기/보이기', set.hotkey_enabled !== false)}
-        ${toggleRow('tray_background', '닫으면 트레이로 숨기기', '앱을 끄지 않고 트레이에 남깁니다', !!set.tray_background)}
-        <div class="set-status" id="set-tray-state" style="font-size:9px">트레이 상태 확인 중…</div>
-        <div class="set-status" id="set-update-info" style="font-size:9px">현재 v${meta.version || '1.2.0'} · 업데이트를 확인해 보세요</div>
+        ${switchRow('hotkey_enabled', 'Ctrl+Shift+A 창 부르기', '어디서든 단축키로 창을 숨기기/보이기', set.hotkey_enabled !== false)}
+        <div class="set-note">창 닫기(<b>X</b>)는 항상 <b>트레이로 숨기기 / 프로그램 종료</b> 확인창을 띄웁니다.</div>
+        <div class="set-status" id="set-tray-state" style="font-size:9.5px">트레이 상태 확인 중…</div>
+        <div class="set-status" id="set-update-info" style="font-size:9.5px">현재 v${meta.version || '1.3.0'} · 업데이트를 확인해 보세요</div>
         <div class="set-actions">
           <button class="btn btn-primary" id="set-update-check">업데이트 확인</button>
           <button class="btn btn-ghost" id="set-tray-hide">트레이로 숨기기</button>
           <button class="btn btn-ghost" id="set-backup">백업 파일 저장</button>
         </div>
-        <div class="set-note" title="${meta.data_file || ''}">데이터 <b>${meta.data_file || '—'}</b> · ${meta.frozen ? '배포 빌드' : '소스 실행'}${meta.is_admin ? ' · 관리자' : ''}${meta.load_error ? ' · ' + meta.load_error : ''}</div>`;
+        <div class="set-note" title="${meta.data_file || ''}" style="font-size:9px;color:#5E6E85">데이터 <b>${meta.data_file || '—'}</b>${meta.is_admin ? ' · 관리자' : ''}${meta.load_error ? ' · ' + meta.load_error : ''}</div>`;
     }
+
+    /* ---------- 카드 5 · 점수 전체 초기화 (위험 구역) ---------- */
+    const data = $('#set-data');
+    if (data) {
+      data.innerHTML = `
+        <div class="card-hd" style="padding:0">
+          <div><div class="card-title"><span class="bar" style="background:linear-gradient(180deg,#F87171,#DC2626)"></span>점수 전체 초기화 · <span style="color:#F7AFAE;font-size:10px">되돌릴 수 없음</span></div>
+            <div class="card-sub">에임 연습 점수 · 시나리오 PB 만 지웁니다</div></div>
+        </div>
+        <div class="set-note">
+          훈련 기록 <b>${n0(count)}</b>건과 시나리오 PB 가 사라집니다. 훈련 잔디(출석·훈련 일수) · API 키 · 닉네임 · 친구 목록 · 유틸 설정은 <b>그대로 유지</b>됩니다.
+        </div>
+        <button class="danger-btn" id="set-reset-scores" style="padding:0 16px;flex:0 0 auto">점수 전체 초기화</button>`;
+    }
+
+    const metaLine = $('#set-meta-line');
+    if (metaLine) {
+      metaLine.textContent = `v${meta.version || '1.3.0'} · 훈련 기록 ${n0(count)}회 · ${meta.frozen ? '배포 빌드' : '소스 실행'}`;
+    }
+  }
+
+  function switchRow(key, title, desc, on) {
+    return `<div class="switch-row"><div class="tx">
+        <div class="t">${title}</div><div class="d">${desc}</div></div>
+      <div class="switch ${on ? 'on' : ''}" data-switch="${key}" role="switch" aria-checked="${on ? 'true' : 'false'}"><i></i></div></div>`;
   }
 
   function renderCloudState(st) {
@@ -929,6 +994,9 @@
     setText('scen-today', today === null || today === undefined ? '미기록' : n0(today));
     setText('scen-last', rec && rec.score !== null && rec.score !== undefined ? n0(rec.score) : '—');
     setText('scen-best', rec && rec.best !== null && rec.best !== undefined ? n0(rec.best) : '—');
+    if (typeof window.drawScenarioHistory === 'function') {
+      window.drawScenarioHistory((rec && rec.history && rec.history.length) ? rec : null);
+    }
     const note = $('#scen-note');
     if (note) {
       note.innerHTML = today === null || today === undefined
@@ -1192,7 +1260,15 @@
     }
     if (!result || !result.ok) return fail(result, '프로필을 적용하지 못했습니다');
     if (result.state) applyState(result.state);
+    const changes = {
+      rows: result.changes || (result.stairfix && result.stairfix.changes) || [],
+      mode: result.mode || mode,
+      at: (AL.state && AL.state.meta && AL.state.meta.now) || '',
+      count: (result.changes || []).length
+    };
+    LAST_CHANGES = changes;
     toast(result.message || `${mode === 'rifle' ? '🔫 라플' : '🎯 스나'} 프로필 적용 완료`, true);
+    if (typeof openChanges === 'function') setTimeout(() => openChanges(changes), 180);
   }
 
   async function toggleAlias() {
@@ -1611,6 +1687,21 @@
   function renderPerf(perf) {
     if (!perf) return;
     AL.perf = perf;
+    const gmOn = !!(perf.game_mode && perf.game_mode.enabled === true);
+    const optimal = !!perf.optimal;
+    UTIL_PERF.on = optimal;
+    const sw = $('#perf-switch');
+    if (sw) {
+      sw.classList.toggle('on', optimal);
+      sw.setAttribute('aria-checked', optimal ? 'true' : 'false');
+    }
+    const detail = $('#perf-detail');
+    if (detail) {
+      const power = perf.power ? (perf.power.name || perf.power.guid) : (perf.label || '—');
+      detail.textContent = `전원 옵션 ${power} · 게임 모드 ${gmOn ? '켜짐' : '꺼짐'}`
+        + (perf.applied_at ? ` · 마지막 적용 ${fmtLabel(perf.applied_at)}` : '')
+        + (perf.backup ? ' · 복구 지점 있음' : '');
+    }
     const chip = $('#perf-chip');
     if (chip) {
       chip.textContent = !perf.supported ? '윈도우 전용' : (perf.optimal ? '적용됨' : '대기');
@@ -1635,6 +1726,17 @@
     if (!AL.real) return;
     const result = await call('perf_state', !!force);
     if (result && result.ok) renderPerf(result.perf);
+  }
+
+  async function togglePerfSwitch() {
+    if (!AL.real) {
+      UTIL_PERF.on = !UTIL_PERF.on;
+      if (typeof renderPerfSwitch === 'function') renderPerfSwitch();
+      return toast(UTIL_PERF.on ? '⚡ 고성능 전원 + 게임 모드 적용' : '↩️ 원래 전원 옵션으로 복구', true);
+    }
+    const on = !(AL.perf && AL.perf.optimal);
+    if (on) return perfApply();
+    return perfRestore();
   }
 
   async function perfApply() {
@@ -1901,7 +2003,13 @@
     const winMax = $('#win-max');
     if (winMax) winMax.addEventListener('click', (e) => { e.stopPropagation(); if (AL.real) call('toggle_maximize'); });
     const winClose = $('#win-close');
-    if (winClose) winClose.addEventListener('click', (e) => { e.stopPropagation(); if (AL.real) call('close_window'); });
+    if (winClose) winClose.addEventListener('click', (e) => {
+      e.stopPropagation();
+      /* 22. X 는 항상 '트레이로 숨기기 / 프로그램 종료' 확인창 (v1.3.0) */
+      const mask = $('#close-mask');
+      if (mask) mask.classList.add('show');
+      else if (AL.real) call('close_window');
+    });
 
     /* ---------- v1.2.0 빠른 실행 · 워밍업 · 리포트 카드 ---------- */
     ['#warmup-btn', '#warmup-btn-2'].forEach((sel) => {
@@ -2105,33 +2213,41 @@
         else applyNvidia(ap.dataset.apply);
         return;
       }
-      if (closest('#nv-restore')) return restoreNvidia();
-      if (closest('#accel-btn')) return toggleAccel();
+      if (closest('#nv-restore') || closest('#changes-restore')) return restoreNvidia();
+      if (closest('#nv-changes-btn')) return openChanges(LAST_CHANGES || (AL.utils && AL.utils.last_changes));
+      if (closest('#accel-switch') || closest('#accel-btn')) return toggleAccel();
+      if (closest('#perf-switch')) return togglePerfSwitch();
       if (closest('#bk-save')) return backupNow();
       if (closest('#bk-load')) return restoreBackup();
     };
 
     /* ---------- 설정 ---------- */
-    const settings = $('#s-settings');
+    const settings = $('#settings-mask') || $('#s-settings');
     if (settings) {
-      settings.addEventListener('click', async (e) => {
-        const target = e.target.closest('button, [data-toggle]');
+      const box = $('#settings-mask') || settings;
+      box.addEventListener('click', async (e) => {
+        const target = e.target.closest('button, [data-switch]');
         if (!target) return;
 
-        const toggle = target.closest('[data-toggle]');
+        const toggle = target.closest('[data-switch]');
         if (toggle) {
-          const key = toggle.dataset.toggle;
-          const on = !toggle.classList.contains('off');
-          if (!AL.real) { toggle.classList.toggle('off', on); return; }
+          const key = toggle.dataset.switch;
+          const on = toggle.classList.contains('on');
+          if (!AL.real) { toggle.classList.toggle('on', !on); return; }
           const result = await call('save_settings', { [key]: !on });
-          toggle.classList.toggle('off', on);
+          toggle.classList.toggle('on', !on);
+          toggle.setAttribute('aria-checked', (!on) ? 'true' : 'false');
           if (result && result.state) applyState(result.state);
           const labels = {
             auto_launch: '자동 실행', autosave: '점수 자동 저장', auto_sync: '자동 동기화', notify: '알림',
-            hotkey_enabled: 'Ctrl+Shift+A 단축키', tray_background: '닫으면 트레이로 숨기기',
-            kovak_autofill: '코박스 점수 자동 채움'
+            hotkey_enabled: 'Ctrl+Shift+A 단축키', kovak_autofill: '코박스 점수 자동 채움'
           };
           toast(`${labels[key] || key} ${!on ? '켜짐' : '꺼짐'}`, true);
+          return;
+        }
+        if (e.target.closest('#set-reset-scores')) {
+          if (typeof resetFlow === 'function') resetFlow();
+          else openResetModal();
           return;
         }
 
@@ -2192,12 +2308,45 @@
         if (AL.view === 'matches' && b) renderMatches(b);
         else if (b) renderMaps(b);
       }
-      if (name === 'settings') { renderSettings(AL.state); renderSettingsTray(AL.tray); renderUpdate(AL.update); }
+      if (name === 'maps') { renderMaps(AL.peek || AL.state.barracks); }
+      if (name === 'records') { if (typeof drawRecords === 'function') drawRecords(); }
       if (name === 'utils') perfRefresh(false);
     };
     AL.onSwitch = function () {
       if (!AL.state) return;
       applySummaryOnly();
+    };
+    AL.openSettings = function () {
+      renderSettings(AL.state || { settings: {}, nexon: {}, cloud: {}, meta: {} });
+      renderSettingsTray(AL.tray);
+      renderUpdate(AL.update);
+      const mask = $('#settings-mask');
+      if (mask) mask.classList.add('show');
+    };
+    AL.ackDigest = async function () {
+      if (!AL.real) return;
+      const result = await call('ack_digest');
+      if (result && result.state) applyState(result.state);
+    };
+    AL.hideToTray = async function () {
+      if (!AL.real) return toast('앱(.exe)에서 트레이로 숨길 수 있습니다', false);
+      const result = await call('tray_hide');
+      toast((result && result.message) || '트레이로 숨겼습니다', true, 5000);
+    };
+    AL.quitApp = async function () {
+      if (!AL.real) { toast('미리보기입니다 · 앱은 종료되지 않습니다', true); return; }
+      await call('close_window');
+    };
+    AL.resetScores = async function () {
+      if (!AL.real) return toast('앱(.exe)에서 초기화할 수 있습니다', false);
+      busy(true, '점수 기록을 초기화하는 중…');
+      const result = await call('reset_scores', '초기화');
+      busy(false);
+      if (!result || !result.ok) return fail(result, '초기화하지 못했습니다');
+      if (result.state) applyState(result.state);
+      const mask = $('#reset-mask');
+      if (mask) mask.classList.remove('show');
+      toast(result.message || '점수 기록을 초기화했습니다', true, 5200);
     };
     AL.addMember = async function (name, ouid) {
       if (!AL.real) return;

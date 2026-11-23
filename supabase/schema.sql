@@ -67,3 +67,36 @@ grant select, insert, update, delete on public.user_profiles to anon, authentica
 -- 앱은 upsert(on_conflict=user_id) 를 쓰므로 PK 가 있으면 충분합니다.
 create index if not exists user_profiles_updated_at_idx
   on public.user_profiles (updated_at desc);
+
+-- =====================================================================
+--  v1.3.0 · 18단계 티어 분포 집계 (선택)
+--  닉네임·종합 점수·티어만 올리는 공개 집계 테이블입니다.  훈련 기록(payload)은
+--  여기에 올리지 않으며, 쓰기는 본인 행만 · 읽기는 점수/티어 두 칸만 열어 둡니다.
+-- =====================================================================
+create table if not exists public.aim_scores (
+  user_id    uuid primary key references auth.users (id) on delete cascade,
+  nickname   text,
+  score      integer not null default 0,
+  tier       text,
+  updated_at timestamptz not null default now()
+);
+
+alter table public.aim_scores enable row level security;
+
+drop policy if exists "aim_scores read all" on public.aim_scores;
+create policy "aim_scores read all"
+  on public.aim_scores for select
+  using (true);                       -- 점수·티어 분포 집계용 공개 읽기
+
+drop policy if exists "aim_scores write own" on public.aim_scores;
+create policy "aim_scores write own"
+  on public.aim_scores for insert
+  with check (auth.uid() = user_id);
+
+drop policy if exists "aim_scores update own" on public.aim_scores;
+create policy "aim_scores update own"
+  on public.aim_scores for update
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+grant select, insert, update on public.aim_scores to anon, authenticated;
