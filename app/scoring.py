@@ -740,7 +740,9 @@ def summary(records: Sequence[dict[str, Any]], game: str, weapon: str,
     daily = daily_profile(records, 7, today)
     filled = [d for d in daily if d["score"] is not None]
     week_delta = filled[-1]["score"] - filled[0]["score"] if len(filled) >= 2 else None
-    scope = f"{GAMES.get(game, 'KovaaK\'s')} · {WEAPONS.get(weapon, '스나')}"
+    trainer_name = GAMES.get(game) or "KovaaK's"
+    weapon_name = WEAPONS.get(weapon) or "스나"
+    scope = f"{trainer_name} · {weapon_name}"
     return {
         "values": values,
         "score": score,
