@@ -57,7 +57,29 @@
     '.score-row .unit{font-size:9px;color:#7E8FA6;font-weight:700}',
     '.br-view table.maps-t td.l{text-align:left}',
     '.set-status{font-size:9.5px;font-weight:700;color:#8B9BB1}',
-    '.set-status.on{color:#9AE6C9}'
+    '.set-status.on{color:#9AE6C9}',
+    '#al-bridge-error{position:fixed;inset:0;z-index:10000;display:none;align-items:center;justify-content:center;',
+    '  background:radial-gradient(120% 120% at 50% 0%,#0D1626 0%,#070B13 60%);padding:28px}',
+    '#al-bridge-error[hidden]{display:none!important}',
+    '#al-bridge-error .abx-card{width:min(560px,100%);border:1px solid rgba(148,163,184,.18);border-radius:16px;',
+    '  background:rgba(11,17,28,.92);box-shadow:0 24px 60px rgba(0,0,0,.55);padding:26px 26px 22px;',
+    '  display:flex;flex-direction:column;gap:11px}',
+    '#al-bridge-error .abx-tag{font-size:9.5px;font-weight:800;letter-spacing:.14em;color:#F0938C}',
+    '#al-bridge-error .abx-title{margin:0;font-size:19px;font-weight:800;color:#EDF4FF}',
+    '#al-bridge-error .abx-msg{margin:0;font-size:12.5px;line-height:1.65;color:#B9C7D9;white-space:pre-wrap;word-break:break-word}',
+    '#al-bridge-error .abx-hints{margin:2px 0 0;padding-left:16px;font-size:11.5px;line-height:1.7;color:#8FA2BA}',
+    '#al-bridge-error .abx-log{display:flex;align-items:center;gap:9px;flex-wrap:wrap;font-size:10px;color:#7E8FA6;',
+    '  background:rgba(7,11,19,.75);border:1px solid rgba(148,163,184,.14);border-radius:9px;padding:8px 10px}',
+    '#al-bridge-error .abx-log code{font-family:var(--num);font-size:10px;color:#C8D6E6;word-break:break-all}',
+    '#al-bridge-error .abx-status{font-size:10.5px;font-weight:700;color:#FBD48F}',
+    '#al-bridge-error .abx-status[hidden]{display:none}',
+    '#al-bridge-error .abx-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:4px}',
+    '#al-bridge-error .abx-btn{height:34px;padding:0 15px;border-radius:9px;border:1px solid rgba(148,163,184,.26);',
+    '  background:rgba(148,163,184,.08);color:#D7E3F2;font-family:inherit;font-size:11.5px;font-weight:800;cursor:pointer}',
+    '#al-bridge-error .abx-btn:hover{background:rgba(148,163,184,.16)}',
+    '#al-bridge-error .abx-btn.primary{background:#F59E0B;border-color:#F59E0B;color:#1B1300}',
+    '#al-bridge-error .abx-btn.primary:hover{background:#FBBF24}',
+    '#al-bridge-error .abx-btn.ghost{background:transparent;color:#8B9BB1}'
   ].join('\n');
   document.head.appendChild(style);
 
@@ -831,9 +853,7 @@
   }
 
   async function fetchBarracks(andTest) {
-    if (!AL.real) {
-      return toast('미리보기 화면입니다 · .exe 로 실행하면 전적을 불러옵니다', false);
-    }
+    if (!AL.real) return notReady();
     const nickEl = $('#set-nick');
     const keyEl = $('#set-key');
     const nick = nickEl ? String(nickEl.value || '').trim() : '';
@@ -867,7 +887,7 @@
   }
 
   async function fetchLeaderboard() {
-    if (!AL.real) return toast('미리보기 화면입니다 · .exe 로 실행하면 순위표를 갱신합니다', false);
+    if (!AL.real) return notReady();
     const names = (MEMBERS || []).map((m) => m.name).filter(Boolean).slice(0, 10);
     busy(true, '순위표 전적을 갱신하는 중… (ouid 기준 · 상세는 캐시만 사용)');
     const result = await call('fetch_leaderboard', names);
@@ -900,7 +920,7 @@
     const input = $('#br-search-input');
     const nick = input ? String(input.value || '').trim() : '';
     if (!nick) return toast('검색할 서든어택 닉네임을 입력해 주세요', false);
-    if (!AL.real) return toast('미리보기 화면입니다 · .exe 로 실행하면 검색됩니다', false);
+    if (!AL.real) return notReady();
     searchResultBox('<div class="sr-none">조회 중…</div>');
     busy(true, `'${nick}' 계정을 확인하는 중…`);
     const result = await call('search_user', nick);
@@ -926,7 +946,7 @@
   }
 
   async function openPeek(nick, ouid) {
-    if (!AL.real) return toast('미리보기 화면입니다', false);
+    if (!AL.real) return notReady();
     busy(true, `'${nick}' 병영수첩을 불러오는 중… (최근 100판)`);
     const result = await call('lookup_barracks', nick, ouid);
     busy(false);
@@ -1456,63 +1476,231 @@
 
   /* ==================================================================
      부팅
+     ------------------------------------------------------------------
+     .exe 에서는 두 가지를 반드시 지킨다.
+       1) window.pywebview.api 가 늦게 올라와도(콜드 스타트 5~15초) 충분히 기다린다.
+       2) bootstrap() → applyState() 로 실제 데이터가 다 그려진 다음에만
+          스플래시 100% → 메인창.  끝내 실패하면 샘플(미리보기) 데이터를
+          보여 주지 않고 오류·재시도 화면을 띄운다.
+     브라우저 미리보기(--serve)에서만 샘플 데이터를 허용한다.
      ================================================================== */
-  let booted = false;
+  const DESKTOP = window.__AL_DESKTOP__ === true;
+  const LOG_PATH = window.__AL_LOG__ || '';
+  const NO_WEBVIEW2 = window.__AL_NO_WEBVIEW2__ === true;
+  const bootQuery = new URLSearchParams(location.search);
+  const BOOT_TIMEOUT = Math.max(1000, Number(bootQuery.get('boottimeout')) || 15000);
+  const BOOTSTRAP_TIMEOUT = Math.max(1500, Number(bootQuery.get('boottimeout')) || 20000);
+  const POLL_MS = 50;
+  let phase = 'idle';           /* idle | waiting | booting | ready | failed */
+  let watchTimer = null;
+
+  function splashSet(value, label) {
+    if (window.SPLASH) window.SPLASH.set(value, label);
+  }
+  function splashFinish(label) {
+    if (!window.SPLASH) return;
+    if (label) window.SPLASH.set(100, label);
+    window.SPLASH.finish();
+  }
+  const bridgeUp = () => hasApi('bootstrap');
+
+  /* pywebviewready 가 늦게 오거나 아예 안 와도 50ms 폴링으로 잡아낸다 */
+  function watchBridge() {
+    if (phase === 'booting' || phase === 'ready') return;
+    phase = 'waiting';
+    clearTimeout(watchTimer);
+    const deadline = Date.now() + BOOT_TIMEOUT;
+    const tick = () => {
+      if (phase === 'booting' || phase === 'ready') return;
+      if (bridgeUp()) { phase = 'idle'; boot(); return; }
+      if (Date.now() >= deadline) { onBridgeTimeout(); return; }
+      watchTimer = setTimeout(tick, POLL_MS);
+    };
+    tick();
+  }
+
+  function onBridgeTimeout() {
+    if (phase === 'ready') return;
+    phase = 'failed';
+    if (DESKTOP) {
+      splashFinish('앱 연결 실패');
+      showBridgeError(
+        NO_WEBVIEW2
+          ? 'Microsoft Edge WebView2 Runtime 이 설치되어 있지 않습니다. 이 런타임이 없으면 앱 화면은 뜨지만 데이터 연결(브리지)이 동작하지 않습니다.'
+          : `앱 내부 연결(pywebview 브리지)이 ${Math.round(BOOT_TIMEOUT / 1000)}초 안에 준비되지 않았습니다.`,
+        NO_WEBVIEW2
+          ? ['https://developer.microsoft.com/microsoft-edge/webview2/ 에서 "Evergreen Bootstrapper"를 설치한 뒤 앱을 다시 실행해 주세요.',
+             '설치 없이 진행하려면 [다시 시도]를 눌러 보세요.']
+          : ['잠시 뒤 [다시 시도]를 눌러 주세요.', '계속 안 되면 아래 로그 파일을 확인해 주세요.']
+      );
+    } else {
+      splashFinish('미리보기 모드');   /* 브라우저 미리보기에서만 */
+    }
+  }
 
   async function boot() {
-    if (booted) return;
-    if (!hasApi('bootstrap')) return;
-    booted = true;
+    if (phase === 'booting' || phase === 'ready') return;
+    if (!bridgeUp()) { watchBridge(); return; }
+    phase = 'booting';
     AL.real = true;
-    const splash = window.SPLASH;
-    if (splash) splash.set(18, '앱 데이터를 불러오는 중…');
+    hideBridgeError();
+    splashSet(18, '앱 데이터를 불러오는 중…');
     busy(true, '앱 데이터를 불러오는 중…');
-    const result = await call('bootstrap');
+    let result = null;
+    try {
+      result = await Promise.race([
+        call('bootstrap'),
+        new Promise((resolve) => setTimeout(() => resolve({
+          ok: false, timeout: true,
+          message: `앱 데이터 응답이 없습니다 (${Math.round(BOOTSTRAP_TIMEOUT / 1000)}초)`
+        }), BOOTSTRAP_TIMEOUT))
+      ]);
+    } catch (err) {
+      result = { ok: false, message: String((err && err.message) || err) };
+    }
     busy(false);
     if (!result || !result.ok) {
+      phase = 'failed';
       AL.real = false;
-      if (splash) splash.set(100, '불러오지 못했습니다');
-      setTimeout(() => { if (splash) splash.finish(); }, 500);
-      toast((result && result.message) || '앱 데이터를 불러오지 못했습니다', false);
+      const message = (result && result.message) || '앱 데이터를 불러오지 못했습니다';
+      if (DESKTOP) {
+        splashFinish('앱 데이터를 불러오지 못했습니다');
+        showBridgeError(message, ['앱은 실행됐지만 데이터를 불러오지 못했습니다.']);
+      } else {
+        splashFinish('미리보기 모드');
+        toast(message, false);
+      }
       return;
     }
-    if (result.state) {
-      if (splash) splash.set(58, '훈련 기록 · 티어 계산 중…');
-      applyState(result.state);
-      AL.ready = true;
+    try {
+      if (result.state) {
+        splashSet(58, '훈련 기록 · 티어 계산 중…');
+        applyState(result.state);
+        AL.ready = true;
+      }
+    } catch (err) {
+      phase = 'failed';
+      AL.real = false;
+      splashFinish('화면을 그리지 못했습니다');
+      showBridgeError('화면을 그리지 못했습니다 · ' + String((err && err.message) || err), []);
+      return;
     }
-    if (splash) splash.set(74, '화면을 그리는 중…');
-    requestAnimationFrame(() => {
-      /* 첫 프레임을 먼저 보여 준 뒤 무거운 확인(DRS DB 스캔 · 마우스 설정)을 돌린다 */
-      if (splash) splash.set(82, '그래픽 설정 확인 중…');
-      setTimeout(async () => {
-        const nv = await call('get_nvidia_state');
+    splashSet(92, '화면을 그리는 중…');
+    /* 데이터가 전부 그려진 다음 프레임에 100% → 메인창 */
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      splashSet(100, '준비 완료');
+      splashFinish();
+      phase = 'ready';
+      hideBridgeError();
+    }));
+    /* 무거운 확인(DRS 스캔 · 마우스 설정)은 메인창이 뜬 뒤 백그라운드로 —
+       여기서 기다리면 스플래시가 82% 에 멈춰 "무응답"처럼 보인다 */
+    setTimeout(async () => {
+      try {
+        const nv = await Promise.race([
+          call('get_nvidia_state'),
+          new Promise((resolve) => setTimeout(() => resolve(null), 8000))
+        ]);
         if (nv && nv.utils) {
           AL.utils = nv.utils;
           renderUtilsState(nv.utils);
           if (nv.state) applyState(nv.state);
         }
-        if (splash) splash.set(96, '마무리 중…');
-        splash && splash.finish();
-      }, 60);
-    });
+      } catch (err) { /* 유틸 상태를 못 읽어도 앱은 정상 동작 */ }
+    }, 160);
+  }
+
+  /* ------------------------------------------------------------ 시작 오류 화면 */
+  const LOG_HINT = LOG_PATH || '%APPDATA%\\SA_Aim_Labs\\logs\\app.log';
+
+  function showBridgeError(message, hints) {
+    let el = document.getElementById('al-bridge-error');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'al-bridge-error';
+      el.innerHTML = [
+        '<div class="abx-card">',
+        '  <div class="abx-tag">SA AIM LABS · 시작 오류</div>',
+        '  <h1 class="abx-title">앱 데이터에 연결하지 못했습니다</h1>',
+        '  <p class="abx-msg"></p>',
+        '  <ul class="abx-hints"></ul>',
+        '  <div class="abx-log"><span>로그 파일</span><code></code></div>',
+        '  <div class="abx-status" hidden></div>',
+        '  <div class="abx-actions">',
+        '    <button type="button" class="abx-btn primary" data-abx="retry">다시 시도</button>',
+        '    <button type="button" class="abx-btn" data-abx="log">로그 폴더 열기</button>',
+        '    <button type="button" class="abx-btn ghost" data-abx="close">앱 종료</button>',
+        '  </div>',
+        '</div>'
+      ].join('\n');
+      document.body.appendChild(el);
+      el.addEventListener('click', async (ev) => {
+        const btn = ev.target && ev.target.closest ? ev.target.closest('[data-abx]') : null;
+        if (!btn) return;
+        const kind = btn.getAttribute('data-abx');
+        if (kind === 'retry') {
+          setBridgeErrorStatus('다시 연결하는 중… 최대 ' + Math.round(BOOT_TIMEOUT / 1000) + '초 기다립니다');
+          phase = 'idle';
+          if (bridgeUp()) boot();
+          else watchBridge();
+        } else if (kind === 'log') {
+          const opened = await call('open_data_folder');
+          if (!opened || !opened.ok) {
+            setBridgeErrorStatus('로그 파일: ' + LOG_HINT);
+          }
+        } else if (kind === 'close') {
+          const closed = await call('close_window');
+          if (!closed || !closed.ok) {
+            try { window.close(); } catch (err) { /* ignore */ }
+          }
+        }
+      });
+    }
+    el.querySelector('.abx-msg').textContent = message || '알 수 없는 오류입니다';
+    const list = el.querySelector('.abx-hints');
+    list.innerHTML = (hints || []).map((h) => `<li>${esc(h)}</li>`).join('');
+    list.hidden = !(hints && hints.length);
+    el.querySelector('.abx-log code').textContent = LOG_HINT;
+    const status = el.querySelector('.abx-status');
+    status.hidden = true;
+    status.textContent = '';
+    el.hidden = false;
+    el.style.display = 'flex';
+    return el;
+  }
+
+  function setBridgeErrorStatus(text) {
+    const el = document.getElementById('al-bridge-error');
+    if (!el) return;
+    const status = el.querySelector('.abx-status');
+    if (!status) return;
+    status.textContent = text;
+    status.hidden = !text;
+  }
+
+  function hideBridgeError() {
+    const el = document.getElementById('al-bridge-error');
+    if (el) { el.hidden = true; el.style.display = 'none'; }
+  }
+
+  /* 미리보기( 브라우저 )가 아니라 .exe 인데 브리지가 없으면 샘플 데이터 대신 오류 안내 */
+  function notReady() {
+    if (DESKTOP) {
+      showBridgeError('앱 데이터가 아직 연결되지 않았습니다.', ['[다시 시도]를 눌러 주세요.']);
+      return toast('앱 연결이 준비되지 않았습니다 · [다시 시도]를 눌러 주세요', false);
+    }
+    return toast('미리보기 화면입니다 · .exe 로 실행하면 전적을 불러옵니다', false);
   }
 
   document.addEventListener('DOMContentLoaded', () => {
     bind();
-    if (hasApi('bootstrap')) boot();
-    else setTimeout(() => { if (hasApi('bootstrap')) boot(); }, 700);
+    if (bridgeUp()) boot();
+    else watchBridge();
   });
-  window.addEventListener('pywebviewready', boot);
-  /* 브리지가 끝내 안 올라오면 스플래시가 멈춰 있지 않게 한다 */
-  setTimeout(() => {
-    if (!booted && window.SPLASH) {
-      window.SPLASH.set(100, '미리보기 모드');
-      window.SPLASH.finish();
-    }
-  }, 2600);
+  window.addEventListener('pywebviewready', () => boot());
   if (document.readyState !== 'loading') {
     bind();
-    boot();
+    if (bridgeUp()) boot();
+    else watchBridge();
   }
 })();

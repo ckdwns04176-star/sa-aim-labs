@@ -931,6 +931,15 @@ html,body{width:100%;height:100%}
   var lbl = document.getElementById('sp-step');
   var started = performance.now();
   var value = 0, finished = false, MIN_MS = 1150;
+
+  /* .exe 는 file:// 로 띄우면서 ?desktop=1 을 붙인다.  브라우저 미리보기(http --serve 또는
+     ?preview=1)에서만 샘플 데이터 · 타이머 마무리를 허용한다.  데스크톱 모드에서는
+     브리지가 bootstrap() 을 끝내기 전에 스플래시가 절대 걷히지 않는다. */
+  var q = new URLSearchParams(location.search);
+  var DESKTOP = q.has('desktop') || (location.protocol === 'file:' && !q.has('preview'));
+  window.__AL_DESKTOP__ = DESKTOP;
+  window.__AL_LOG__ = q.get('log') || '';
+  window.__AL_NO_WEBVIEW2__ = q.get('wv2') === '0';
   requestAnimationFrame(function () { el.classList.add('run'); });
   function set(v, label) {
     value = Math.max(value, Math.min(100, Number(v) || 0));
@@ -951,9 +960,11 @@ html,body{width:100%;height:100%}
   }
   window.SPLASH = { set: set, finish: finish, el: el, value: function () { return value; } };
   set(6, '앱을 시작하는 중…');
-  /* 브리지가 없는 브라우저 미리보기에서는 타이머로 마무리 */
-  setTimeout(function () { if (!window.pywebview) { set(52, '미리보기 준비 중…'); } }, 260);
-  setTimeout(function () { if (!window.pywebview) { finish(); } }, 1500);
+  /* 브리지가 없는 브라우저 미리보기에서만 타이머로 마무리한다. */
+  if (!DESKTOP) {
+    setTimeout(function () { if (!window.pywebview) { set(52, '미리보기 준비 중…'); } }, 260);
+    setTimeout(function () { if (!window.pywebview) { finish(); } }, 1500);
+  }
 })();
 </script>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true">

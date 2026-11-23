@@ -71,6 +71,11 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
 class Store:
     """Thread-safe enough for the app: every mutation saves the whole document."""
 
+    # pywebview walks the js_api object's public attributes and recurses into
+    # anything non-callable.  This marker stops that walk at the store, so
+    # internal methods (``save``, ``records`` …) are never exposed to JS.
+    _serializable = False
+
     def __init__(self, path: str | os.PathLike[str] | None = None):
         self.path = Path(path) if path else paths.data_file()
         self.data: dict[str, Any] = {}

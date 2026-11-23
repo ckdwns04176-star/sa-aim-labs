@@ -12,6 +12,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import urllib.parse
 from pathlib import Path
 
 # Allow "python main.py" from any cwd and PyInstaller onefile builds alike.
@@ -33,6 +34,9 @@ def _setup_logging(debug: bool = False) -> None:
         root = logging.getLogger()
         root.setLevel(level)
         root.addHandler(handler)
+        # pywebview 은 고른 렌더러(WinForms / Chromium · MSHTML)를 debug 레벨로만
+        # 남긴다 — 브리지가 안 붙는 현장 진단에 꼭 필요해서 파일에 남긴다.
+        logging.getLogger("pywebview").setLevel(logging.DEBUG)
     except OSError:
         logging.basicConfig(level=level)
     if sys.stderr:
@@ -72,6 +76,61 @@ def _serve(port: int) -> int:
         except KeyboardInterrupt:
             return 0
     return 0
+
+
+def _webview2_version() -> str | None:
+    """Installed Microsoft Edge WebView2 Runtime version (per-user or machine).
+
+    When it is present the app pins ``gui='edgechromium'`` so the build never
+    silently falls back to the ancient mshtml backend; when it is missing the
+    log says so, which is the answer to "the window is blank/unresponsive".
+    """
+    if os.name != "nt":
+        return None
+    try:
+        import winreg
+    except Exception:  # noqa: BLE001
+        return None
+    client = r"\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+    for root, path in (
+        (winreg.HKEY_CURRENT_USER, r"Software" + client),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node" + client),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE" + client),
+    ):
+        try:
+            with winreg.OpenKey(root, path) as key:
+                version, _ = winreg.QueryValueEx(key, "pv")
+                if version:
+                    return str(version)
+        except OSError:
+            continue
+        except Exception:  # noqa: BLE001
+            continue
+    return None
+
+
+def _public_names(js_api) -> list[str]:
+    """Names pywebview will hand to JS — logged so a bad attribute is visible.
+
+    A name that is not a plain function is worth seeing in the log: pywebview
+    recurses into those while building ``window.pywebview.api``.
+    """
+    names: list[str] = []
+    for name in dir(js_api):
+        if name.startswith("_"):
+            continue
+        try:
+            attr = getattr(js_api, name)
+        except Exception:  # noqa: BLE001
+            names.append(f"{name}:ERROR")
+            continue
+        if getattr(attr, "_serializable", True) is False:
+            names.append(f"{name}:skip")
+        elif callable(attr):
+            names.append(name)
+        else:
+            names.append(f"{name}:<{type(attr).__name__}>")
+    return names
 
 
 def _work_area() -> tuple[int, int, int, int]:
@@ -159,7 +218,41 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:  # noqa: BLE001 - older pywebview
         pass
 
-    url = paths.index_url()
+    # ── 진단 정보: 어떤 pywebview / gui 백엔드로 뜨는지 app.log 에 남긴다 ──
+    try:
+        from webview import __version__ as webview_version  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - pywebview has no __version__ in some builds
+        try:
+            from importlib.metadata import version as _pkg_version
+
+            webview_version = _pkg_version("pywebview")
+        except Exception:  # noqa: BLE001
+            webview_version = "?"
+    gui: str | None = None
+    webview2: str | None = None
+    if os.name == "nt":
+        webview2 = _webview2_version()
+        if webview2:
+            gui = "edgechromium"
+            log.info("WebView2 runtime %s · gui=edgechromium", webview2)
+        else:
+            log.warning("WebView2 runtime not found · pywebview falls back to MSHTML, "
+                        "where window.pywebview.api does not work")
+    exposed = _public_names(api)
+    log.info("pywebview %s · python %s · js_api: %s", webview_version, sys.version.split()[0],
+             ", ".join(exposed))
+    missing = [name for name in ("bootstrap", "get_state", "bridge_ping") if name not in exposed]
+    if missing:
+        log.error("js_api is missing %s · the UI would boot without a bridge", missing)
+
+    # ?desktop=1 tells ui/ it runs inside the .exe (stricter boot: no sample data,
+    # explicit error screen).  log= is only for that error screen's guidance.
+    base_url = paths.index_url()
+    log_file = paths.log_dir() / "app.log"
+    sep = "&" if "?" in base_url else "?"
+    url = f"{base_url}{sep}desktop=1&log={urllib.parse.quote(str(log_file))}"
+    if os.name == "nt" and not webview2:
+        url += "&wv2=0"   # 오류 화면에 WebView2 설치 안내를 띄운다
     win_w, win_h = 1200, 750
     x, y = _center_position(win_w, win_h)
     log.info("window %sx%s at %s,%s", win_w, win_h, x, y)
@@ -179,34 +272,28 @@ def main(argv: list[str] | None = None) -> int:
         confirm_close=False,
         text_select=False,
         zoomable=False,
-        hidden=True,          # 첫 프레임이 준비된 뒤에 보여 준다 (시작 버벅임 제거)
+        # hidden=True + a timer that called show() from another thread made the
+        # WinForms window sit blank/unresponsive for seconds on launch.  The page
+        # paints #070B13 and #app-splash instantly, so showing it right away is
+        # both faster and safer.
+        hidden=False,
     )
     api.attach(window)
 
-    def _show() -> None:
-        try:
-            window.show()
-        except Exception:  # noqa: BLE001 - older pywebview
-            pass
-
-    for event_name in ("loaded", "shown"):
-        try:
-            event = getattr(window.events, event_name, None)
-            if event is not None:
-                event += _show
-        except Exception:  # noqa: BLE001
-            pass
-
-    # loaded 이벤트가 오지 않는 환경에서도 창이 숨어 있지 않도록 안전장치
-    import threading
-
-    guard = threading.Timer(4.0, _show)
-    guard.daemon = True
-    guard.start()
-    log.info("starting %s %s · ui=%s · data=%s", paths.APP_TITLE, paths.APP_VERSION, url, paths.data_file())
+    def _on_loaded() -> None:
+        log.info("ui loaded · bridge should be ready")
 
     try:
-        webview.start(debug=bool(args.debug), private_mode=False, storage_path=str(paths.data_dir() / "webview"))
+        window.events.loaded += _on_loaded
+    except Exception:  # noqa: BLE001
+        pass
+
+    log.info("starting %s %s · ui=%s · log=%s · data=%s", paths.APP_TITLE, paths.APP_VERSION,
+             url, log_file, paths.data_file())
+
+    try:
+        webview.start(gui=gui, debug=bool(args.debug), private_mode=False,
+                      storage_path=str(paths.data_dir() / "webview"))
     except Exception as exc:  # noqa: BLE001
         log.exception("window failed")
         _fatal(str(exc))

@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import datetime as _dt
 import json
+import logging
 import os
 import platform
+import time
 import traceback
 from pathlib import Path
 from typing import Any, Callable
@@ -20,11 +22,26 @@ from .store import Store, now_iso, today_str
 GAMES = ("kovak", "aimlab")
 WEAPONS = ("sniper", "rifle")
 
+log = logging.getLogger("api")
+
+# pywebview builds ``window.pywebview.api`` by walking *every public attribute*
+# of the js_api object (``webview.util.inject_pywebview`` → ``get_functions``)
+# and recursing into anything that is not callable.  A ``pywebview.Window``
+# stored on the instance made that walk read ``window.x`` / ``window.width``
+# properties, which block up to 15 s each on ``events.shown`` and marshal into
+# the WinForms thread — that alone delayed ``pywebviewready`` past the UI's boot
+# timer and left the app on its sample (preview) data.  The window reference now
+# lives in this module-level slot: no public attribute is walked.
+_WINDOW_REF: Any = None
+
+
+def window_ref() -> Any:
+    return _WINDOW_REF
+
 
 class Api:
     def __init__(self, store: Store | None = None):
         self.store = Store() if store is None else store
-        self.window = None
         self._drs_state_at = 0.0
         self._drs_state: dict[str, Any] | None = None
         self._busy: str | None = None
@@ -32,19 +49,28 @@ class Api:
 
     # ------------------------------------------------------------ helpers
     def attach(self, window) -> None:
-        self.window = window
+        """Keep the native window out of the instance dict (see _WINDOW_REF)."""
+        global _WINDOW_REF
+        _WINDOW_REF = window
+
+    # JS 에서 호출될 이유가 없다 — pywebview 노출 목록에서도 뺀다.
+    attach._serializable = False  # type: ignore[attr-defined]
+
+    @property
+    def _win(self):
+        """The pywebview window.  The leading underscore keeps it out of the
+        JS API export walk."""
+        return _WINDOW_REF
 
     def _progress(self, done: int, total: int, label: str = "") -> None:
-        import time
-
         now = time.monotonic()
         if done < total and now - self._last_progress < 0.25:
             return
         self._last_progress = now
-        if not self.window:
+        if not self._win:
             return
         try:
-            self.window.evaluate_js(
+            self._win.evaluate_js(
                 f"window.__alProgress && window.__alProgress({int(done)},{int(total)},{json.dumps(label, ensure_ascii=False)})"
             )
         except Exception:  # noqa: BLE001 - UI may be closing
@@ -59,26 +85,26 @@ class Api:
 
     # ------------------------------------------------------------ window controls
     def minimize_window(self) -> dict[str, Any]:
-        if self.window:
-            self.window.minimize()
+        if self._win:
+            self._win.minimize()
         return self._ok()
 
     def toggle_maximize(self) -> dict[str, Any]:
-        if not self.window:
+        if not self._win:
             return self._ok(maximized=False)
-        state = getattr(self.window, "maximized", False)
+        state = getattr(self._win, "maximized", False)
         try:
             if state:
-                self.window.restore()
+                self._win.restore()
                 return self._ok(maximized=False)
-            self.window.maximize()
+            self._win.maximize()
             return self._ok(maximized=True)
         except Exception as exc:  # noqa: BLE001
             return self._err(exc, maximized=bool(state))
 
     def close_window(self) -> dict[str, Any]:
-        if self.window:
-            self.window.destroy()
+        if self._win:
+            self._win.destroy()
         return self._ok()
 
     def drag_window(self) -> dict[str, Any]:
@@ -88,7 +114,7 @@ class Api:
         the cursor on Windows; handing the drag to the window manager makes the OS
         move the window itself, so it tracks the pointer exactly.
         """
-        if os.name != "nt" or not self.window:
+        if os.name != "nt" or not self._win:
             return self._ok(supported=False)
         try:
             import ctypes
@@ -105,7 +131,7 @@ class Api:
             return self._err(exc, supported=False)
 
     def _hwnd(self) -> int | None:
-        native = getattr(self.window, "native", None)
+        native = getattr(self._win, "native", None)
         if native is not None:
             try:
                 handle = getattr(native, "Handle", None)
@@ -129,10 +155,10 @@ class Api:
 
     def window_bounds(self) -> dict[str, Any]:
         """Position/size helper (DPR-safe centering check)."""
-        if not self.window:
+        if not self._win:
             return self._ok()
         try:
-            return self._ok(x=self.window.x, y=self.window.y, width=self.window.width, height=self.window.height)
+            return self._ok(x=self._win.x, y=self._win.y, width=self._win.width, height=self._win.height)
         except Exception:  # noqa: BLE001
             return self._ok()
 
@@ -144,12 +170,34 @@ class Api:
         registry read are skipped here and fetched right after the window is
         painted through :meth:`get_nvidia_state`, which is what used to make the
         app stutter for a second on launch.
+
+        Every step is logged with its duration: if the UI ever reports a failed
+        boot, ``app.log`` shows exactly which stage broke.
         """
+        started = time.perf_counter()
+        log.info("bootstrap · start")
+        t = time.perf_counter()
         try:
-            return self._ok(state=self._build_state(light=True))
+            store_ok = bool(self.store)
+            log.info("bootstrap · store ready=%s data=%s (%.0f ms)",
+                     store_ok, getattr(self.store, "path", "?"), (time.perf_counter() - t) * 1000)
+        except Exception:  # noqa: BLE001 - logging must never break boot
+            pass
+        try:
+            state = self._build_state(light=True)
         except Exception as exc:  # noqa: BLE001
+            log.exception("bootstrap · state failed after %.0f ms", (time.perf_counter() - started) * 1000)
             traceback.print_exc()
-            return self._err(exc)
+            return self._err(exc, stage="state", log_file=str(paths.log_dir() / "app.log"))
+        took = (time.perf_counter() - started) * 1000
+        log.info("bootstrap · done in %.0f ms · records=%s", took, state.get("record_count"))
+        return self._ok(state=state, ms=round(took), log_file=str(paths.log_dir() / "app.log"))
+
+    def bridge_ping(self) -> dict[str, Any]:
+        """Tiny call the UI can use to prove the JS ↔ Python bridge is alive."""
+        return {"ok": True, "pong": True, "version": paths.APP_VERSION,
+                "log_file": str(paths.log_dir() / "app.log"),
+                "data_file": str(getattr(self.store, "path", ""))}
 
     def get_state(self) -> dict[str, Any]:
         try:
@@ -170,20 +218,31 @@ class Api:
         for game in GAMES:
             for weapon in WEAPONS:
                 key = f"{game}-{weapon}"
-                summary = scoring.summary(records, game, weapon, today)
-                recs = scoring.build_recs(
-                    values=summary["values"], records=records, game=game, weapon=weapon,
-                    history=store.rotation(), today=today,
-                )
-                summary["recs"] = recs
-                summary["style"] = style
-                summary["streak"] = streak
+                try:
+                    summary = scoring.summary(records, game, weapon, today)
+                    recs = scoring.build_recs(
+                        values=summary["values"], records=records, game=game, weapon=weapon,
+                        history=store.rotation(), today=today,
+                    )
+                    summary["recs"] = recs
+                    summary["style"] = style
+                    summary["streak"] = streak
+                except Exception:  # noqa: BLE001 - one broken summary must not break boot
+                    log.exception("state · summary %s failed", key)
+                    summary = scoring.summary([], game, weapon, today)
+                    summary["recs"] = []
+                    summary["style"] = style
+                    summary["streak"] = streak
                 summaries[key] = summary
 
-        barracks = store.barracks_cache().get(settings.get("nickname") or "", None)
-        if barracks is None and store.barracks_cache():
-            barracks = list(store.barracks_cache().values())[-1]
-        members = self._ensure_me(barracks)
+        try:
+            barracks = store.barracks_cache().get(settings.get("nickname") or "", None)
+            if barracks is None and store.barracks_cache():
+                barracks = list(store.barracks_cache().values())[-1]
+            members = self._ensure_me(barracks)
+        except Exception:  # noqa: BLE001
+            log.exception("state · barracks/leaderboard failed")
+            barracks, members = None, []
 
         if light:
             utils_state = {
@@ -198,9 +257,25 @@ class Api:
             }
         else:
             utils_state = self._drs_summary()
-            utils_state["accel"] = winutil.get_mouse_accel() if os.name == "nt" else self.store.utils().get("accel")
+            try:
+                utils_state["accel"] = winutil.get_mouse_accel() if os.name == "nt" else self.store.utils().get("accel")
+            except Exception:  # noqa: BLE001
+                log.exception("state · mouse accel failed")
+                utils_state["accel"] = None
             utils_state["last_backup_at"] = store.utils().get("last_backup_at")
             utils_state["last_restore_at"] = store.utils().get("last_restore_at")
+
+        try:
+            cloud_state = self._cloud_state()
+        except Exception:  # noqa: BLE001
+            log.exception("state · cloud failed")
+            cloud_state = {"configured": False, "url": "", "email": None, "user_id": None,
+                           "signed_in": False, "last_sync": None}
+        try:
+            goals = self._goals(barracks)
+        except Exception:  # noqa: BLE001
+            log.exception("state · goals failed")
+            goals = []
 
         return {
             "meta": {
@@ -216,6 +291,8 @@ class Api:
                 "load_error": store.load_error,
                 "now": now_iso(),
                 "today": today_str(),
+                "log_file": str(paths.log_dir() / "app.log"),
+                "bridge": "pywebview",
             },
             "settings": settings,
             "nexon": {
@@ -234,8 +311,8 @@ class Api:
             "areas": scoring.AREAS,
             "tiers": scoring.TIERS,
             "utils": utils_state,
-            "cloud": self._cloud_state(),
-            "goals": self._goals(barracks),
+            "cloud": cloud_state,
+            "goals": goals,
         }
 
     def _goals(self, barracks: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -789,12 +866,12 @@ class Api:
             return self._err(exc)
 
     def _ask_open_file(self) -> str | None:
-        if not self.window:
+        if not self._win:
             return None
         try:
             import webview
 
-            result = self.window.create_file_dialog(
+            result = self._win.create_file_dialog(
                 webview.OPEN_DIALOG, allow_multiple=False, file_types=("SA AIM LABS 백업 (*.json)", "모든 파일 (*.*)")
             )
         except Exception:  # noqa: BLE001
