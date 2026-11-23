@@ -330,7 +330,14 @@ def main(argv: list[str] | None = None) -> int:
             hotkey="Ctrl+Shift+A",
         )
         if tray_icon.start():
-            api.attach_tray(tray_icon)
+            # Older/newer Api builds may not expose attach_tray(). The tray
+            # remains managed by this entry point, so its absence must not
+            # prevent the desktop app from starting.
+            attach_tray = getattr(api, "attach_tray", None)
+            if callable(attach_tray):
+                attach_tray(tray_icon)
+            else:
+                log.debug("Api.attach_tray unavailable; tray is managed by main.py")
             enabled = bool(api.store.settings.get("hotkey_enabled", True))
             tray_icon.set_hotkey(enabled)
             log.info("tray on · icon=%s · hotkey %s=%s", tray_icon.icon_added, tray_icon.hotkey, enabled)
