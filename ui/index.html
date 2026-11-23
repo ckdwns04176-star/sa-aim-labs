@@ -1693,6 +1693,8 @@ nav + .side-spacer{min-height:6px}
 .home-strip .hs{display:flex;align-items:baseline;gap:7px;min-width:0}
 .home-strip .hs span{font-size:9px;font-weight:800;color:#7E8FA6;letter-spacing:.02em;white-space:nowrap}
 .home-strip .hs b{font-size:12px;font-weight:800;color:#FDE8BD;white-space:nowrap}
+.head h1+.tip.sq-auto{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;font-size:10px;margin-left:6px;vertical-align:3px}
+.tier-note{display:none}
 .home-strip .hs i{font-style:normal;font-size:9px;color:#6E7F95;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #s-home .home-ava{width:88px;height:88px;font-size:34px}
 .home-ava{width:66px;height:66px;flex:0 0 66px;border-radius:50%;display:grid;place-items:center;position:relative;
@@ -5665,7 +5667,7 @@ function compactGrayNotes(){
     const h1=hd.querySelector('h1');
     if(!sub||!h1) return;
     const text=(sub.innerText||'').replace(/\s+/g,' ').trim();
-    if(text && !hd.querySelector(':scope > .tip.sq-auto')){
+    if(text && !hd.querySelector('.tip.sq-auto')){
       const tip=document.createElement('span'); tip.className='tip sq-auto';
       tip.setAttribute('data-tip', text.slice(0,300)); tip.textContent='?';
       h1.insertAdjacentElement('afterend', tip);
