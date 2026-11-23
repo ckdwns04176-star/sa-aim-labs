@@ -1568,6 +1568,12 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
 #changes-mask .modal{width:780px}
 #change-list > div:not(.change-row){position:sticky;top:0;background:rgba(11,17,28,.96);padding:2px 0;z-index:1}
 
+/* v1.3.1 · 라이브러리 헤더 — 버튼 5개가 한 줄에 들어오게 */
+#s-recs .head-right{gap:6px;flex-wrap:nowrap}
+#s-recs .head-right .btn{height:30px;padding:0 9px;font-size:10.5px;white-space:nowrap;flex:0 0 auto}
+#s-recs > .head > div:first-child{min-width:0}
+#s-recs > .head .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
 /* v1.3.1 · 순위표 정렬 헤더 · 슬롯/푸터 제거 */
 .lb-row.hd [data-lbsort]{cursor:pointer;user-select:none;transition:color .15s}
 .lb-row.hd [data-lbsort]:hover{color:#FCD9A0}
@@ -1870,7 +1876,7 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
             </div>
             <div class="rec-list" id="rec-list"></div>
             <div class="rec-foot">
-              <button class="rec-more" id="rec-more"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>더 연습하기</button>
+              <button class="rec-more" id="rec-more"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>더 연습</button>
               <button class="rec-save" id="rec-save"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-save"/></svg>오늘 기록 저장 · 5칸 점수 로그</button>
             </div>
             <div class="rec-foot tools">
@@ -1920,7 +1926,6 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
             <div class="sub"><span id="hd2-count">40종 실측 시나리오</span><span class="sep">/</span><b id="hd2-trainer">KovaaK's</b><span class="sep">·</span><span>추천 시나리오 <b id="hd2-weapon">스나</b></span><span class="sep">·</span><span>약점 우선 정렬</span></div>
           </div>
           <div class="head-right">
-            <span class="chip amber" id="rec-head-chip">정밀 플릭 · 초급 난이도 매칭</span>
             <button class="btn btn-ghost" id="warmup-btn-2" title="랭크전 직전 5분 워밍업 3종">
               <svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-flame"/></svg>워밍업
             </button>
@@ -1928,10 +1933,10 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>더 연습하기
             </button>
             <button class="btn btn-ghost" id="kovak-import-head" title="코박스 stats 폴더에서 오늘 점수를 자동으로 가져옵니다 (최신화)">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-download"/></svg>코박스 점수
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-download"/></svg>코박스
             </button>
             <button class="btn btn-ghost" id="score-input-btn" title="오늘 추천 5종 점수를 한 번에 입력">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-save"/></svg>5칸 점수 입력
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-save"/></svg>5칸 입력
             </button>
             <button class="btn btn-primary" id="run-all-btn" title="5종을 순서대로 실행하고 점수 입력 창을 엽니다"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>5종 연속 실행</button>
           </div>
@@ -3305,8 +3310,8 @@ function drawRecGrid(){
         const todaysDiffers=false;   /* v1.3.1 — 오른쪽엔 PB만 (오늘 점수는 툴팁·모달에서) */
         return `<div style="display:flex;align-items:center;gap:4px;flex:1 1 26px;max-height:34px;min-height:26px;min-width:0;overflow:hidden;padding:0 5px;border-radius:5px;background:${hot?'rgba(245,158,11,.10)':'rgba(148,163,184,.045)'};border:1px solid ${hot?'rgba(245,158,11,.26)':'transparent'}">
           <span style="width:4px;height:4px;border-radius:50%;background:${hot?'#F59E0B':'#3C4A5E'};flex:0 0 4px"></span>
-          <span data-scen="${n}" data-scen-area="${a.key}" title="클릭하면 점수 입력 · 게임에서 재생 · PB ${pbv===null?'—':pbv.toLocaleString('ko-KR')}${todayTxt?' · 오늘 '+todayTxt:''}" style="cursor:pointer;font-size:9.3px;color:${hot?'#FDE8BD':'#A9B9CE'};font-weight:${hot?700:500};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 auto;min-width:0">${n}</span>
-          <span style="flex:0 0 auto;font-family:Chakra;font-size:8px;font-weight:700;white-space:nowrap;text-align:right">
+          <span data-scen="${n}" data-scen-area="${a.key}" title="클릭하면 점수 입력 · 게임에서 재생 · PB ${pbv===null?'—':pbv.toLocaleString('ko-KR')}${todayTxt?' · 오늘 '+todayTxt:''}" style="cursor:pointer;font-size:9px;color:${hot?'#FDE8BD':'#A9B9CE'};font-weight:${hot?700:500};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 auto;min-width:0">${n}</span>
+          <span style="flex:0 0 auto;font-family:Chakra;font-size:7.6px;font-weight:700;white-space:nowrap;text-align:right">
             ${pbv===null
               ? `<span style="color:#5E6E85">PB —</span>`
               : `<span style="color:#FCD9A0">PB ${pbv.toLocaleString('ko-KR')}</span>`}

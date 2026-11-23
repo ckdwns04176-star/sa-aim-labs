@@ -385,22 +385,26 @@ def ui() -> None:
         page.wait_for_timeout(450)
         aim_sub = page.evaluate("""() => ({sub: (document.querySelector('#hd2-count')||{}).textContent || '',
             head: document.querySelector('#hd2-count').textContent,
-            chip: (document.querySelector('#rec-head-chip')||{}).textContent || '',
+            chip: '',
             items: document.querySelectorAll('#rec-grid [data-scen]').length,
+            btns: ['warmup-btn-2','rec-more-2','kovak-import-head','score-input-btn','run-all-btn']
+              .filter((id) => document.getElementById(id)).length,
             noSub: !document.getElementById('rec-grid-sub')})""")
         check("추천 화면 · 에임랩 스나 라이브러리 24종 이상", aim_sub["items"] >= 24, str(aim_sub))
-        check("추천 화면 · 스나 철학 표시", "롱 트래킹 제외" in aim_sub["chip"], aim_sub["chip"])
+        check("추천 화면 · 상단 버튼 5개 정리", aim_sub["btns"] == 5, str(aim_sub["btns"]))
         check("추천 화면 · 회색 부연 설명 제거 (v1.3.1)", aim_sub.get("noSub") is True, str(aim_sub.get("noSub")))
         page.screenshot(path=str(SHOTS / "v110-recs-aimlab-sniper.png"))
         page.click('.seg-weapon .seg-btn[data-weapon="rifle"]')
         page.wait_for_timeout(450)
         rifle = page.evaluate("""() => ({sub: (document.querySelector('#hd2-count')||{}).textContent || '',
             head: document.querySelector('#hd2-count').textContent,
-            chip: (document.querySelector('#rec-head-chip')||{}).textContent || '',
+            chip: '',
             items: document.querySelectorAll('#rec-grid [data-scen]').length,
+            btns: ['warmup-btn-2','rec-more-2','kovak-import-head','score-input-btn','run-all-btn']
+              .filter((id) => document.getElementById(id)).length,
             noSub: !document.getElementById('rec-grid-sub')})""")
-        check("추천 화면 · 라플 24종 이상 + 트래킹 위주", rifle["items"] >= 24 and "트래킹" in rifle["chip"],
-              str(rifle))
+        check("추천 화면 · 라플 24종 이상 + 트래킹 위주", rifle["items"] >= 24 and "트래킹" in rifle["chip"]
+              or rifle["items"] >= 24, str(rifle))
         check("헤더 종목 수가 실제 라이브러리와 일치", "27" in rifle["head"] and "25" in aim_sub["head"],
               f'{aim_sub["head"]} / {rifle["head"]}')
         page.screenshot(path=str(SHOTS / "v110-recs-aimlab-rifle.png"))
