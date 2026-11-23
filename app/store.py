@@ -31,6 +31,10 @@ DEFAULTS: dict[str, Any] = {
         "tray_background": False,
         "notify": True,
         "autosave": True,
+        "hotkey_enabled": True,
+        "kovak_stats_path": "",
+        "kovak_autofill": False,
+        "week_goals": {"days": 5, "games": 25},
         "goals": {"win": 55.0, "kd": 60.0, "dmg": 1400, "rp": 4000},
         "supabase": {"url": DEFAULT_URL, "anon_key": DEFAULT_ANON_KEY},
         "cloud_email": "",
@@ -43,6 +47,7 @@ DEFAULTS: dict[str, Any] = {
     "utils": {
         "nvidia": {"mode": None, "alias": False, "last_backup": None, "points": []},
         "accel": None,
+        "perf": {"applied_at": None, "backup": None},
         "last_backup_at": None,
         "last_restore_at": None,
         "last_launch": None,

@@ -20,7 +20,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from app import paths  # noqa: E402  (path setup must come first)
-from app import winutil  # noqa: E402
+from app import tray, winutil  # noqa: E402
 
 
 def _setup_logging(debug: bool = False) -> None:
@@ -291,6 +291,72 @@ def main(argv: list[str] | None = None) -> int:
     else:
         log.info("window guard off (Windows 전용)")
 
+    # ── 새 버전 확인 (백그라운드 · 실패해도 조용히) ──
+    api.start_update_check()
+
+    # ── 시스템 트레이 + 전역 단축키 (Ctrl+Shift+A) ──
+    # 아이콘을 누르거나 단축키를 누르면 창을 숨기기/보이기 토글한다.
+    # pywebview 의 window.show()/hide() 는 WinForms Invoke 로 메인 스레드에 넘어간다.
+    def _set_hidden(state: bool) -> None:
+        try:
+            window._sa_hidden = bool(state)
+        except Exception:  # noqa: BLE001 - 표시용 플래그일 뿐
+            pass
+
+    def _toggle_window() -> None:
+        try:
+            if getattr(window, "_sa_hidden", False):
+                window.show()
+                _set_hidden(False)
+            else:
+                window.hide()
+                _set_hidden(True)
+        except Exception:  # noqa: BLE001 - 트레이 클릭이 앱을 죽이면 안 된다
+            log.exception("tray toggle failed")
+
+    def _quit_app() -> None:
+        try:
+            window.destroy()
+        except Exception:  # noqa: BLE001
+            log.exception("tray quit failed")
+
+    tray_icon: tray.TrayIcon | None = None
+    if os.name == "nt":
+        tray_icon = tray.TrayIcon(
+            title=paths.APP_TITLE,
+            icon_path=str(paths.icon_file()),
+            on_toggle=_toggle_window,
+            on_quit=_quit_app,
+            hotkey="Ctrl+Shift+A",
+        )
+        if tray_icon.start():
+            api.attach_tray(tray_icon)
+            enabled = bool(api.store.settings.get("hotkey_enabled", True))
+            tray_icon.set_hotkey(enabled)
+            log.info("tray on · icon=%s · hotkey %s=%s", tray_icon.icon_added, tray_icon.hotkey, enabled)
+        else:
+            log.info("tray off · %s", tray_icon.error)
+            tray_icon = None
+
+    # ── 창 닫기: 설정이 켜져 있고 트레이가 살아 있으면 '종료' 대신 숨기기 ──
+    try:
+        def _on_closing() -> bool:
+            if tray_icon is None or not tray_icon.active:
+                return True
+            if not bool(api.store.settings.get("tray_background")):
+                return True
+            try:
+                window.hide()
+                _set_hidden(True)
+            except Exception:  # noqa: BLE001 - 숨기기 실패하면 그냥 종료
+                return True
+            log.info("closed to tray (트레이로 숨김)")
+            return False
+
+        window.events.closing += _on_closing
+    except Exception:  # noqa: BLE001 - 이벤트 미지원 백엔드
+        log.debug("closing event unavailable", exc_info=True)
+
     def _on_loaded() -> None:
         log.info("ui loaded · bridge should be ready")
 
@@ -312,6 +378,11 @@ def main(argv: list[str] | None = None) -> int:
     finally:
         try:
             guard.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            if tray_icon is not None:
+                tray_icon.stop()
         except Exception:  # noqa: BLE001
             pass
     return 0

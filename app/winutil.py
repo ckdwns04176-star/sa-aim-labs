@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -11,6 +12,12 @@ from typing import Any
 from urllib.parse import urlparse
 
 MOUSE_KEY = r"Control Panel\Mouse"
+GAMEBAR_KEY = r"Software\Microsoft\GameBar"
+GAME_MODE_VALUE = "AutoGameModeEnabled"
+POWER_ULTIMATE = "e9a42b02-d5df-448d-aa00-03f14749eb61"   # 최고 성능(Ultimate Performance)
+POWER_HIGH = "8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c"       # 고성능(High performance)
+POWER_BALANCED = "381b4222-f694-41f0-9685-ff5bb260df2e"  # 균형 조정
+_GUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 SPI_SETMOUSE = 0x0004
 SPIF_UPDATEINIFILE = 0x01
 SPIF_SENDCHANGE = 0x02
@@ -231,6 +238,211 @@ def window_fix_plan(rect: tuple[int, int, int, int], logical: tuple[int, int] = 
         "x": nx,
         "y": ny,
         "moved": (nx, ny) != (x, y),
+    }
+
+
+# ------------------------------------------------------------------ perf mode (전원 · 게임 모드)
+def _run(cmd: list[str], timeout: float = 12.0) -> tuple[int, str]:
+    """외부 명령 실행 (shell 없이 · 짧은 타임아웃 · 실패는 조용히)."""
+    try:
+        proc = subprocess.run(  # noqa: S603 - 인자 고정, shell 미사용
+            cmd, capture_output=True, text=True, timeout=timeout,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0,
+        )
+        out = (proc.stdout or "") + (proc.stderr or "")
+        return int(proc.returncode), out.strip()
+    except (OSError, subprocess.SubprocessError) as exc:
+        return -1, str(exc)
+
+
+def read_power_plan() -> dict[str, Any] | None:
+    """현재 활성 전원 옵션 {guid, name}."""
+    if os.name != "nt":
+        return None
+    code, out = _run(["powercfg", "/getactivescheme"])
+    if code != 0:
+        return None
+    for line in out.splitlines():
+        match = _GUID_RE.search(line)
+        if not match:
+            continue
+        name = ""
+        paren = re.search(r"\(([^)]*)\)", line)
+        if paren:
+            name = paren.group(1).strip()
+        if not name:
+            name = line.split(match.group(0), 1)[-1].strip(" :\t") or "전원 옵션"
+        return {"guid": match.group(0).lower(), "name": name}
+    return None
+
+
+def list_power_plans() -> list[dict[str, str]]:
+    if os.name != "nt":
+        return []
+    code, out = _run(["powercfg", "/list"])
+    if code != 0:
+        return []
+    plans: list[dict[str, str]] = []
+    for line in out.splitlines():
+        match = _GUID_RE.search(line)
+        if not match:
+            continue
+        paren = re.search(r"\(([^)]*)\)", line)
+        plans.append({"guid": match.group(0).lower(), "name": (paren.group(1).strip() if paren else "")})
+    return plans
+
+
+def read_game_mode() -> dict[str, Any]:
+    """윈도우 '게임 모드' 레지스트리 값 (AutoGameModeEnabled)."""
+    if os.name != "nt":
+        return {"supported": False, "exists": False, "enabled": None}
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, GAMEBAR_KEY) as key:
+            try:
+                value, _ = winreg.QueryValueEx(key, GAME_MODE_VALUE)
+                return {"supported": True, "exists": True, "enabled": bool(int(value))}
+            except OSError:
+                return {"supported": True, "exists": False, "enabled": None}
+    except OSError:
+        return {"supported": True, "exists": False, "enabled": None}
+
+
+def write_game_mode(enabled: bool) -> dict[str, Any]:
+    if os.name != "nt":
+        return {"ok": False, "unsupported": True}
+    import winreg
+
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, GAMEBAR_KEY, 0, winreg.KEY_SET_VALUE) as key:
+            winreg.SetValueEx(key, GAME_MODE_VALUE, 0, winreg.REG_DWORD, 1 if enabled else 0)
+        return {"ok": True, "enabled": bool(enabled)}
+    except OSError as exc:
+        return {"ok": False, "message": f"게임 모드 레지스트리를 쓰지 못했습니다 · {exc}"}
+
+
+def restore_game_mode(backup: dict[str, Any] | None) -> dict[str, Any]:
+    """적용 전 상태로 되돌린다 — 원래 값이 없었으면 키를 지운다."""
+    if os.name != "nt":
+        return {"ok": False, "unsupported": True}
+    import winreg
+
+    backup = backup or {}
+    if not backup.get("exists"):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, GAMEBAR_KEY, 0, winreg.KEY_SET_VALUE) as key:
+                winreg.DeleteValue(key, GAME_MODE_VALUE)
+        except OSError:
+            return {"ok": True, "restored": "absent"}   # 이미 없음 = 원래 상태
+        return {"ok": True, "restored": "absent"}
+    value = 1 if backup.get("enabled") else 0
+    result = write_game_mode(bool(value))
+    return {**result, "restored": "value"}
+
+
+def perf_state() -> dict[str, Any]:
+    """유틸 탭 표시용 — 현재 전원 옵션 + 게임 모드."""
+    plan = read_power_plan()
+    game = read_game_mode()
+    return {
+        "supported": os.name == "nt",
+        "power": plan,
+        "game_mode": game,
+        "optimal": bool(plan and plan.get("guid") in (POWER_ULTIMATE, POWER_HIGH))
+                   and bool(game.get("enabled")),
+        "label": (plan or {}).get("name") or ("윈도우에서만 확인됩니다" if os.name != "nt" else "확인하지 못했습니다"),
+    }
+
+
+def apply_perf_mode() -> dict[str, Any]:
+    """고성능/최고 성능 전원 옵션 + 게임 모드 원클릭 적용.
+
+    적용 전 상태(전원 GUID·게임 모드 값)를 그대로 돌려주므로 호출한 쪽이 보관하면
+    `restore_perf_mode` 로 원래대로 되돌릴 수 있다.
+    """
+    if os.name != "nt":
+        return {"ok": False, "unsupported": True, "simulated": True,
+                "message": "전원 옵션·게임 모드는 윈도우에서만 바뀝니다 (지금은 시뮬레이션)"}
+    before = read_power_plan()
+    game_before = read_game_mode()
+    backup = {"at": time.strftime("%Y-%m-%dT%H:%M:%S"), "power": before, "game_mode": game_before}
+
+    applied_guid, applied_name, attempts = None, None, []
+    plans = list_power_plans()
+    guids = {p["guid"] for p in plans}
+    if POWER_ULTIMATE in guids:
+        code, out = _run(["powercfg", "/setactive", POWER_ULTIMATE])
+        attempts.append(("ultimate", code))
+        if code == 0:
+            applied_guid, applied_name = POWER_ULTIMATE, "최고 성능"
+    if applied_guid is None:
+        # 최고 성능이 없으면 한 번 만들어 본다 (실패해도 무해)
+        code, out = _run(["powercfg", "/duplicatescheme", POWER_ULTIMATE])
+        attempts.append(("duplicate", code))
+        match = _GUID_RE.search(out)
+        if code == 0 and match:
+            new_guid = match.group(0).lower()
+            code2, _ = _run(["powercfg", "/setactive", new_guid])
+            attempts.append(("setactive-new", code2))
+            if code2 == 0:
+                applied_guid, applied_name = new_guid, "최고 성능"
+    if applied_guid is None:
+        for target_guid, target_name in ((POWER_HIGH, "고성능"),):
+            code, _ = _run(["powercfg", "/setactive", target_guid])
+            attempts.append(("high", code))
+            if code == 0:
+                applied_guid, applied_name = target_guid, target_name
+        if applied_guid is None:
+            code, _ = _run(["powercfg", "/setactive", "SCHEME_MIN"])
+            attempts.append(("scheme_min", code))
+            if code == 0:
+                applied_guid, applied_name = "SCHEME_MIN", "고성능"
+
+    game = write_game_mode(True)
+    power_after = read_power_plan()
+    ok = applied_guid is not None or bool(game.get("ok"))
+    if not ok:
+        return {"ok": False, "backup": backup, "attempts": attempts,
+                "message": "전원 옵션을 바꾸지 못했습니다 · powercfg 권한을 확인해 주세요"}
+    parts = [f"전원 옵션 → {applied_name or (power_after or {}).get('name') or '고성능'}"]
+    if game.get("ok"):
+        parts.append("게임 모드 켜기")
+    return {
+        "ok": True,
+        "backup": backup,
+        "power_before": before,
+        "power_now": power_after,
+        "game_mode": game,
+        "attempts": attempts,
+        "message": "⚡ 적용 완료 · " + " · ".join(parts) + " (복구 지점 저장됨)",
+    }
+
+
+def restore_perf_mode(backup: dict[str, Any] | None) -> dict[str, Any]:
+    """적용 전 전원 옵션·게임 모드로 되돌린다."""
+    if os.name != "nt":
+        return {"ok": False, "unsupported": True, "simulated": True,
+                "message": "전원 옵션 복구는 윈도우에서만 동작합니다 (지금은 시뮬레이션)"}
+    backup = backup or {}
+    power = backup.get("power") or {}
+    guid = str(power.get("guid") or "")
+    steps, ok = [], False
+    if guid and _GUID_RE.fullmatch(guid):
+        code, _ = _run(["powercfg", "/setactive", guid])
+        steps.append(("power", code))
+        ok = code == 0
+    game = restore_game_mode(backup.get("game_mode") or {})
+    if game.get("ok"):
+        ok = True
+    now = read_power_plan()
+    return {
+        "ok": ok,
+        "steps": steps,
+        "power_now": now,
+        "game_mode": read_game_mode(),
+        "message": ("↩ 원래 전원 옵션·게임 모드로 되돌렸습니다" if ok
+                    else "복구 지점이 없습니다 · 적용을 먼저 실행해 주세요"),
     }
 
 

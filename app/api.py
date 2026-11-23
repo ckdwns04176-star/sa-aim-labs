@@ -16,7 +16,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from . import nexon, nvidia, paths, scoring, supabase_sync, winutil
+from . import kovak, nexon, nvidia, paths, scoring, supabase_sync, tray, updates, winutil
 from .store import Store, now_iso, today_str
 
 GAMES = ("kovak", "aimlab")
@@ -33,10 +33,21 @@ log = logging.getLogger("api")
 # timer and left the app on its sample (preview) data.  The window reference now
 # lives in this module-level slot: no public attribute is walked.
 _WINDOW_REF: Any = None
+_TRAY_REF: Any = None
 
 
 def window_ref() -> Any:
     return _WINDOW_REF
+
+
+def attach_tray(tray_icon: Any) -> None:
+    """main.py 가 만든 트레이 아이콘을 API 가 쓸 수 있게 넘긴다."""
+    global _TRAY_REF
+    _TRAY_REF = tray_icon
+
+
+def tray_ref() -> Any:
+    return _TRAY_REF
 
 
 class Api:
@@ -44,8 +55,19 @@ class Api:
         self.store = Store() if store is None else store
         self._drs_state_at = 0.0
         self._drs_state: dict[str, Any] | None = None
+        self._perf_state_at = 0.0
+        self._perf_state: dict[str, Any] | None = None
         self._busy: str | None = None
         self._last_progress = 0.0
+
+    def start_update_check(self) -> None:
+        """앱 시작 시 백그라운드로 새 버전을 조용히 확인한다 (실패해도 무시)."""
+        try:
+            updates.start_background(paths.APP_VERSION)
+        except Exception:  # noqa: BLE001 - 확인 실패는 앱 시작을 막지 않는다
+            log.debug("update check could not start", exc_info=True)
+
+    start_update_check._serializable = False  # type: ignore[attr-defined]
 
     # ------------------------------------------------------------ helpers
     def attach(self, window) -> None:
@@ -256,6 +278,13 @@ class Api:
         except Exception:  # noqa: BLE001
             log.exception("state · barracks/leaderboard failed")
             barracks, members = None, []
+        if isinstance(barracks, dict):
+            # 🧭 최근 100판 플레이 코칭 — 저장된 지표만으로 매번 새로 계산(추가 API 0건)
+            try:
+                barracks["play_coaching"] = scoring.play_coaching(barracks)
+            except Exception:  # noqa: BLE001
+                log.exception("state · play coaching failed")
+                barracks["play_coaching"] = []
 
         if light:
             utils_state = {
@@ -289,6 +318,23 @@ class Api:
         except Exception:  # noqa: BLE001
             log.exception("state · goals failed")
             goals = []
+
+        # ── v1.2.0 · 잔디 히트맵 · 주간 목표 · 훈련 전후 비교 (모두 로컬 계산) ──
+        try:
+            heatmap_state = scoring.heatmap(records, 14, today)
+        except Exception:  # noqa: BLE001
+            log.exception("state · heatmap failed")
+            heatmap_state = None
+        try:
+            week_state = scoring.weekly_progress(records, self.store.settings.get("week_goals"), today)
+        except Exception:  # noqa: BLE001
+            log.exception("state · weekly goals failed")
+            week_state = None
+        try:
+            impact_state = scoring.training_impact((barracks or {}).get("matches") or [], records, today)
+        except Exception:  # noqa: BLE001
+            log.exception("state · training impact failed")
+            impact_state = None
 
         return {
             "meta": {
@@ -337,6 +383,12 @@ class Api:
             "utils": utils_state,
             "cloud": cloud_state,
             "goals": goals,
+            "heatmap": heatmap_state,
+            "week": week_state,
+            "impact": impact_state,
+            "update": updates.cached(),
+            "tray": self._tray_state(),
+            "v120": True,
         }
 
     def _goals(self, barracks: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -420,7 +472,8 @@ class Api:
 
     def save_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         allowed = {"nickname", "api_key", "kovak_path", "aimlab_path", "auto_sync", "auto_launch",
-                   "tray_background", "notify", "autosave", "goals", "cloud_email"}
+                   "tray_background", "notify", "autosave", "goals", "cloud_email",
+                   "hotkey_enabled", "kovak_stats_path", "kovak_autofill", "week_goals"}
         clean: dict[str, Any] = {}
         for key, value in (patch or {}).items():
             if key not in allowed:
@@ -433,10 +486,23 @@ class Api:
                     continue      # 화면에 보이는 마스킹 문자열은 저장하지 않는다
             elif key == "goals" and isinstance(value, dict):
                 value = {k: float(v) for k, v in value.items() if k in ("win", "kd", "dmg", "rp") and str(v).strip() != ""}
+            elif key == "week_goals" and isinstance(value, dict):
+                clean_goals: dict[str, int] = {}
+                for k in ("days", "games"):
+                    try:
+                        number = int(float(value.get(k)))
+                    except (TypeError, ValueError):
+                        continue
+                    clean_goals[k] = max(1, min(7 if k == "days" else 200, number))
+                value = clean_goals
+            elif key in ("kovak_stats_path", "kovak_path", "aimlab_path"):
+                value = str(value or "").strip()[:400]
             elif isinstance(value, bool):
                 value = bool(value)
             clean[key] = value
         self.store.update_settings(clean)
+        if "hotkey_enabled" in clean:
+            self._apply_hotkey(bool(clean["hotkey_enabled"]))
         return self.get_state()
 
     def save_cloud_config(self, url: str, anon_key: str) -> dict[str, Any]:
@@ -497,9 +563,16 @@ class Api:
                 "scenarios": scen_rows,
                 "note": str(payload.get("note") or "")[:200],
             }
+            # 🏆 NEW PB — 저장 전 같은 날짜 기록을 빼고 비교한다(오늘 점수 수정과 구분)
+            prior = [r for r in self.store.records()
+                     if not (r.get("date") == date and r.get("game") == game and r.get("weapon") == weapon)]
+            try:
+                pbs = scoring.new_pbs(prior, scen_rows)
+            except Exception:  # noqa: BLE001 - PB 계산 실패가 저장을 막지 않는다
+                pbs = []
             self._drop_previous(date, game, weapon, [s["name"] for s in scen_rows])
             saved = self.store.add_record(record)
-            return {"ok": True, "record": saved, "state": self._build_state()}
+            return {"ok": True, "record": saved, "pbs": pbs, "state": self._build_state()}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
 
@@ -1117,6 +1190,281 @@ class Api:
 
     def cloud_status(self) -> dict[str, Any]:
         return {"ok": True, "cloud": self._cloud_state(), "state": self._build_state()}
+
+    # ============================================================ v1.2.0
+    # 코박스 점수 인식 · 워밍업 · 플레이리스트 · 리포트 카드 · 업데이트 ·
+    # 1:1 비교 · 전원/게임 모드 · 트레이
+    # ------------------------------------------------------------ 코박스 stats
+    def _today_target_names(self) -> list[str]:
+        """오늘 추천 5종 + 더 연습하기에 올라온 시나리오 이름들."""
+        today = _dt.date.today().isoformat()
+        names: list[str] = []
+        for entry in self.store.rotation():
+            if entry.get("date") == today:
+                names.extend(str(n) for n in (entry.get("names") or []))
+        for entry in self.store.more():
+            if entry.get("date") == today:
+                names.extend(str(n) for n in (entry.get("names") or []))
+        seen: set[str] = set()
+        out: list[str] = []
+        for name in names:
+            key = name.strip().lower()
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            out.append(name)
+        return out
+
+    def import_kovak_scores(self, names: list[str] | None = None, days: int = 1) -> dict[str, Any]:
+        """코박스 `stats/*.csv` 에서 오늘(또는 최근) 점수를 읽어 추천 과제와 맞춘다."""
+        try:
+            custom = (self.store.settings.get("kovak_stats_path") or "").strip() or None
+            dirs = kovak.stats_dirs(custom)
+            targets = [str(n).strip() for n in (names or []) if str(n).strip()]
+            if not targets:
+                targets = self._today_target_names()
+            if not dirs:
+                return {"ok": False, "found": False, "matched": [], "dirs": [],
+                        "message": "코박스 stats 폴더를 찾지 못했습니다 · 설정 탭에서 '코박스 통계 폴더'를 직접 지정해 주세요"}
+            runs = kovak.latest_runs(dirs, days=max(1, min(30, int(days or 1))))
+            matched = kovak.match_targets(targets, runs)
+            scanned = next((int(r.get("scanned") or 0) for r in runs.values()), 0)
+            if not runs:
+                return {"ok": True, "found": False, "matched": [], "dirs": [str(d) for d in dirs],
+                        "scanned": scanned, "checked_dirs": len(dirs),
+                        "message": f"오늘(최근 {days}일) 코박스 기록이 없습니다 · 한 판 플레이하면 자동으로 잡힙니다"}
+            if not matched:
+                return {"ok": True, "found": True, "matched": [], "dirs": [str(d) for d in dirs],
+                        "scanned": scanned, "runs": len(runs), "checked_dirs": len(dirs),
+                        "message": f"코박스 기록 {len(runs)}종을 찾았지만 오늘 추천 과제와 겹치는 항목이 없습니다"}
+            return {"ok": True, "found": True, "matched": matched, "dirs": [str(d) for d in dirs],
+                    "scanned": scanned, "runs": len(runs), "checked_dirs": len(dirs),
+                    "message": f"📥 코박스 점수 {len(matched)}종 인식 · {', '.join(m['name'] for m in matched[:3])}"
+                               + (" 외" if len(matched) > 3 else "")}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, matched=[])
+
+    def kovak_stats_state(self) -> dict[str, Any]:
+        """설정 탭 표시용 — 지금 읽을 수 있는 stats 폴더와 최근 기록 수."""
+        custom = (self.store.settings.get("kovak_stats_path") or "").strip() or None
+        try:
+            dirs = kovak.stats_dirs(custom)
+        except Exception:  # noqa: BLE001
+            dirs = []
+        try:
+            runs = kovak.latest_runs(dirs, days=7) if dirs else {}
+        except Exception:  # noqa: BLE001
+            runs = {}
+        return {"ok": True, "dirs": [str(d) for d in dirs], "found": bool(dirs),
+                "recent": len(runs), "custom": custom,
+                "playlists": str(kovak.find_playlists_dir() or paths.playlists_dir())}
+
+    # ------------------------------------------------------------ 워밍업 · 플레이리스트
+    def warmup_plan(self, game: str = "kovak", weapon: str = "sniper") -> dict[str, Any]:
+        """랭크전 직전 5분 워밍업 3종."""
+        try:
+            game = game if game in GAMES else "kovak"
+            weapon = weapon if weapon in WEAPONS else "sniper"
+            records = self.store.records()
+            today = _dt.date.today()
+            recs = scoring.warmup_recs(game=game, weapon=weapon,
+                                       values=scoring.profile_values(records), records=records, today=today)
+            if not recs:
+                raise ValueError("워밍업 시나리오를 고르지 못했습니다")
+            return {"ok": True, "recs": recs, "game": game, "weapon": weapon,
+                    "label": "⚡ 5분 워밍업 · " + ("KovaaK's" if game == "kovak" else "Aim Lab"),
+                    "message": f"⚡ 워밍업 3종 · {scoring.WEAPON_PHILOSOPHY.get(weapon, '')}"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, recs=[])
+
+    def export_playlist(self, kind: str = "recs", game: str = "kovak", weapon: str = "sniper",
+                        name: str | None = None, target_dir: str | None = None) -> dict[str, Any]:
+        """오늘 추천 5종 / 5분 워밍업 3종을 코박스 플레이리스트로 저장."""
+        try:
+            game = game if game in GAMES else "kovak"
+            weapon = weapon if weapon in WEAPONS else "sniper"
+            records = self.store.records()
+            today = _dt.date.today()
+            stamp = today.strftime("%m.%d")
+            if kind == "warmup":
+                recs = scoring.warmup_recs(game=game, weapon=weapon,
+                                           values=scoring.profile_values(records), records=records, today=today)
+                default_name = f"SA AIM 5분 워밍업 {stamp}"
+            else:
+                summary = scoring.summary(records, game, weapon, today)
+                recs = self._today_recs(summary["values"], records, game, weapon, today)
+                default_name = f"SA AIM 추천 5종 {stamp}"
+            names = [str(r.get("name")) for r in recs if r.get("name")]
+            if not names:
+                raise ValueError("플레이리스트에 담을 시나리오가 없습니다 · 먼저 추천을 불러와 주세요")
+            folder = kovak.find_playlists_dir(target_dir or None)
+            target = folder or paths.playlists_dir()
+            result = kovak.write_playlist(
+                (name or default_name).strip(), names, target=target,
+                description=f"SA AIM LABS · {'KovaaK\'s' if game == 'kovak' else 'Aim Lab'} · {weapon} · {today.isoformat()}",
+            )
+            note = ""
+            if game != "kovak":
+                note = " · 플레이리스트는 KovaaK's 전용입니다 (Aim Lab 은 지원하지 않습니다)"
+            if not folder:
+                note += " · 코박스 Playlists 폴더를 찾지 못해 앱 데이터 폴더에 저장했습니다 · 파일을 Playlists 폴더로 복사해 주세요"
+            return {"ok": True, **result, "in_game": bool(folder), "names": names, "kind": kind,
+                    "message": f"📜 플레이리스트 {len(names)}종 저장 · {target}{note}"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    # ------------------------------------------------------------ 리포트 카드 PNG
+    def save_report_card(self, data_url: str, label: str | None = None) -> dict[str, Any]:
+        """UI(캔버스)가 만든 리포트 카드 PNG(data URL)를 파일로 저장한다."""
+        import base64
+
+        try:
+            raw = str(data_url or "").strip()
+            if not raw:
+                raise ValueError("리포트 카드 이미지가 비어 있습니다")
+            if raw.startswith("data:") and "," in raw[:120]:
+                raw = raw.split(",", 1)[1]
+            blob = base64.b64decode(raw, validate=False)
+            if len(blob) < 200:
+                raise ValueError("리포트 카드 이미지를 읽지 못했습니다")
+            if len(blob) > 12_000_000:
+                raise ValueError("리포트 카드 이미지가 너무 큽니다")
+            stamp = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+            path = paths.reports_dir() / f"sa_aim_report_{stamp}.png"
+            path.write_bytes(blob)
+            return {"ok": True, "path": str(path), "folder": str(path.parent), "size": len(blob),
+                    "label": (label or "").strip()[:60],
+                    "message": f"📸 리포트 카드 저장 완료 · {path.name} ({len(blob) / 1024:.0f}KB)"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    # ------------------------------------------------------------ 업데이트 알림
+    def check_update(self, force: bool = True) -> dict[str, Any]:
+        try:
+            return updates.check(paths.APP_VERSION, force=bool(force))
+        except Exception as exc:  # noqa: BLE001 - 확인 실패는 조용히
+            return {"ok": False, "newer": False, "current": paths.APP_VERSION, "message": str(exc)}
+
+    # ------------------------------------------------------------ 1:1 비교
+    def compare_friend(self, nickname: str) -> dict[str, Any]:
+        """저장된 순위표 값만으로 나 vs 친구 (추가 API 호출 0건)."""
+        try:
+            members = self._ensure_me(None)
+            key = str(nickname or "").strip().lower()
+            if not key:
+                raise ValueError("비교할 친구를 선택해 주세요")
+            target = next((m for m in members if str(m.get("name", "")).strip().lower() == key), None)
+            if target is None:
+                raise ValueError(f"'{nickname}' 을(를) 순위표에서 찾지 못했습니다")
+            me = next((m for m in members if m.get("me")), None)
+            if me is None:
+                raise ValueError("내 전적이 없습니다 · 병영수첩을 먼저 불러와 주세요")
+            compare = scoring.friend_compare(me, target)
+            return {"ok": True, "compare": compare,
+                    "message": f"{compare['me']['name']} vs {compare['friend']['name']} · {compare['verdict']}"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    # ------------------------------------------------------------ 전원 · 게임 모드
+    def perf_state(self, force: bool = False) -> dict[str, Any]:
+        now = time.monotonic()
+        if not force and self._perf_state and now - self._perf_state_at < 5:
+            return {"ok": True, "perf": dict(self._perf_state)}
+        try:
+            state = winutil.perf_state()
+        except Exception as exc:  # noqa: BLE001
+            state = {"supported": False, "label": str(exc), "power": None, "game_mode": {}}
+        backup = (self.store.utils().get("perf") or {}).get("backup")
+        state["backup"] = backup
+        state["applied_at"] = (self.store.utils().get("perf") or {}).get("applied_at")
+        self._perf_state, self._perf_state_at = state, now
+        return {"ok": True, "perf": dict(state)}
+
+    def apply_perf_mode(self) -> dict[str, Any]:
+        try:
+            result = winutil.apply_perf_mode()
+            if result.get("ok"):
+                utils = self.store.utils()
+                utils["perf"] = {"applied_at": now_iso(), "backup": result.get("backup"),
+                                 "mode": (result.get("power_now") or {}).get("name")}
+                self.store.save()
+                try:
+                    paths.perf_backup_file().write_text(
+                        json.dumps(result.get("backup") or {}, ensure_ascii=False, indent=2), encoding="utf-8")
+                except OSError:
+                    pass
+            self._perf_state = None
+            return {**result, "perf": self.perf_state(force=True).get("perf")}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def restore_perf_mode(self) -> dict[str, Any]:
+        try:
+            backup = (self.store.utils().get("perf") or {}).get("backup")
+            result = winutil.restore_perf_mode(backup)
+            if result.get("ok"):
+                utils = self.store.utils()
+                utils["perf"] = {"applied_at": None, "backup": None,
+                                 "restored_at": now_iso(), "mode": None}
+                self.store.save()
+            self._perf_state = None
+            return {**result, "perf": self.perf_state(force=True).get("perf")}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    # ------------------------------------------------------------ 트레이 · 단축키
+    def _tray_state(self) -> dict[str, Any]:
+        set_ = self.store.settings
+        icon = tray_ref()
+        state = {"supported": tray.available(), "active": False, "icon": False,
+                 "hotkey": False, "hotkey_spec": "Ctrl+Shift+A", "error": None}
+        try:
+            state.update({k: v for k, v in tray.status(icon).items()})
+        except Exception:  # noqa: BLE001
+            pass
+        state["background"] = bool(set_.get("tray_background"))
+        state["hotkey_enabled"] = bool(set_.get("hotkey_enabled", True))
+        state["hidden"] = bool(getattr(self._win, "_sa_hidden", False))
+        return state
+
+    def _apply_hotkey(self, enabled: bool) -> None:
+        icon = tray_ref()
+        if icon is None:
+            return
+        try:
+            icon.set_hotkey(bool(enabled))
+        except Exception:  # noqa: BLE001
+            log.debug("hotkey could not change", exc_info=True)
+
+    def tray_hide(self) -> dict[str, Any]:
+        if not self._win:
+            return self._ok(hidden=False, message="앱 창을 찾지 못했습니다")
+        try:
+            self._win.hide()
+            try:
+                self._win._sa_hidden = True
+            except Exception:  # noqa: BLE001
+                pass
+            return self._ok(hidden=True,
+                            message="트레이로 숨겼습니다 · 단축키(Ctrl+Shift+A) 또는 트레이 아이콘으로 다시 엽니다")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def tray_show(self) -> dict[str, Any]:
+        if not self._win:
+            return self._ok(hidden=False)
+        try:
+            self._win.show()
+            try:
+                self._win._sa_hidden = False
+            except Exception:  # noqa: BLE001
+                pass
+            return self._ok(hidden=False)
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def tray_state(self) -> dict[str, Any]:
+        return {"ok": True, "tray": self._tray_state(), "state": self._build_state()}
 
     # ------------------------------------------------------------ misc
     def app_info(self) -> dict[str, Any]:

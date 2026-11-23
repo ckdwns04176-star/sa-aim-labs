@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Iterable, Sequence
 
-from . import paths
+from . import paths, scoring
 
 BASE_URL = "https://open.api.nexon.com"
 MATCH_MODE = "폭파미션"
@@ -466,7 +466,7 @@ def build_barracks(client: NexonClient, nickname: str, progress: Progress | None
     solo_rp = tier.get("solo_rank_match_score")
     party_rp = tier.get("party_rank_match_score")
     created = str(basic.get("user_date_create") or "")
-    return {
+    payload = {
         "nickname": basic.get("user_name") or nickname,
         "ouid": ouid,
         "basic": {
@@ -498,6 +498,12 @@ def build_barracks(client: NexonClient, nickname: str, progress: Progress | None
         "matches": _match_rows(rows, details, nickname),
         "updated_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
     }
+    # 🧭 최근 100판 플레이 코칭 — 이미 받은 지표만으로 계산한다(추가 API 0건)
+    try:
+        payload["play_coaching"] = scoring.play_coaching(payload)
+    except Exception:  # noqa: BLE001 - 코칭 실패가 병영수첩을 막지 않는다
+        payload["play_coaching"] = []
+    return payload
 
 
 def fetch_member(client: NexonClient, nickname: str, *, ouid: str | None = None,

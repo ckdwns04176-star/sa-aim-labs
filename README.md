@@ -12,12 +12,16 @@ app/scoring.py          통합 에임 프로필 · 5영역 평점 · 18단계 �
 app/drs.py              NVIDIA Drs DB 리더/패처 (계단현상 끄기 = AA compatibility 0x00401241)
 app/supabase_sync.py    Supabase Auth + PostgREST (표준 라이브러리만 사용)
 app/nvidia.py           NVIDIA Drs 프로필 백업/적용/복구
-app/winutil.py          마우스 가속 · steam:// · aimlab:// 실행
+app/winutil.py          마우스 가속 · 전원 옵션/게임 모드 · steam:// · aimlab:// 실행
+app/kovak.py            코박스 stats/*.csv 점수 인식 · 플레이리스트(.json/.plo) 생성
+app/updates.py          GitHub Releases 새 버전 확인 (표준 라이브러리만)
+app/tray.py             시스템 트레이 아이콘 + Ctrl+Shift+A 전역 단축키 (Win32 ctypes)
 ui/index.html           화면 (정적 디자인 + 샘플 데이터 + 첫 로딩 스플래시)
 ui/bridge.js            화면 ↔ pywebview.api 연결 (실데이터 반영)
 tests/api_test.py       백엔드 테스트 (실응답 캐시 재생 · Drs 패치 · 평점 정규화)
 tests/ui_test.py        Playwright UI 테스트 (목 브리지 · 스크린샷)
 tests/v110_test.py      v1.1.0 검증 (통합 점수 · 추천 UX · 모달 · 스크롤 · 순위표 · 창 고정)
+tests/v120_test.py      v1.2.0 검증 (코박스 인식 · 1:1 비교 · 전후 비교 · 리포트 카드 · 코칭 등 13종)
 supabase/schema.sql     user_profiles 테이블 + RLS (SQL Editor 에 1회 실행)
 .github/workflows/      windows-latest 에서 .exe 빌드
 ```
@@ -74,6 +78,33 @@ pyinstaller --noconfirm --onefile --windowed --icon assets/app.ico --name "SA_Ai
 - **친구 순위표**: 파티 RP 도 솔로와 같은 `엠블럼 + 티어명 + RP` 형태, 같은 정렬 규칙.
 - **창 크기 고정**: 서든어택 저해상도 실행 후 바탕화면 복귀 시 DPI·해상도 변화로 창이 커지지 않게
   `winutil.WindowGuard` 가 0.3초 간격으로 실측해 논리 1200×750 으로 되돌리고 화면 밖 이탈을 막습니다.
+
+## v1.2.0 — 13가지 신규 기능
+
+- **📥 코박스 점수 자동 인식**: `stats/*.csv`(Steam 기본 경로 자동 탐색 + 설정에서 폴더 지정)의
+  `Score:` 값을 읽어 오늘 추천 5종·더 연습하기와 이름이 겹치는 항목만 채워 저장합니다.
+  창을 다시 열 때 자동으로 채우는 옵션(`코박스 점수 자동 채움`)도 있습니다. 추가 API 0건.
+- **⚔ 친구 1:1 전적 비교**: 순위표에서 친구 행을 클릭하면 저장된 값만으로
+  솔로·파티 RP · 최근 100판 승률 · K/D · 평균 딜량 · 주무기 성향을 나란히 비교합니다(API 0건).
+- **🧭 최근 100판 플레이 코칭**: 병영수첩 상단에 승률·K/D·딜량·약한/강한 맵·솔로/파티 격차·
+  최근 5판 흐름을 규칙으로 조합한 3~4줄 코칭을 보여 줍니다(캐시 데이터만 사용).
+- **📊 훈련일 vs 미훈련일 랭크전 비교**: 대시보드에서 훈련한 날과 안 한 날의
+  승률·K/D·평균 딜량을 나란히 비교합니다(표본 5판 미만이면 안내 문구).
+- **📸 오늘의 에임 리포트 카드(PNG)**: 종합 점수·티어·5영역·솔로/파티 티어를 담은
+  900×1180 다크 카드를 캔버스로 그려 `%APPDATA%\SA_Aim_Labs\reports` 에 저장합니다.
+- **⬆ 새 버전 확인**: 시작할 때 GitHub Releases `latest` 를 백그라운드로 확인해
+  상단 바에 `새 버전 있음` 배너를 띄웁니다(실패·오프라인은 조용히 무시, 설정 탭에 수동 확인 버튼).
+- **⚡ 5분 워밍업**: 지금 트레이너·무기에 맞는 짧은 핵심 3종을 골라 모달에서 바로 실행합니다.
+- **⚡ 고성능 전원 + 게임 모드**: `powercfg` 로 고성능/최고 성능 전원 옵션과
+  `AutoGameModeEnabled` 를 한 번에 적용하고, 적용 전 GUID·레지스트리 값을 저장해 한 번에 복구합니다.
+- **🎯 주간 훈련 목표**: 주 N일 출석 · 주 N판 목표와 이번 주 진행률 게이지(기본 주 5일·25판).
+- **📜 플레이리스트 내보내기**: 오늘 추천 5종/워밍업 3종을 코박스 Playlists 폴더에
+  `scenario_name`/`play_Count` 스키마 그대로 `.json` + `.plo` 로 저장합니다.
+- **🏆 NEW PB**: 시나리오 점수를 저장할 때 내 최고 기록을 넘으면 토스트로 알리고,
+  추천 행에 `🏆 PB` 배지를 붙입니다.
+- **🟩 훈련 잔디 캘린더**: 최근 14주 일별 훈련량을 4단계 색으로 보여 주는 GitHub 스타일 히트맵.
+- **🪟 트레이 + 호출 단축키**: `Shell_NotifyIconW` 트레이 아이콘(좌클릭 토글·우클릭 메뉴)과
+  `Ctrl+Shift+A` 전역 단축키로 창을 숨기기/보이기. 설정에서 닫기=트레이 숨기기, 단축키 ON/OFF.
 
 ## 동작 메모
 

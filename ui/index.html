@@ -470,7 +470,7 @@ svg{display:block}
 .rec-foot .rec-more{flex:1}
 
 /* bottom row */
-.bottom{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;flex:1;min-height:0}
+.bottom{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;flex:1 1 178px;min-height:178px}
 .mini{display:flex;flex-direction:column;min-height:0}
 .mini-body{flex:1;min-height:0;padding:4px 10px 6px;display:flex;flex-direction:column}
 .mini-body svg{width:100%;flex:1;min-height:0}
@@ -751,7 +751,7 @@ tr.cur td{background:rgba(245,158,11,.055)}
 .tier-row.now{background:rgba(245,158,11,.07);border-radius:7px;border-bottom-color:transparent;box-shadow:inset 0 0 0 1px rgba(245,158,11,.22)}
 .now-chip{font-size:8.5px;font-weight:800;color:#1A1206;background:linear-gradient(180deg,#FBBF24,#F59E0B);padding:2px 6px;border-radius:4px;justify-self:start}
 
-.settings{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:1fr 1fr;gap:10px;flex:1;min-height:0}
+.settings{display:grid;grid-template-columns:1fr 1fr;grid-template-rows:auto auto;gap:10px;flex:0 0 auto;min-height:0}
 .set-card{padding:13px 15px;display:flex;flex-direction:column;gap:10px}
 .field{display:flex;flex-direction:column;gap:5px}
 .field label{font-size:10px;color:#8B9BB1;font-weight:700;letter-spacing:.01em}
@@ -783,12 +783,15 @@ tr.cur td{background:rgba(245,158,11,.055)}
 .warn-banner .sp{flex:1}
 .warn-banner .btn{flex:0 0 auto}
 
-.utils{display:grid;grid-template-columns:1.32fr 1fr;grid-template-rows:1fr 1fr;gap:10px;flex:1;min-height:0}
+.utils{display:grid;grid-template-columns:1.32fr 1fr;grid-template-rows:auto auto auto;gap:10px;flex:0 0 auto;align-items:start}
 .util-card{display:flex;flex-direction:column;min-height:0}
-.util-card.nv{grid-row:1 / span 2}
+.util-card.nv{grid-column:1;grid-row:1 / span 3;align-self:stretch}
+#perf-card{grid-column:2;grid-row:1}
+#util-aim{grid-column:2;grid-row:2}
+#bk-card{grid-column:2;grid-row:3}
 .util-body{display:flex;flex-direction:column;gap:8px;padding:9px 11px 0;flex:1;min-height:0}
 .util-row{
-  flex:0 0 118px;min-height:0;display:grid;grid-template-columns:48px minmax(0,1fr) 74px 74px;align-items:center;gap:11px;
+  flex:1 1 118px;min-height:104px;display:grid;grid-template-columns:48px minmax(0,1fr) 74px 74px;align-items:center;gap:11px;
   padding:0 12px;border-radius:10px;transition:.16s;
   background:linear-gradient(100deg,rgba(148,163,184,.075),rgba(148,163,184,.022) 68%);
   border:1px solid rgba(148,163,184,.12);
@@ -956,6 +959,118 @@ html,body{width:100%;height:100%}
 .mt-t td.win{color:#6EE7C0;font-weight:800}
 .mt-t td.lose{color:#F7AFAE;font-weight:700}
 .mt-t tr:hover td{background:rgba(148,163,184,.05)}
+/* ===================== v1.2.0 ===================== */
+.tb-update{display:flex;align-items:center;gap:5px;height:21px;padding:0 9px;border-radius:6px;
+  background:linear-gradient(90deg,rgba(52,211,153,.20),rgba(245,158,11,.14));
+  border:1px solid rgba(52,211,153,.48);color:#C8F7E4;font-size:10px;font-weight:800;
+  letter-spacing:-.01em;white-space:nowrap;cursor:pointer}
+.tb-update:hover{filter:brightness(1.12)}
+.tb-update[hidden]{display:none!important}
+.tb-update svg{width:10px;height:10px}
+.tb-update b{font-family:var(--num);font-size:9.5px;color:#FDE68A}
+
+/* 인사이트 행 — 잔디 · 주간 목표 · 훈련 전후 비교 */
+.insights{display:grid;grid-template-columns:1.26fr .9fr 1.06fr;gap:10px;flex:0 0 112px;height:112px}
+.insight{display:flex;flex-direction:column;min-height:0;padding-bottom:7px}
+.heat-grid{display:flex;gap:4px;flex:1;min-height:0;padding:4px 13px 0;align-items:flex-start}
+.heat-col{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
+.heat-m{font-size:7px;line-height:8px;height:8px;color:#5F7088;font-weight:800;white-space:nowrap;overflow:visible}
+.heat-cell{height:9px;flex:0 0 9px;border-radius:2px;background:rgba(148,163,184,.12)}
+.heat-cell.l1{background:rgba(245,158,11,.40)}
+.heat-cell.l2{background:linear-gradient(180deg,#F59E0B,#D97706)}
+.heat-cell.l3{background:linear-gradient(180deg,#34D399,#10B981);box-shadow:0 0 6px rgba(52,211,153,.45)}
+.heat-cell.future{background:rgba(148,163,184,.045)}
+.heat-cell.today{outline:1px solid rgba(253,230,138,.8);outline-offset:0}
+.heat-legend{display:flex;align-items:center;gap:3px;font-size:8px;color:#6E7F95;font-weight:700}
+.heat-legend i{width:8px;height:8px;border-radius:2px;display:inline-block}
+.wgoal-body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;gap:7px;padding:0 13px}
+.wg-row{display:grid;grid-template-columns:32px 1fr 64px;align-items:center;gap:7px}
+.wg-row span{font-size:9px;font-weight:800;color:#8B9BB1}
+.wg-bar{height:7px;border-radius:4px;background:rgba(148,163,184,.14);overflow:hidden}
+.wg-bar i{display:block;height:100%;width:0;border-radius:4px;transition:width .3s;
+  background:linear-gradient(90deg,#B45309,#F59E0B 60%,#FDE68A)}
+.wg-bar i.full{background:linear-gradient(90deg,#0F766E,#34D399 60%,#A7F3D0)}
+.wg-row b{font-family:var(--num);font-size:10px;font-weight:700;color:#DCE6F5;text-align:right;white-space:nowrap}
+.wg-foot{display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:8.5px;color:#6E7F95;font-weight:700}
+.wg-foot b{color:#FCD9A0;font-family:var(--num)}
+
+.impact-body{flex:1;min-height:0;display:flex;flex-direction:column;justify-content:center;gap:4px;padding:0 13px}
+.imp-head,.imp-row{display:grid;grid-template-columns:44px 1fr 1fr 48px;align-items:center;gap:6px}
+.imp-head{font-size:7.5px;font-weight:800;color:#5F7088;letter-spacing:.02em}
+.imp-head span:not(:first-child){text-align:right}
+.imp-row .k{font-size:9px;font-weight:800;color:#8B9BB1}
+.imp-row .v{font-family:var(--num);font-size:10.5px;font-weight:700;color:#E4ECF8;text-align:right}
+.imp-row .v.dim{color:#7E8FA6}
+.imp-row .d{font-family:var(--num);font-size:9px;font-weight:800;text-align:right;color:#7E8FA6}
+.imp-row .d.up{color:#6EE7C0}
+.imp-row .d.down{color:#F7AFAE}
+.imp-note{font-size:8.5px;color:#6E7F95;font-weight:600;line-height:1.45;padding:0 13px;margin-top:3px;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.imp-note b{color:#A9B9CE}
+
+/* 빠른 실행 버튼 (추천 카드 하단) */
+.rec-foot.tools{margin-top:0;gap:5px}
+.rec-tool{flex:1;height:23px;border-radius:7px;display:flex;align-items:center;justify-content:center;gap:3px;
+  font-size:9px;font-weight:800;color:#C2D0E2;background:rgba(148,163,184,.09);
+  border:1px solid rgba(148,163,184,.18);letter-spacing:-.03em;white-space:nowrap;overflow:hidden}
+.rec-tool:hover{background:rgba(148,163,184,.16);color:#EAF2FF}
+.rec-tool.amber{color:#FDE8BD;border-color:rgba(245,158,11,.34);background:rgba(245,158,11,.12)}
+.rec-tool.cyan{color:#BFE9F7;border-color:rgba(56,189,248,.30);background:rgba(56,189,248,.10)}
+.rec-row-pb{height:15px;padding:0 5px;border-radius:4px;display:inline-flex;align-items:center;
+  font-size:7.5px;font-weight:900;letter-spacing:.03em;color:#1A1206;
+  background:linear-gradient(180deg,#FDE68A,#F59E0B);box-shadow:0 0 8px rgba(245,158,11,.4)}
+
+/* 1:1 전적 비교 모달 */
+.cmp-hero{display:grid;grid-template-columns:1fr 42px 1fr;gap:8px;align-items:center}
+.cmp-card{border-radius:9px;padding:8px 10px;background:rgba(7,11,19,.62);
+  border:1px solid rgba(148,163,184,.16);text-align:center}
+.cmp-card.me{border-color:rgba(245,158,11,.38);background:rgba(245,158,11,.08)}
+.cmp-card .nm{font-size:11.5px;font-weight:800;color:#EDF4FF;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.cmp-card .cl{font-size:8.5px;font-weight:700;color:#7E8FA6;margin-top:1px}
+.cmp-card .rp{font-family:var(--num);font-size:10px;color:#A9E5F8;margin-top:3px}
+.cmp-vs{text-align:center;font-family:var(--num);font-size:10.5px;font-weight:800;color:#F59E0B}
+.cmp-rows{display:flex;flex-direction:column;gap:3px}
+.cmp-row{display:grid;grid-template-columns:1fr 78px 1fr;align-items:center;gap:7px;min-height:22px}
+.cmp-row .lb{grid-column:1 / -1;font-size:8px;font-weight:800;color:#5F7088;letter-spacing:.05em}
+.cmp-val{font-family:var(--num);font-size:11px;font-weight:700;color:#C7D3E4;text-align:right;white-space:nowrap}
+.cmp-val.left{text-align:left}
+.cmp-val.win{color:#FDE8BD}
+.cmp-val.win::after{content:' ▲';font-size:7.5px;color:#6EE7C0}
+.cmp-bar{height:6px;border-radius:3px;background:rgba(148,163,184,.12);display:flex;overflow:hidden}
+.cmp-bar i{display:block;height:100%}
+.cmp-bar i.a{background:linear-gradient(90deg,#B45309,#F59E0B)}
+.cmp-bar i.b{background:linear-gradient(90deg,#0EA5E9,#38BDF8)}
+
+/* 워밍업 모달 */
+.warmup-row{display:flex;align-items:center;gap:8px;height:34px;padding:0 9px;border-radius:8px;
+  background:rgba(7,11,19,.55);border:1px solid rgba(148,163,184,.14)}
+.warmup-row .ix{font-family:var(--num);font-size:11px;font-weight:800;color:#F59E0B;width:12px;text-align:center}
+.warmup-row .nm{flex:1;min-width:0;font-size:11px;font-weight:700;color:#E4ECF8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.warmup-row .ar{font-size:8.5px;color:#7E8FA6;font-weight:700;white-space:nowrap}
+.warmup-row .go{height:22px;padding:0 9px;border-radius:6px;font-size:9.5px;font-weight:800;
+  color:#BFE9F7;background:rgba(56,189,248,.14);border:1px solid rgba(56,189,248,.32)}
+.warmup-row .go:hover{background:rgba(56,189,248,.22)}
+.lb-row[data-cmp]{cursor:pointer}
+.lb-row[data-cmp]:hover{background:rgba(245,158,11,.05)}
+
+/* 🧭 플레이 코칭 (병영수첩) */
+.coach{flex:0 0 auto;padding-bottom:9px}
+.coach-list{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:5px 13px 0;align-items:stretch;grid-auto-rows:1fr}
+.coach-row{display:flex;gap:8px;align-items:flex-start;padding:7px 9px;border-radius:9px;
+  background:rgba(7,11,19,.5);border:1px solid rgba(148,163,184,.12)}
+.coach-row .ic{width:20px;height:20px;border-radius:6px;display:grid;place-items:center;font-size:11px;
+  flex:0 0 20px;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.22)}
+.coach-row .tx{min-width:0;flex:1}
+.coach-row .t{font-size:10.5px;font-weight:800;color:#EAF1FB;letter-spacing:-.01em;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.coach-row .d{font-size:9px;color:#8FA1B8;font-weight:500;line-height:1.5;margin-top:2px}
+.coach-row.good{border-color:rgba(52,211,153,.26);background:rgba(52,211,153,.06)}
+.coach-row.good .ic{background:rgba(52,211,153,.12);border-color:rgba(52,211,153,.28)}
+.coach-row.warn{border-color:rgba(245,158,11,.26);background:rgba(245,158,11,.06)}
+.btn-tiny{height:22px;padding:0 8px;border-radius:6px;font-size:9.5px;font-weight:800;
+  color:#C2D0E2;background:rgba(148,163,184,.10);border:1px solid rgba(148,163,184,.2)}
+.btn-tiny:hover{background:rgba(148,163,184,.18)}
+
 </style>
 </head>
 <body>
@@ -1081,6 +1196,10 @@ html,body{width:100%;height:100%}
           <span class="auto">AUTO</span>
           <span class="ratio num" id="tb-user-ratio">18 : 6</span>
         </div>
+        <button class="tb-update" id="update-banner" hidden title="새 버전 내려받기">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#i-download"/></svg>
+          <span>새 버전 있음</span><b id="update-banner-ver">v1.2.0</b>
+        </button>
       </div>
     </div>
     <div class="winbtns">
@@ -1234,6 +1353,63 @@ html,body{width:100%;height:100%}
               <button class="rec-more" id="rec-more"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>더 연습하기</button>
               <button class="rec-save" id="rec-save"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-save"/></svg>오늘 기록 저장 · 5칸 점수 로그</button>
             </div>
+            <div class="rec-foot tools">
+              <button class="rec-tool amber" id="warmup-btn" title="랭크전 직전 5분 워밍업 3종">⚡ 5분 워밍업</button>
+              <button class="rec-tool" id="kovak-import-btn" title="코박스 stats 폴더에서 오늘 점수를 자동으로 가져옵니다">📥 코박스 점수</button>
+              <button class="rec-tool cyan" id="report-btn" title="오늘의 종합 점수·티어·5영역을 PNG 카드로 저장">📸 리포트 카드</button>
+              <button class="rec-tool" id="plo-btn" title="오늘 추천 5종을 코박스 플레이리스트로 저장">📜 플레이리스트</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- ================= v1.2.0 인사이트: 잔디 · 주간 목표 · 훈련 전후 ================= -->
+        <div class="insights">
+          <div class="card insight" id="heat-card">
+            <div class="card-hd" style="padding-bottom:2px">
+              <div>
+                <div class="card-title" style="font-size:11.5px"><span class="bar"></span>훈련 잔디 캘린더</div>
+                <div class="card-sub" id="heat-sub">최근 14주 · 0일 훈련</div>
+              </div>
+              <div class="heat-legend" title="그날 기록한 시나리오 수">
+                <span>적음</span>
+                <i style="background:rgba(148,163,184,.14)"></i>
+                <i style="background:rgba(245,158,11,.40)"></i>
+                <i style="background:#F59E0B"></i>
+                <i style="background:#34D399"></i>
+                <span>많음</span>
+              </div>
+            </div>
+            <div class="heat-grid" id="heatmap"></div>
+          </div>
+
+          <div class="card insight" id="week-card">
+            <div class="card-hd" style="padding-bottom:2px">
+              <div>
+                <div class="card-title" style="font-size:11.5px"><span class="bar"></span>주간 훈련 목표</div>
+                <div class="card-sub" id="week-sub">이번 주 진행률</div>
+              </div>
+              <button class="btn btn-ghost" id="week-goal-edit" style="height:20px;font-size:9px;padding:0 7px">목표 수정</button>
+            </div>
+            <div class="wgoal-body">
+              <div class="wg-row"><span>출석</span><div class="wg-bar"><i id="wg-days-bar"></i></div><b id="wg-days">0/5일</b></div>
+              <div class="wg-row"><span>훈련량</span><div class="wg-bar"><i id="wg-games-bar"></i></div><b id="wg-games">0/25판</b></div>
+              <div class="wg-foot"><span id="wg-left">목표까지 5일 · 25판</span><span id="wg-pct">0%</span></div>
+            </div>
+          </div>
+
+          <div class="card insight" id="impact-card">
+            <div class="card-hd" style="padding-bottom:2px">
+              <div>
+                <div class="card-title" style="font-size:11.5px"><span class="bar"></span>훈련일 vs 미훈련일 · 랭크전</div>
+                <div class="card-sub" id="impact-sub">최근 100판 · 추가 API 0건</div>
+              </div>
+              <span class="chip" id="impact-chip" style="height:20px;font-size:9px">표본 대기</span>
+            </div>
+            <div class="impact-body">
+              <div class="imp-head"><span></span><span>훈련한 날</span><span>안 한 날</span><span>차이</span></div>
+              <div id="impact-rows"></div>
+            </div>
+            <div class="imp-note" id="impact-note">병영수첩 전적을 불러오면 비교해 드립니다</div>
           </div>
         </div>
 
@@ -1291,6 +1467,8 @@ html,body{width:100%;height:100%}
           <div style="margin:0 12px 12px;height:46px;border-radius:9px;display:flex;align-items:center;gap:10px;padding:0 12px;background:linear-gradient(90deg,rgba(245,158,11,.12),rgba(245,158,11,.03));border:1px solid rgba(245,158,11,.24)">
             <span style="font-size:9.5px;font-weight:800;color:#FBD48F;letter-spacing:.04em;white-space:nowrap">오늘의 5종 순서</span>
             <div id="today-order" style="display:flex;align-items:center;gap:5px;flex:1;overflow:hidden"></div>
+            <button class="btn btn-ghost" id="warmup-btn-2" style="height:26px;padding:0 9px" title="랭크전 직전 5분 워밍업 3종"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-flame"/></svg>워밍업</button>
+            <button class="btn btn-ghost" id="kovak-import-2" style="height:26px;padding:0 9px" title="코박스 stats 폴더에서 오늘 점수 자동 인식"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-download"/></svg>코박스</button>
             <button class="btn btn-ghost" id="rec-more-2" style="height:26px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>더 연습하기</button>
             <button class="btn btn-primary" id="score-input-btn" style="height:26px"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>5칸 점수 입력</button>
           </div>
@@ -1329,6 +1507,23 @@ html,body{width:100%;height:100%}
         <div class="ranks" id="br-ranks"></div>
 
         <div class="card goals" id="goals"></div>
+
+        <!-- 🧭 최근 100판 플레이 코칭 (v1.2.0 · 추가 API 0건) -->
+        <div class="card coach" id="br-coach">
+          <div class="card-hd" style="padding-bottom:3px">
+            <div>
+              <div class="card-title" style="font-size:11.5px"><span class="bar"></span>🧭 최근 100판 플레이 코칭</div>
+              <div class="card-sub" id="br-coach-sub">병영수첩을 불러오면 최근 100판으로 바로 계산합니다 · 추가 API 호출 0건</div>
+            </div>
+            <span class="chip amber" id="br-coach-chip">분석 대기</span>
+          </div>
+          <div class="coach-list" id="br-coach-list">
+            <div class="coach-row"><div class="ic">📊</div><div class="tx">
+              <div class="t">전적을 불러오면 코칭이 나옵니다</div>
+              <div class="d">승률 · K/D · 딜량 · 맵별 강약 · 솔로/파티 격차 · 최근 5판 흐름을 한 번에 봅니다.</div>
+            </div></div>
+          </div>
+        </div>
 
         <div class="maps">
           <div class="card" style="display:flex;flex-direction:column">
@@ -1427,7 +1622,7 @@ html,body{width:100%;height:100%}
           </div>
 
           <div class="lb-foot">
-            <span>정렬 기준 <b id="lb-sort-name">솔로 RP 순</b> · 1~3위 메달 강조 · 본인 <b id="lb-me-name">휴가중.</b> 고정 · 행에 마우스를 올리면 ✕ 삭제</span>
+            <span>정렬 기준 <b id="lb-sort-name">솔로 RP 순</b> · 1~3위 메달 강조 · 본인 <b id="lb-me-name">휴가중.</b> 고정 · <b>행을 클릭하면 1:1 비교</b> · ✕ 삭제</span>
             <span class="rb">레전드 <b id="lb-lg">0</b>명 · 그랜드마스터 <b id="lb-gm">4</b>명 · 마스터 이상 <b id="lb-top">6</b>명</span>
           </div>
         </div>
@@ -1527,8 +1722,26 @@ html,body{width:100%;height:100%}
             </div>
           </div>
 
+          <!-- power plan + game mode (v1.2.0) -->
+          <div class="card util-card" id="perf-card">
+            <div class="card-hd" style="padding-bottom:0">
+              <div>
+                <div class="card-title"><span class="bar"></span>⚡ 고성능 전원 + 게임 모드</div>
+                <div class="card-sub" id="perf-label">전원 옵션 · 게임 모드 확인 중</div>
+              </div>
+              <div class="card-hd-r">
+                <span class="ustate" id="perf-state">대기</span>
+                <span class="ustate" id="perf-chip">확인 중</span>
+              </div>
+            </div>
+            <div style="display:flex;gap:7px;padding:8px 12px 11px;margin-top:auto">
+              <button class="bk-btn btn-primary" id="perf-apply" style="height:31px">⚡ 적용</button>
+              <button class="bk-btn btn-cyan" id="perf-restore" style="height:31px">원래대로 복구</button>
+            </div>
+          </div>
+
           <!-- windows aim -->
-          <div class="card util-card">
+          <div class="card util-card" id="util-aim">
             <div class="card-hd" style="padding-bottom:1px">
               <div>
                 <div class="card-title"><span class="bar"></span>윈도우 에임 유틸</div>
@@ -1559,7 +1772,7 @@ html,body{width:100%;height:100%}
           </div>
 
           <!-- backup -->
-          <div class="card util-card">
+          <div class="card util-card" id="bk-card">
             <div class="card-hd" style="padding-bottom:1px">
               <div>
                 <div class="card-title"><span class="bar"></span>PC방 · 다중 PC 백업/복원</div>
@@ -1586,6 +1799,7 @@ html,body{width:100%;height:100%}
               <div class="bk-foot"><span>마지막 백업 <b id="bk-last">—</b></span><span>마지막 복원 <b id="bk-restore">—</b></span></div>
             </div>
           </div>
+
         </div>
       </section>
 
@@ -1618,6 +1832,7 @@ html,body{width:100%;height:100%}
       </div>
       <div class="modal-bd" id="score-body"></div>
       <div class="modal-ft">
+        <button class="btn btn-ghost" id="score-kovak"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-download"/></svg>코박스 점수 불러오기</button>
         <button class="btn btn-ghost" data-close="score-mask">취소</button>
         <button class="btn btn-primary" id="score-save">기록 저장</button>
       </div>
@@ -1651,6 +1866,60 @@ html,body{width:100%;height:100%}
         <button class="btn btn-ghost" data-close="scen-mask">닫기</button>
         <button class="btn btn-cyan" id="scen-play"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>게임에서 재생</button>
         <button class="btn btn-primary" id="scen-save">점수 저장</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- v1.2.0 · 5분 워밍업 -->
+  <div class="mask" id="warmup-mask">
+    <div class="modal">
+      <div class="modal-hd">
+        <div><h3>⚡ 5분 워밍업</h3><span id="warmup-sub">랭크전 직전 · 지금 설정된 트레이너·무기 기준 3종</span></div>
+        <button class="x" data-close="warmup-mask">✕</button>
+      </div>
+      <div class="modal-bd">
+        <div id="warmup-list" style="display:flex;flex-direction:column;gap:6px"></div>
+        <div class="mnote" id="warmup-note">짧은 핵심 과제 3종으로 감각을 깨우고 랭크전에 들어가세요 · 코박스 플레이리스트로도 저장할 수 있습니다</div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" id="warmup-plo">📜 플레이리스트 저장</button>
+        <button class="btn btn-cyan" id="warmup-run">▶ 3종 연속 실행</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- v1.2.0 · 1:1 전적 비교 (저장된 값만 · API 0건) -->
+  <div class="mask" id="compare-mask">
+    <div class="modal wide">
+      <div class="modal-hd">
+        <div><h3 id="cmp-title">1:1 전적 비교</h3><span>저장된 순위표·병영수첩 값만 사용 · 넥슨 API 추가 호출 0건</span></div>
+        <button class="x" data-close="compare-mask">✕</button>
+      </div>
+      <div class="modal-bd" id="cmp-body"></div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" data-close="compare-mask">닫기</button>
+        <button class="btn btn-primary" id="cmp-refresh">전적 일괄 갱신</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- v1.2.0 · 주간 목표 수정 -->
+  <div class="mask" id="week-mask">
+    <div class="modal" style="width:360px">
+      <div class="modal-hd">
+        <div><h3>주간 훈련 목표</h3><span>월요일 시작 · 저장하면 이번 주 진행률에 바로 반영됩니다</span></div>
+        <button class="x" data-close="week-mask">✕</button>
+      </div>
+      <div class="modal-bd">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div class="mfield"><label>주 N일 출석</label><input id="week-days" type="number" min="1" max="7" step="1"></div>
+          <div class="mfield"><label>주 N판 훈련</label><input id="week-games" type="number" min="1" max="200" step="1"></div>
+        </div>
+        <div class="mnote">기본값은 <b>주 5일 · 25판</b> 입니다. 판수는 저장한 훈련 기록 단위로 셉니다.</div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" data-close="week-mask">취소</button>
+        <button class="btn btn-primary" id="week-save">저장</button>
       </div>
     </div>
   </div>
@@ -2073,8 +2342,13 @@ function recRowHtml(r,i,mark){
   const a=AREAS[r.area]||AREAS[0];
   const fmt=v=>Number(v).toLocaleString('ko-KR');
   const delta=(r.delta===null||r.delta===undefined)?'':` · <span class="up" style="color:${r.delta>=0?'#6EE7C0':'#F7AFAE'}">${r.delta>=0?'▲':'▼'} ${Math.abs(r.delta).toFixed(1)}</span>`;
+  /* 🏆 NEW PB — 오늘 점수가 내 최고 기록과 같거나 넘었을 때 */
+  const pb = (r.today_score!==null && r.today_score!==undefined &&
+              r.best!==null && r.best!==undefined &&
+              Number(r.today_score)>=Number(r.best));
+  const pbTag = pb ? '<span class="rec-row-pb" title="오늘 내 최고 기록 경신">🏆 PB</span> ' : '';
   const meta = (r.score!==null&&r.score!==undefined)
-    ? `최근 <span class="dl">${fmt(r.score)}</span> · ${r.diff}${delta}`
+    ? `${pbTag}최근 <span class="dl">${fmt(r.score)}</span> · ${r.diff}${delta}`
     : `${r.diff} · 미측정 · 첫 기록`;
   const today=recTodayScore(r);
   const cell = (today===null||today===undefined)
@@ -2313,7 +2587,7 @@ function drawLeaderboard(){
       const medal = rk===1?'top1':rk===2?'top2':rk===3?'top3':'';
       const pct = v => (v===null||v===undefined) ? '—' : `${Number(v).toFixed(1)}<i>%</i>`;
       const num = v => (v===null||v===undefined) ? '—' : Number(v).toLocaleString();
-      return `<div class="lb-row ${m.me?'me':''}${hit}">
+      return `<div class="lb-row ${m.me?'me':''}${hit}" data-cmp="${m.name}" title="클릭하면 ${m.me?'내 전적':'나와 1:1 비교'}">
         <div class="lb-rank ${medal}">${rk}</div>
         <div class="lb-name">
           <b title="${m.name}">${m.name}</b>
@@ -2405,15 +2679,19 @@ function addMember(){
 $('#lb-add').addEventListener('click',addMember);
 $('#lb-nick').addEventListener('keydown',e=>{ if(e.key==='Enter'){ e.preventDefault(); addMember(); } });
 $('#lb-rows').addEventListener('click',e=>{
-  const btn=e.target.closest('[data-del]');
-  if(!btn) return;
-  const idx=+btn.dataset.del;
-  const m=sortedMembers()[idx];
-  if(!m || m.me) return;
-  if(window.AL && window.AL.real){ window.AL.removeMember(m.name); return; }
-  MEMBERS=MEMBERS.filter(x=>x!==m);
-  drawLeaderboard();
-  lbToast(`'${m.name}' 삭제됨 · ${MEMBERS.length} / 10명`);
+  const del=e.target.closest('[data-del]');
+  if(del){
+    const idx=+del.dataset.del;
+    const m=sortedMembers()[idx];
+    if(!m || m.me) return;
+    if(window.AL && window.AL.real){ window.AL.removeMember(m.name); return; }
+    MEMBERS=MEMBERS.filter(x=>x!==m);
+    drawLeaderboard();
+    lbToast(`'${m.name}' 삭제됨 · ${MEMBERS.length} / 10명`);
+    return;
+  }
+  const row=e.target.closest('[data-cmp]');
+  if(row && window.AL && window.AL.compareFriend){ window.AL.compareFriend(row.dataset.cmp); }
 });
 $$('#lb-sorts .sort-btn').forEach(b=>b.addEventListener('click',()=>{
   lbSort=b.dataset.sort; drawLeaderboard();
@@ -2584,11 +2862,117 @@ function drawKpis(){
   const chip=$('#tier-now-chip'); if(chip) chip.innerHTML = hasScore ? `현재 <b>${t.n}</b> · ${score.toLocaleString()}` : '기록 대기 중';
 }
 
+
+/* ================= v1.2.0 인사이트 (잔디 · 주간 목표 · 훈련 전후) ================= */
+/* bridge.js 가 실제 state 로 같은 함수를 다시 부릅니다 (window.drawHeatmap …). */
+function drawHeatmap(heat){
+  const el=$('#heatmap'); if(!el||!heat||!heat.grid) return;
+  let html='';
+  heat.grid.forEach((col,ci)=>{
+    const mo=(heat.months||[]).find(m=>m.week===ci);
+    html+='<div class="heat-col">';
+    html+=`<span class="heat-m">${mo?mo.label:''}</span>`;
+    col.forEach(cell=>{
+      const cls=cell.future?'future':(cell.lvl>0?'l'+cell.lvl:'');
+      const iso=cell.d===heat.end?' today':'';
+      html+=`<i class="heat-cell ${cls}${iso}" title="${cell.d} · ${cell.n}종 훈련"></i>`;
+    });
+    html+='</div>';
+  });
+  el.innerHTML=html;
+  const sub=$('#heat-sub');
+  if(sub) sub.textContent=`최근 ${heat.weeks}주 · ${heat.days_trained}일 훈련 · ${heat.total}종 기록`;
+}
+
+function drawWeek(w){
+  if(!w) return;
+  const bar=(id,pct,full)=>{
+    const el=$('#'+id); if(!el) return;
+    el.style.width=Math.max(2,Math.min(100,Number(pct)||0))+'%';
+    el.classList.toggle('full',!!full);
+  };
+  bar('wg-days-bar', w.pct_days, w.days_done>=w.days);
+  bar('wg-games-bar', w.pct_games, w.games_done>=w.games);
+  const d=$('#wg-days'); if(d) d.textContent=`${w.days_done}/${w.days}일`;
+  const g=$('#wg-games'); if(g) g.textContent=`${w.games_done}/${w.games}판`;
+  const left=$('#wg-left');
+  if(left) left.textContent = w.done ? '🎉 이번 주 목표 달성!' : `목표까지 ${w.left_days}일 · ${w.left_games}판`;
+  const pct=$('#wg-pct'); if(pct) pct.innerHTML=`<b>${Math.round(w.pct)}%</b>`;
+  const sub=$('#week-sub');
+  if(sub) sub.textContent=`${String(w.week_start||'').slice(5).replace('-','.')} ~ ${String(w.week_end||'').slice(5).replace('-','.')} · 주 ${w.days}일/${w.games}판`;
+}
+
+function drawImpact(imp){
+  const rows=$('#impact-rows'); if(!rows) return;
+  if(!imp){ rows.innerHTML=''; return; }
+  const fmt=(v,unit)=>{
+    if(v===null||v===undefined) return '—';
+    return unit==='%' ? Number(v).toFixed(1)+'%' : Number(v).toLocaleString();
+  };
+  rows.innerHTML=(imp.rows||[]).map(r=>{
+    const d=r.diff;
+    const cls=(d===null||d===undefined)?'':(d>0?'up':d<0?'down':'');
+    const dtxt=(d===null||d===undefined)?'—':((d>0?'+':'')+(r.unit==='%'?Number(d).toFixed(1)+'%':Math.round(d)));
+    return `<div class="imp-row"><span class="k">${r.label}</span>
+      <span class="v">${fmt(r.trained,r.unit)}</span>
+      <span class="v dim">${fmt(r.untrained,r.unit)}</span>
+      <span class="d ${cls}">${dtxt}</span></div>`;
+  }).join('');
+  const chip=$('#impact-chip');
+  if(chip){
+    chip.textContent = imp.enough ? '비교 가능' : (imp.has_data ? '표본 부족' : '전적 필요');
+    chip.className = 'chip' + (imp.enough ? ' amber' : '');
+  }
+  const note=$('#impact-note'); if(note) note.textContent=imp.note||'';
+  const sub=$('#impact-sub');
+  if(sub) sub.textContent=`훈련일 ${imp.trained?imp.trained.games:0}판 · 미훈련일 ${imp.untrained?imp.untrained.games:0}판`;
+}
+
+/* 미리보기(브라우저)용 샘플 — .exe 에서는 bridge.js 가 실제 값으로 덮어쓴다 */
+function sampleHeatmap(){
+  const today=new Date();
+  const start=new Date(today.getFullYear(),today.getMonth(),today.getDate());
+  const dow=(start.getDay()+6)%7;                     // 월=0
+  start.setDate(start.getDate()-dow-13*7);
+  const grid=[],months=[];
+  let lastMonth=-1;
+  for(let w=0;w<14;w++){
+    const col=[];
+    const monday=new Date(start.getFullYear(),start.getMonth(),start.getDate()+w*7);
+    if(monday.getMonth()!==lastMonth){ months.push({label:(monday.getMonth()+1)+'월',week:w}); lastMonth=monday.getMonth(); }
+    for(let d=0;d<7;d++){
+      const day=new Date(monday.getFullYear(),monday.getMonth(),monday.getDate()+d);
+      const future=day>today;
+      const seed=(day.getDate()*7+day.getMonth()*13+w*3)%10;
+      const n=future?0:(seed<3?0:seed<5?1+(seed%2):seed<8?4:7);
+      col.push({d:`${day.getFullYear()}-${String(day.getMonth()+1).padStart(2,'0')}-${String(day.getDate()).padStart(2,'0')}`,
+                n,lvl:future?0:(n===0?0:n<=2?1:n<=5?2:3),future});
+    }
+    grid.push(col);
+  }
+  const last=grid[13][new Date().getDay()===0?6:new Date().getDay()-1];
+  const days=grid.flat().filter(c=>c.n>0).length;
+  const total=grid.flat().reduce((a,c)=>a+c.n,0);
+  return {weeks:14,grid,months,days_trained:days,total,end:last?last.d:''};
+}
+const SAMPLE_WEEK={days:5,days_done:3,games:25,games_done:18,pct_days:60,pct_games:72,pct:66,done:false,
+  left_days:2,left_games:7,week_start:'2026-11-23',week_end:'2026-11-29'};
+const SAMPLE_IMPACT={has_data:true,enough:true,note:'훈련한 날이 승률 4.8 더 좋았습니다 · 훈련 효과가 보입니다',
+  trained:{games:38,win:52.6,kd:53.8,dmg:1102},untrained:{games:62,win:47.8,kd:50.9,dmg:1004},
+  rows:[{key:'win',label:'승률',unit:'%',trained:52.6,untrained:47.8,diff:4.8},
+        {key:'kd',label:'K/D',unit:'%',trained:53.8,untrained:50.9,diff:2.9},
+        {key:'dmg',label:'평균 딜량',unit:'',trained:1102,untrained:1004,diff:98}]};
+
+window.drawHeatmap=drawHeatmap; window.drawWeek=drawWeek; window.drawImpact=drawImpact;
+
 function refreshAll(){
   recalc();
   drawKpis(); drawRadar(); drawSpark(); drawTrend(); drawGame(); drawLadder();
   drawRecs(); drawRecGrid(); drawTodayOrder(); drawGoals(); drawMaps(); drawTierTable();
   drawUserStyle(); drawLeaderboard(); renderUtils(); updateRadarSub();
+  if(!(window.AL && window.AL.real)){
+    drawHeatmap(sampleHeatmap()); drawWeek(SAMPLE_WEEK); drawImpact(SAMPLE_IMPACT);
+  }
 }
 refreshAll();
 

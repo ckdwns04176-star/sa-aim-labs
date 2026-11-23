@@ -13,7 +13,7 @@ from pathlib import Path
 
 APP_NAME = "SA_Aim_Labs"
 APP_TITLE = "SA AIM LABS"
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 
 
 def is_frozen() -> bool:
@@ -84,6 +84,25 @@ def log_dir() -> Path:
     path = data_dir() / "logs"
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def reports_dir() -> Path:
+    """`📸 리포트 카드 저장` 이 만드는 PNG 보관함."""
+    path = data_dir() / "reports"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def playlists_dir() -> Path:
+    """코박스 Playlists 폴더를 찾지 못했을 때 쓰는 대체 보관함."""
+    path = data_dir() / "playlists"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def perf_backup_file() -> Path:
+    """전원 옵션·게임 모드 적용 전 상태 (복구용)."""
+    return data_dir() / "perf_backup.json"
 
 
 def ui_dir() -> Path:

@@ -172,7 +172,7 @@ def mock_js(state: dict) -> str:
 def backend() -> None:
     from app import scoring, winutil, paths
 
-    check("버전 1.1.0", paths.APP_VERSION == "1.1.0", paths.APP_VERSION)
+    check("버전 1.2.0", paths.APP_VERSION == "1.2.0", paths.APP_VERSION)
 
     records = [
         {"date": "2026-11-22", "created_at": "2026-11-22T21:00:00", "game": "kovak", "weapon": "sniper",

@@ -144,7 +144,7 @@ def main() -> int:
     check("main.py 코드에 쿼리스트링 문자열 없음",
           not any(('desktop=1&log' in s) or ('wv2=0' in s) or ('urllib.parse.quote' in s) for s in string_consts),
           "")
-    check("APP_VERSION 1.1.0", app_paths.APP_VERSION == "1.1.0", app_paths.APP_VERSION)
+    check("APP_VERSION 1.2.0", app_paths.APP_VERSION == "1.2.0", app_paths.APP_VERSION)
 
     # ── 0) 쿼리스트링이 전혀 없는 순수 file:// URL 로도 데스크톱 부팅이 된다.
     #       v1.0.1 은 main.py 가 ?desktop=1&log=...&wv2=0 을 붙이면서 WebView2 가
