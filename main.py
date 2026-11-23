@@ -308,6 +308,13 @@ def main(argv: list[str] | None = None) -> int:
     # ── 새 버전 확인 (백그라운드 · 실패해도 조용히) ──
     api.start_update_check()
 
+    # ── v1.4.0 연패 브레이크 감시 (설정 ON + suddenattack.exe 실행 중일 때만) ──
+    try:
+        api.start_tilt_watch()
+        log.info("tilt watcher armed · interval=%ss", api.store.settings.get("tilt_interval"))
+    except Exception:  # noqa: BLE001 - 감시 실패는 앱 시작을 막지 않는다
+        log.debug("tilt watcher could not start", exc_info=True)
+
     # ── 시스템 트레이 + 전역 단축키 (Ctrl+Shift+A) ──
     # 아이콘을 누르거나 단축키를 누르면 창을 숨기기/보이기 토글한다.
     # pywebview 의 window.show()/hide() 는 WinForms Invoke 로 메인 스레드에 넘어간다.

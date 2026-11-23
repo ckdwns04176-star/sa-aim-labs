@@ -30,6 +30,14 @@ SHOTS.mkdir(parents=True, exist_ok=True)
 RESULTS: list[tuple[str, bool, str]] = []
 
 
+def _open_rail(page) -> None:
+    """v1.4.0 — 트레이너/무기 토글은 사이드바를 호버해야 펼쳐진다."""
+    page.mouse.move(640, 420)
+    page.wait_for_timeout(220)
+    page.mouse.move(30, 600)
+    page.wait_for_timeout(360)
+
+
 def check(name: str, ok: bool, detail: str = "") -> None:
     RESULTS.append((name, bool(ok), detail))
     print(("PASS " if ok else "FAIL ") + name + (f" · {detail}" if detail else ""))
@@ -44,7 +52,7 @@ def build_state() -> dict:
     from app.api import Api
 
     store = Store(tmp / "data.json")
-    store.update_settings({"nickname": "휴가중.", "api_key": "test_9542ea5ac663d2c0"})
+    store.update_settings({"nickname": "휴가중.", "api_key": "test_9542ea5ac663d2c0", "onboarded": True})
     today = dt.date.today()
     yday = today - dt.timedelta(days=1)
 
@@ -172,7 +180,7 @@ def mock_js(state: dict) -> str:
 def backend() -> None:
     from app import scoring, winutil, paths
 
-    check("버전 1.3.1", paths.APP_VERSION == "1.3.1", paths.APP_VERSION)
+    check("버전 1.4.0", paths.APP_VERSION == "1.4.0", paths.APP_VERSION)
 
     records = [
         {"date": "2026-11-22", "created_at": "2026-11-22T21:00:00", "game": "kovak", "weapon": "sniper",
@@ -283,7 +291,11 @@ def ui() -> None:
         page.add_init_script(mock_js(state))
         page.goto(url)
         page.wait_for_selector("#app-splash", state="hidden", timeout=8000)
-        page.wait_for_timeout(350)
+        page.wait_for_timeout(450)
+        # v1.4.0 — 첫 화면이 홈이므로 대시보드로 이동한 뒤 확인한다
+        page.evaluate("() => { const m=document.getElementById('onb-mask'); if(m) m.classList.remove('show'); }")
+        page.click('.nav-item[data-screen="dashboard"]')
+        page.wait_for_timeout(450)
 
         # 1) 레이더 상단 라벨이 잘리지 않는가 (SVG viewBox 안에 들어오는지)
         radar = page.evaluate("""() => {
@@ -367,9 +379,9 @@ def ui() -> None:
               str(more["names"]))
         after = page.evaluate("""() => ({
             first: document.querySelector('#rec-list .rec .rec-today').textContent.trim(),
-            done: (document.getElementById('chip-today') || {}).textContent})""")
+            done: (document.getElementById('rec-total') || {}).textContent})""")
         check("더 연습하기 후에도 오늘 점수 유지", "182" in after["first"], str(after))
-        check("오늘 완료 카운트 반영", str(after["done"]).strip() == "1", str(after["done"]))
+        check("오늘 완료 카운트 반영", "1" in str(after["done"]), str(after["done"]))
         page.screenshot(path=str(SHOTS / "v110-more-practice.png"))
 
         # 5-1) 오늘의 추천 5종 화면 — 에임랩 라이브러리 확장 + 무기 철학
@@ -380,27 +392,30 @@ def ui() -> None:
                 .find((e) => e.dataset.scen === 'Reflex Micro++ flick reload small');
             return item ? item.parentElement.textContent.replace(/\\s+/g, ' ').trim() : '';
         }""")
-        check("라이브러리 행에 PB 표시 (v1.3.1 — 오늘 글자 대신 PB)", "PB" in lib_row, lib_row[:70])
+        # v1.4.0 — PB 글자 대신 숫자만 (미기록은 '-')
+        check("라이브러리 행에 최고 기록 숫자만 표시", "PB" not in lib_row and lib_row.strip().endswith(("182", "-")), lib_row[:70])
+        _open_rail(page)
         page.click('.seg-game .seg-btn[data-game="aimlab"]')
         page.wait_for_timeout(450)
         aim_sub = page.evaluate("""() => ({sub: (document.querySelector('#hd2-count')||{}).textContent || '',
             head: document.querySelector('#hd2-count').textContent,
             chip: '',
             items: document.querySelectorAll('#rec-grid [data-scen]').length,
-            btns: ['warmup-btn-2','rec-more-2','kovak-import-head','score-input-btn','run-all-btn']
+            btns: ['warmup-btn-2','rec-more-2','kovak-import-head','score-input-btn','run-all-btn','personal-plo-btn','plo-btn']
               .filter((id) => document.getElementById(id)).length,
             noSub: !document.getElementById('rec-grid-sub')})""")
         check("추천 화면 · 에임랩 스나 라이브러리 24종 이상", aim_sub["items"] >= 24, str(aim_sub))
-        check("추천 화면 · 상단 버튼 5개 정리", aim_sub["btns"] == 5, str(aim_sub["btns"]))
+        check("추천 화면 · 상단 버튼 7개 정리", aim_sub["btns"] == 7, str(aim_sub["btns"]))
         check("추천 화면 · 회색 부연 설명 제거 (v1.3.1)", aim_sub.get("noSub") is True, str(aim_sub.get("noSub")))
         page.screenshot(path=str(SHOTS / "v110-recs-aimlab-sniper.png"))
+        _open_rail(page)
         page.click('.seg-weapon .seg-btn[data-weapon="rifle"]')
         page.wait_for_timeout(450)
         rifle = page.evaluate("""() => ({sub: (document.querySelector('#hd2-count')||{}).textContent || '',
             head: document.querySelector('#hd2-count').textContent,
             chip: '',
             items: document.querySelectorAll('#rec-grid [data-scen]').length,
-            btns: ['warmup-btn-2','rec-more-2','kovak-import-head','score-input-btn','run-all-btn']
+            btns: ['warmup-btn-2','rec-more-2','kovak-import-head','score-input-btn','run-all-btn','personal-plo-btn','plo-btn']
               .filter((id) => document.getElementById(id)).length,
             noSub: !document.getElementById('rec-grid-sub')})""")
         check("추천 화면 · 라플 24종 이상 + 트래킹 위주", rifle["items"] >= 24 and "트래킹" in rifle["chip"]
@@ -408,7 +423,9 @@ def ui() -> None:
         check("헤더 종목 수가 실제 라이브러리와 일치", "27" in rifle["head"] and "25" in aim_sub["head"],
               f'{aim_sub["head"]} / {rifle["head"]}')
         page.screenshot(path=str(SHOTS / "v110-recs-aimlab-rifle.png"))
+        _open_rail(page)
         page.click('.seg-game .seg-btn[data-game="kovak"]')
+        _open_rail(page)
         page.click('.seg-weapon .seg-btn[data-weapon="sniper"]')
         page.wait_for_timeout(300)
 

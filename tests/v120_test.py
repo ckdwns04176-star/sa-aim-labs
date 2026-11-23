@@ -80,7 +80,7 @@ def build_store(base: Path) -> "object":
                           {"name": "Wide Wall 3 Targets", "area": "wide", "score": 132 - offset}],
             "note": "",
         })
-    store.update_settings({"nickname": "휴가중.", "api_key": "test_9542ea5ac663d2c0",
+    store.update_settings({"nickname": "휴가중.", "api_key": "test_9542ea5ac663d2c0", "onboarded": True,
                            "week_goals": {"days": 5, "games": 25}})
     barracks = {
         "nickname": "휴가중.", "ouid": "711c04a69769cc4b6b782ea2aa3eb614",
@@ -165,11 +165,11 @@ def backend_checks() -> None:
     real_fetch = updates.fetch_latest
     try:
         updates.clear()
-        updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.3.2", "name": "v1.3.2",
+        updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.4.1", "name": "v1.4.1",
                                                     "url": "https://github.com/x/y", "download": "https://x/y.exe",
                                                     "published_at": "2026-11-23T00:00:00Z", "notes": ""}
         newer = updates.check(paths.APP_VERSION, force=True)
-        check("새 버전 감지", newer.get("ok") and newer.get("newer") and newer.get("latest") == "1.3.2",
+        check("새 버전 감지", newer.get("ok") and newer.get("newer") and newer.get("latest") == "1.4.1",
               str(newer.get("message")))
         updates.clear()
         updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.0.0", "url": "", "download": ""}
@@ -207,8 +207,8 @@ def backend_checks() -> None:
     # ---- 4. 잔디 · 주간 목표 · 전후 비교
     heat = state.get("heatmap") or {}
     cells = [c for col in (heat.get("grid") or []) for c in col]
-    check("잔디 14주 × 7일 격자", heat.get("weeks") == 14 and len(heat.get("grid") or []) == 14
-          and len(cells) == 98, f"{len(heat.get('grid') or [])}주 / {len(cells)}칸")
+    check("잔디 12주 × 7일 격자", heat.get("weeks") == 12 and len(heat.get("grid") or []) == 12
+          and len(cells) == 84, f"{len(heat.get('grid') or [])}주 / {len(cells)}칸")
     check("잔디 4단계 레벨", {c["lvl"] for c in cells} <= {0, 1, 2, 3}, str(sorted({c["lvl"] for c in cells})))
     check("잔디 오늘 칸 표시", any(c["d"] == dt.date.today().isoformat() for c in cells))
     week = state.get("week") or {}
@@ -335,7 +335,7 @@ def backend_checks() -> None:
           str([t["title"] for t in gap]))
 
     # ---- 12. 앱 버전 · API 노출
-    check("APP_VERSION 1.3.1", paths.APP_VERSION == "1.3.1", paths.APP_VERSION)
+    check("APP_VERSION 1.4.0", paths.APP_VERSION == "1.4.0", paths.APP_VERSION)
     import main as app_main
 
     exposed = app_main._public_names(api)
@@ -555,7 +555,7 @@ def ui_checks() -> None:
         page.locator(".insights").screenshot(path=str(SHOTS / "v120-insights.png"))
         page.click(".nav-item[data-screen='dashboard']")
         page.wait_for_timeout(300)
-        check("잔디 14주 × 7칸 렌더", dash["cells"] == 98 and dash["weeks"] == 14,
+        check("잔디 12주 × 7칸 렌더", dash["cells"] == 84 and dash["weeks"] == 12,
               f"{dash['weeks']}주 {dash['cells']}칸")
         check("잔디에 훈련일 색이 들어감", dash["lit"] >= 10, f"{dash['lit']}칸")
         check("주간 목표 게이지", dash["days"] == "3/5일" or "/5일" in (dash["days"] or ""),
@@ -563,8 +563,18 @@ def ui_checks() -> None:
         check("주간 목표 퍼센트", "%" in (dash["pct"] or ""), str(dash["pct"]))
         check("훈련 전후 비교 3행", len(dash["rows"]) == 3, str(dash["rows"]))
         check("전후 비교 안내 문구 표시", bool(dash["impactNote"]), str(dash["impactNote"])[:50])
-        check("대시보드에 워밍업·코박스·리포트·플레이리스트 버튼",
-              all(dash["btns"]) and "5분 워밍업" in dash["btns"][0], str(dash["btns"]))
+        # v1.4.0 — 워밍업·코박스·리포트·플레이리스트는 라이브러리/기록 화면으로 이동
+        page.click(".nav-item[data-screen='recs']")
+        page.wait_for_timeout(300)
+        moved = page.evaluate("""(() => ({warm: !!document.getElementById('warmup-btn-2'),
+            kovak: !!document.getElementById('kovak-import-head'),
+            plo: !!document.getElementById('plo-btn'),
+            personal: !!document.getElementById('personal-plo-btn'),
+            report: !!document.getElementById('report-btn')}))()""")
+        check("대시보드 추천 카드는 2버튼만", not any(dash["btns"][:2]), str(dash["btns"]))
+        check("워밍업·코박스·플레이리스트는 라이브러리로 이동", moved["warm"] and moved["kovak"] and moved["plo"] and moved["personal"], str(moved))
+        page.click(".nav-item[data-screen='dashboard']")
+        page.wait_for_timeout(250)
         check("새 버전 배너 표시", dash["updateShown"] and "새 버전" in dash["updateText"], str(dash["updateText"]))
         page.click(".nav-item[data-screen='records']")
         page.wait_for_timeout(400)
@@ -578,7 +588,9 @@ def ui_checks() -> None:
         page.wait_for_timeout(300)
         check("추천 5종 행 유지", dash["recRows"] >= 5, str(dash["recRows"]))
 
-        # ---------- 리포트 카드 PNG
+        # ---------- 리포트 카드 PNG (v1.4.0 — 에임 기록·분석 화면으로 이동)
+        page.click(".nav-item[data-screen='records']")
+        page.wait_for_timeout(300)
         page.click("#report-btn")
         page.wait_for_timeout(1200)
         card = page.evaluate("""() => {
@@ -615,10 +627,10 @@ def ui_checks() -> None:
         page.click("#compare-mask [data-close]")
         page.wait_for_timeout(200)
 
-        # ---------- 5분 워밍업 모달
-        page.click(".nav-item[data-screen='dashboard']")
+        # ---------- 5분 워밍업 모달 (v1.4.0 — 시나리오 라이브러리로 이동)
+        page.click(".nav-item[data-screen='recs']")
         page.wait_for_timeout(250)
-        page.click("#warmup-btn")
+        page.click("#warmup-btn-2")
         page.wait_for_timeout(600)
         warm = page.evaluate("""() => {
             const m = document.getElementById('warmup-mask');
@@ -632,7 +644,7 @@ def ui_checks() -> None:
 
         # ---------- 코박스 점수 자동 인식 → 저장
         page.evaluate("() => { window.__CALLS = []; }")
-        page.click("#kovak-import-btn")
+        page.click("#kovak-import-head")
         page.wait_for_timeout(900)
         calls = page.evaluate("() => window.__CALLS")
         names = [c[0] for c in calls]
@@ -660,6 +672,8 @@ def ui_checks() -> None:
         # ---------- 유틸 탭 · 전원 + 게임 모드
         page.click(".nav-item[data-screen='utils']")
         page.wait_for_timeout(500)
+        page.click('[data-util-tab="system"]')
+        page.wait_for_timeout(250)
         util = page.evaluate("""() => {
             const card = document.getElementById('perf-card');
             return {exists: !!card, chip: (document.getElementById('perf-chip')||{}).textContent,

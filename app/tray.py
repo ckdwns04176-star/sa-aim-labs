@@ -189,16 +189,17 @@ class TrayIcon:
             self._error = str(exc)
             return False
 
-    def notify(self, title: str, message: str) -> None:
-        """풍선 알림(NIF_INFO).  실패해도 무시."""
+    def notify(self, title: str, message: str, level: str = "info") -> None:
+        """풍선 알림(NIF_INFO).  level: info / warning / error.  실패해도 무시."""
         if not self._hwnd or not available():
             return
+        flags = {"warning": 0x2, "error": 0x3}.get(str(level or "info"), 0x1)
         try:
             data = self._nid()
             data.uFlags = NIF_INFO
             data.szInfo = str(message)[:250]
             data.szInfoTitle = str(title)[:60]
-            data.dwInfoFlags = 0x1  # NIIF_INFO
+            data.dwInfoFlags = flags  # NIIF_INFO / NIIF_WARNING / NIIF_ERROR
             ctypes.windll.shell32.Shell_NotifyIconW(NIM_MODIFY, ctypes.byref(data))
         except Exception:  # noqa: BLE001
             pass

@@ -26,6 +26,14 @@ SHOTS.mkdir(parents=True, exist_ok=True)
 RESULTS: list[tuple[str, bool, str]] = []
 
 
+def _open_rail(page) -> None:
+    """v1.4.0 — 트레이너/무기 토글은 사이드바를 호버해야 펼쳐진다."""
+    page.mouse.move(640, 420)
+    page.wait_for_timeout(220)
+    page.mouse.move(30, 600)
+    page.wait_for_timeout(360)
+
+
 def check(name: str, ok: bool, detail: str = "") -> None:
     RESULTS.append((name, bool(ok), detail))
     print(("PASS " if ok else "FAIL ") + name + (f" · {detail}" if detail else ""))
@@ -38,7 +46,7 @@ def build_state() -> dict:
     from app.api import Api
 
     store = Store(tmp / "data.json")
-    store.update_settings({"nickname": "휴가중.", "api_key": "test_9542ea5ac663d2c0"})
+    store.update_settings({"nickname": "휴가중.", "api_key": "test_9542ea5ac663d2c0", "onboarded": True})
     # Aim Lab 대용량 점수 + 코박스 점수 (0~100 상한 없음 검증)
     store.add_record({"date": dt.date.today().isoformat(), "game": "aimlab", "weapon": "sniper",
                       "scores": {"precision": 92500, "wide": 81000, "micro": 64000, "track": 55000, "switch": 73000},
@@ -202,7 +210,10 @@ def main() -> int:
             return {nick: nick ? nick.getAttribute('placeholder') : 'MISSING',
                     key: key ? key.getAttribute('placeholder') : 'MISSING'};
         }""")
-        check("닉네임/API 키 placeholder 없음", ph.get("nick") in ("", None) and ph.get("key") in ("", None), str(ph))
+        # v1.4.0 — 키가 등록돼 있으면 마스킹 값이, 없으면 발급 안내 placeholder 가 보인다
+        key_val = page.evaluate("() => (document.getElementById('set-key')||{}).value || ''")
+        check("닉네임 placeholder 없음", ph.get("nick") in ("", None), str(ph))
+        check("API 키는 마스킹 또는 등록 상태로 표시", ("•" in key_val) or (key_val == "" and ph.get("key")), str({"value": key_val[:14]}))
 
         # 2-1) 클라우드 카드: 용도 설명 + 고급 서버 설정 접힘
         cloud_card = page.evaluate("""() => {
@@ -245,17 +256,21 @@ def main() -> int:
         page.click('[data-screen="recs"]')
         page.wait_for_timeout(200)
         kov = page.eval_on_selector("#rec-grid", "el => el.innerText")
+        _open_rail(page)
         page.click('.seg-game .seg-btn[data-game="aimlab"]')
         page.wait_for_timeout(300)
         aim = page.eval_on_selector("#rec-grid", "el => el.innerText")
         aim_recs = page.eval_on_selector("#rec-list", "el => el.innerText")
+        _open_rail(page)
         page.click('.seg-weapon .seg-btn[data-weapon="rifle"]')
         page.wait_for_timeout(300)
         aim_rifle = page.eval_on_selector("#rec-grid", "el => el.innerText")
         check("코박스 → 에임랩 시 라이브러리 변경", kov != aim and "Sixshot" in aim, aim[:60].replace("\n", " | "))
         check("스나 → 라플 시 라이브러리 변경", aim != aim_rifle and "Microflex" in aim_rifle, aim_rifle[:60].replace("\n", " | "))
         check("에임랩 추천 5종 표시", "Sixshot" in aim_recs or "Microshot" in aim_recs, aim_recs[:60].replace("\n", " | "))
+        _open_rail(page)
         page.click('.seg-game .seg-btn[data-game="kovak"]')
+        _open_rail(page)
         page.click('.seg-weapon .seg-btn[data-weapon="sniper"]')
         page.wait_for_timeout(250)
 
@@ -319,6 +334,8 @@ def main() -> int:
         # 9) v1.3.0 — 계단현상 끄기는 라플/스나 최적화에 병합 (버튼 2개)
         page.click('[data-screen="utils"]')
         page.wait_for_timeout(300)
+        page.click('[data-util-tab="system"]')
+        page.wait_for_timeout(250)
         check("최적화 유틸 화면에 폭파미션 없음", "폭파미션" not in page.inner_text("#s-utils"), "")
         rows = page.evaluate("() => [...document.querySelectorAll('#s-utils [data-apply]')].map(b => b.dataset.apply)")
         check("엔비디아 최적화 버튼 2개(라플·스나)로 통일", rows == ["rifle", "sniper"], str(rows))
@@ -340,6 +357,7 @@ def main() -> int:
         page.click('[data-screen="recs"]')
         page.wait_for_timeout(300)
         page.screenshot(path=str(SHOTS / "recs-kovak.png"))
+        _open_rail(page)
         page.click('.seg-game .seg-btn[data-game="aimlab"]')
         page.wait_for_timeout(400)
         page.screenshot(path=str(SHOTS / "recs-aimlab.png"))

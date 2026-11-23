@@ -79,7 +79,7 @@ def build_state() -> dict:
     from app.api import Api
 
     store = Store(tmp / "data.json")
-    store.update_settings({"nickname": "휴가중.", "api_key": "test_9542ea5ac663d2c0"})
+    store.update_settings({"nickname": "휴가중.", "api_key": "test_9542ea5ac663d2c0", "onboarded": True})
     today = dt.date.today()
     store.add_record({
         "date": today.isoformat(), "game": "kovak", "weapon": "sniper",
@@ -225,7 +225,7 @@ def backend_checks() -> None:
     from app import paths, winutil, nvidia, drs, scoring, nexon
     from app.store import Store
 
-    check("APP_VERSION 1.3.1", paths.APP_VERSION == "1.3.1", paths.APP_VERSION)
+    check("APP_VERSION 1.4.0", paths.APP_VERSION == "1.4.0", paths.APP_VERSION)
 
     # 1·2. 창 이동 · 최대화 제거
     style = 0x00CF0000  # WS_OVERLAPPEDWINDOW
@@ -285,10 +285,10 @@ def backend_checks() -> None:
     pbs = state.get("pbs") or {}
     check("state 에 시나리오 PB 사전", "VT 1w6ts Rasp Novice" in pbs
           and pbs["VT 1w6ts Rasp Novice"]["best"] == 152, str(list(pbs)[:2]))
-    check("라이브러리 PB 표기", "PB ${pbv" in html or "PB ${pbv.toLocaleString" in html)
+    check("라이브러리 최고 기록 숫자만 표기", "lib-pb" in html and "PB ${pbv" not in html and "pbv.toLocaleString('ko-KR')" in html)
 
     # 12. 시나리오 라이브러리 · 상단 코박스 버튼
-    check("메뉴 이름 시나리오 라이브러리", "시나리오 라이브러리</button>" in html and "오늘의 훈련</button>" not in html)
+    check("메뉴 이름 시나리오 라이브러리", "시나리오 라이브러리</span>" in html and "오늘의 훈련</button>" not in html)
     order = html.index('id="kovak-import-head"') < html.index('id="run-all-btn"')
     check("코박스 점수 버튼이 5종 연속 실행 왼쪽", order)
 
@@ -370,6 +370,9 @@ def ui_checks() -> None:
         if page.evaluate("() => { const m=document.getElementById('digest-mask'); return !!m && m.classList.contains('show'); }"):
             page.click("#digest-ack")
             page.wait_for_timeout(300)
+        # v1.4.0 — 첫 화면이 홈이므로 대시보드로 이동
+        page.click('.nav-item[data-screen="dashboard"]')
+        page.wait_for_timeout(450)
 
         # 1·2. 타이틀바 / 최대화 제거
         bar = page.evaluate("""() => {
@@ -410,7 +413,7 @@ def ui_checks() -> None:
         }""")
         check("추천 5종 행 유지", recs["n"] >= 5, str(recs["n"]))
         check("추천 행에서 평균·목표 삭제", not any(("평균" in m or "목표" in m) for m in recs["meta"]), str(recs["meta"][:1]))
-        check("추천 행 PB 유지", all("PB" in m for m in recs["meta"]), str(recs["meta"][:1]))
+        check("추천 행 최고 기록 유지", all("최고" in m for m in recs["meta"]), str(recs["meta"][:1]))
         page.screenshot(path=str(SHOTS / "v131-dashboard.png"))
 
         # 6. 호버 — 팝업 카드만
@@ -441,10 +444,11 @@ def ui_checks() -> None:
         lib = page.evaluate("""() => {
             const items = [...document.querySelectorAll('#rec-grid [data-scen]')];
             return {n: items.length,
-                    withPb: items.filter(el => /PB\\s/.test((el.parentElement||{}).innerText||'')).length,
+                    withPb: items.filter(el => { const row = el.closest('.lib-row'); const pb = row && row.querySelector('.lib-pb'); return !!pb && /[0-9-]/.test((pb.textContent||'').trim()); }).length,
+                    noPbWord: ![...document.querySelectorAll('#rec-grid')].some(g => /PB/.test(g.innerText||'')),
                     sample: (items[0] ? items[0].parentElement.innerText : '')};
         }""")
-        check("라이브러리 모든 행에 PB 표시", lib["n"] > 20 and lib["withPb"] == lib["n"],
+        check("라이브러리 모든 행에 최고 기록 숫자 표시", lib["n"] > 20 and lib["withPb"] == lib["n"] and lib.get("noPbWord"),
               f"{lib['withPb']}/{lib['n']} · {lib['sample']}")
         head = page.evaluate("""() => {
             const h = document.getElementById('h1-title');
@@ -613,6 +617,8 @@ def ui_checks() -> None:
         # 10. 전원 스위치
         page.click('.nav-item[data-screen="utils"]')
         page.wait_for_timeout(450)
+        page.click('[data-util-tab="system"]')
+        page.wait_for_timeout(250)
         page.evaluate("() => { window.__CALLS = []; }")
         page.click("#perf-switch")
         page.wait_for_timeout(500)
@@ -637,8 +643,8 @@ def ui_checks() -> None:
         check("한 번 더 → OFF(왼쪽) + 원래 전원 복구", (not off["on"]) and "restore_perf_mode" in off["calls"],
               str(off))
 
-        # 11. 리포트 카드 → 폴더 열기
-        page.click('.nav-item[data-screen="dashboard"]')
+        # 11. 리포트 카드 → 폴더 열기 (v1.4.0 — 에임 기록·분석으로 이동)
+        page.click('.nav-item[data-screen="records"]')
         page.wait_for_timeout(350)
         page.evaluate("() => { window.__CALLS = []; }")
         page.click("#report-btn")
@@ -732,6 +738,8 @@ def ui_checks() -> None:
 
         page.click('.nav-item[data-screen="utils"]')
         page.wait_for_timeout(450)
+        page.click('[data-util-tab="system"]')
+        page.wait_for_timeout(250)
         ut = page.evaluate("""() => ({text: document.getElementById('s-utils').innerText,
             desc: document.querySelectorAll('.util-desc').length,
             body: document.getElementById('s-utils').innerHTML.length})""")

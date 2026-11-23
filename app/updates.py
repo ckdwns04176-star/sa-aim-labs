@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import threading
 import urllib.error
@@ -209,6 +210,133 @@ def check(current: str, *, force: bool = False, timeout: float = 4.0) -> dict[st
     with _lock:
         _cache, _cache_at = dict(result), time.monotonic()
     return result
+
+
+def gate(result: dict[str, Any] | None, current: str, *, frozen: bool | None = None,
+         env: dict[str, str] | None = None) -> dict[str, Any]:
+    """구버전 차단 판단 — 오프라인·테스트(소스 실행)에서는 절대 막지 않는다.
+
+    차단은 .exe 로 실행 중이고, GitHub 확인에 성공했고, 더 높은 버전이 있을 때만.
+    """
+    env = os.environ if env is None else env
+    frozen = bool(getattr(sys, "frozen", False)) if frozen is None else bool(frozen)
+    data = result or {}
+    if str(env.get("SA_AL_NO_UPDATE_GATE") or "") in ("1", "true", "TRUE"):
+        return {"blocked": False, "reason": "test-env", "current": str(current), "latest": data.get("latest")}
+    if not data.get("ok"):
+        return {"blocked": False,
+                "reason": "offline" if (data.get("offline") or data.get("pending")) else "unknown",
+                "current": str(current), "latest": None,
+                "message": data.get("message") or "업데이트를 확인하지 못했습니다 · 차단하지 않습니다"}
+    if not data.get("newer"):
+        return {"blocked": False, "reason": "latest", "current": str(current), "latest": data.get("latest")}
+    if not frozen:
+        return {"blocked": False, "reason": "source-run", "current": str(current),
+                "latest": data.get("latest"), "download": data.get("download"),
+                "message": "소스 실행 중이라 구버전 차단을 건너뜁니다"}
+    return {
+        "blocked": True,
+        "reason": "outdated",
+        "current": str(current),
+        "latest": data.get("latest") or data.get("name"),
+        "download": data.get("download"),
+        "url": data.get("url"),
+        "notes": data.get("notes"),
+        "message": data.get("message") or "새 버전이 있습니다 · 업데이트해야 계속 사용할 수 있습니다",
+    }
+
+
+def download(url: str, dest: str | os.PathLike[str], *, timeout: float = 60.0) -> dict[str, Any]:
+    """새 .exe 내려받기 (urllib · 표준 라이브러리)."""
+    target = str(dest)
+    if not str(url or "").startswith("https://"):
+        return {"ok": False, "message": "다운로드 주소가 올바르지 않습니다"}
+    try:
+        os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
+        request = urllib.request.Request(str(url), headers={
+            "User-Agent": f"SA-AIM-LABS-updater/{paths_version()}", "Accept": "application/octet-stream"})
+        tmp = target + ".part"
+        with urllib.request.urlopen(request, timeout=timeout) as response, open(tmp, "wb") as fh:  # noqa: S310 - https 고정
+            total = 0
+            while True:
+                chunk = response.read(256 * 1024)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                total += len(chunk)
+                if total > 400 * 1024 * 1024:
+                    raise ValueError("파일이 너무 큽니다")
+        if total < 1024 * 1024:
+            raise ValueError(f"받은 파일이 너무 작습니다 ({total} bytes)")
+        os.replace(tmp, target)
+        return {"ok": True, "path": target, "size": total}
+    except Exception as exc:  # noqa: BLE001
+        try:
+            if os.path.exists(target + ".part"):
+                os.unlink(target + ".part")
+        except OSError:
+            pass
+        return {"ok": False, "message": f"업데이트 다운로드 실패 · {exc}"}
+
+
+def paths_version() -> str:
+    from . import paths
+    return paths.APP_VERSION
+
+
+def swap_script(exe_path: str, new_exe: str, *, pid: int | None = None) -> str:
+    """앱을 닫은 뒤 새 .exe 로 교체하고 다시 실행하는 배치 내용."""
+    exe = os.path.basename(exe_path) or EXE_NAME
+    pid = int(pid or os.getpid())
+    lines = [
+        "@echo off",
+        "chcp 65001 >nul",
+        f"rem SA AIM LABS 자동 업데이트 · pid {pid}",
+        "timeout /t 2 /nobreak >nul",
+        ":wait",
+        f"tasklist /FI \"PID eq {pid}\" /NH | find \"{pid}\" >nul",
+        "if not errorlevel 1 (",
+        "  timeout /t 2 /nobreak >nul",
+        "  goto wait",
+        ")",
+        f'move /y \"{new_exe}\" \"{exe_path}\" >nul',
+        f'start \"\" \"{exe_path}\"',
+        'del \"%~f0\" >nul 2>&1',
+    ]
+    return "\r\n".join(lines) + "\r\n"
+
+
+def prepare_install(download_url: str, *, exe_path: str | None = None,
+                    work_dir: str | None = None) -> dict[str, Any]:
+    """내려받기 + 교체 배치 준비 (실행은 run_install)."""
+    import tempfile
+
+    base = work_dir or tempfile.mkdtemp(prefix="sa_al_update_")
+    new_exe = os.path.join(base, EXE_NAME)
+    got = download(download_url, new_exe)
+    if not got.get("ok"):
+        return got
+    exe = exe_path or sys.executable
+    script = os.path.join(base, "sa_aim_update.bat")
+    try:
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write(swap_script(exe, new_exe))
+    except OSError as exc:
+        return {"ok": False, "message": f"업데이트 스크립트를 쓰지 못했습니다 · {exc}"}
+    return {"ok": True, "path": new_exe, "script": script, "size": got.get("size"),
+            "message": "새 버전을 내려받았습니다 · 앱을 닫으면 자동으로 교체됩니다"}
+
+
+def run_install(script: str) -> dict[str, Any]:
+    """교체 배치 실행 (앱은 스스로 종료)."""
+    if os.name != "nt":
+        return {"ok": False, "message": "자동 교체는 Windows 에서만 동작합니다"}
+    try:
+        subprocess.Popen(["cmd", "/c", script], close_fds=True,
+                         creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+        return {"ok": True, "message": "앱을 닫으면 새 버전으로 다시 시작됩니다"}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "message": f"업데이트 실행 실패 · {exc}"}
 
 
 def cached() -> dict[str, Any] | None:

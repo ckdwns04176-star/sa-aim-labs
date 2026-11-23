@@ -299,7 +299,11 @@
     const summary = st.summaries?.[`${game}-${weapon}`] || null;
     if (summary) {
       VALUES = {};
-      AREAS.forEach((a) => { VALUES[a.key] = Math.round(Number(summary.values?.[a.key] || 0)); });
+      VALUES_RAW = {};
+      AREAS.forEach((a) => {
+        VALUES_RAW[a.key] = Number(summary.values?.[a.key] || 0);
+        VALUES[a.key] = Math.round(VALUES_RAW[a.key]);
+      });
       recalc();
       if (typeof summary.score === 'number') {
         score = summary.score;
@@ -342,6 +346,9 @@
 
     /* ---------- 연속 훈련 ---------- */
     const streak = st.streak || {};
+    STREAK_STATE = streak;
+    WEEK_STATE = st.week || null;
+    if (st.condition) HOME_COND = st.condition;
     const chipStreak = $('#chip-streak');
     if (chipStreak) chipStreak.textContent = `${streak.current || 0}일`;
     const kStreak = $('#kpi-streak');
@@ -386,7 +393,7 @@
 
     /* ---------- 목표 / 맵 ---------- */
     GOALS = (st.goals || []).map((g) => ({
-      label: g.label, cur: g.cur, tgt: g.tgt, unit: g.unit || '',
+      label: g.label, target: g.target || '', cur: g.cur, tgt: g.tgt, unit: g.unit || '',
       gap: g.gap, gaptxt: g.gaptxt
     }));
     MAPS = (barracks && barracks.maps) || [];
@@ -483,9 +490,15 @@
     renderSettings(st);
     renderCloudState(st);
     renderInsights(st);
+    renderUtilRecent(st);
+    if (typeof compactGrayNotes === 'function') compactGrayNotes();
     renderUpdate(st.update);
     renderTray(st.tray);
     maybeShowDigest();
+    if (typeof drawHome === 'function') drawHome();
+    maybeShowOnboarding(st);
+    maybeShowUpdateGate(st);
+    startTiltPoll();
   }
   AL.applyState = applyState;
 
@@ -690,16 +703,21 @@
     };
 
     if (banner) {
+      const flow = (st && st.condition && st.condition.streak) || null;
+      const flowBadge = (flow && flow.n >= 2)
+        ? `<span class="streak-badge ${flow.kind === '승' ? 'win' : 'loss'}">${flow.n}연${flow.kind} 중</span>` : '';
       banner.innerHTML = `
         <div class="emb-bg"><img src="assets/${band.img}.png" alt=""></div>
         <div class="bn-left">
           <div class="bn-ava">${initial}<i></i></div>
           <div>
-            <div class="bn-name"><h2>${barracks.nickname}</h2>
-              <span class="tag ${weaponLabel === '스나' ? 'amber' : 'cyan'}" id="bn-user">${weaponLabel}</span></div>
-            <div class="bn-sub"><a class="bn-clan" role="button" tabindex="0" data-clan="${esc(clan)}" data-ouid="${esc(barracks.ouid || '')}"
-                title="${esc(clan)} · 병영수첩 페이지 열기">${esc(clan)}</a>
-              <span class="sep">·</span><span>가입 <b>${basic.created || '—'}</b></span></div>
+            <div class="bn-name"><h2 class="bn-self" role="button" tabindex="0" data-ouid="${esc(barracks.ouid || '')}"
+                title="내 병영수첩 상세 페이지 열기">${barracks.nickname}</h2>
+              <span class="tag ${weaponLabel === '스나' ? 'amber' : 'cyan'}" id="bn-user">${weaponLabel}</span>${flowBadge}</div>
+            <div class="bn-sub">
+              <a class="bn-clan" role="button" tabindex="0" data-clan="${esc(clan)}" data-ouid="${esc(barracks.ouid || '')}"
+                title="${esc(clan)} · 클랜 홈페이지 열기">${esc(clan)}</a>
+            </div>
           </div>
         </div>
         <div class="bn-stats">
@@ -779,7 +797,11 @@
           <span class="ustate ${nexon.connected ? 'on' : 'warn'}">${nexon.connected ? '키 등록됨' : '키 필요'}</span>
         </div>
         ${inputRow('set-nick', '서든어택 닉네임', set.nickname || '', { maxlength: 12 })}
-        ${inputRow('set-key', 'NEXON Open API 키', '', { type: 'password', hint: '발급: open.api.nexon.com · test_ 키는 본인 계정 전용입니다' })}
+        <div class="field"><label>NEXON Open API 키</label>
+          <input id="set-key" class="inp" type="text" value="${nexon.connected ? esc(set.api_key_masked || '등록됨') : ''}"
+            placeholder="발급: open.api.nexon.com">
+          <div class="hint">${nexon.connected ? '키 등록됨 · 그대로 두면 유지됩니다 (새 키를 붙여넣으면 교체)' : '발급: open.api.nexon.com · test_ 키는 본인 계정 전용입니다'}</div>
+        </div>
         <div class="set-note">목표 <b>4종</b>은 대시보드·병영수첩 게이지에 바로 반영됩니다</div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
           ${inputRow('set-goal-win', '승률 %', goals.win ?? 55, { type: 'number' })}
@@ -810,6 +832,7 @@
         ${switchRow('auto_launch', '추천 시나리오 자동 실행', '▶ 버튼으로 Steam 원클릭 실행', !!set.auto_launch)}
         ${switchRow('autosave', '점수 자동 저장', '입력 후 저장 버튼 없이 기록', !!set.autosave)}
         ${switchRow('kovak_autofill', '코박스 점수 자동 채움', '앱으로 돌아올 때 오늘 플레이 기록을 자동 저장', !!set.kovak_autofill)}
+        ${switchRow('tilt_watch', '연패 브레이크 알림', '서든 실행 중 3연패(주의) · 5연패(위험) 감지', set.tilt_watch !== false)}
         <div class="set-actions">
           <button class="btn btn-primary" id="set-run-save">저장</button>
           <button class="btn btn-ghost" id="set-open-folder">기록 폴더 열기</button>
@@ -859,6 +882,7 @@
           <span class="chip" style="height:20px;font-size:9.5px">v${meta.version || '1.3.1'}</span>
         </div>
         ${switchRow('hotkey_enabled', 'Ctrl+Shift+A 창 부르기', '어디서든 단축키로 창을 숨기기/보이기', set.hotkey_enabled !== false)}
+        ${switchRow('tilt_watch', '연승·연패 트레이 알림', '3연승(🔥) · 3~4연패(⚠️) · 5연패(🚨) 트레이 풍선 + 앱 알림', set.tilt_watch !== false)}
         <div class="set-note">창 닫기(<b>X</b>)는 항상 <b>트레이로 숨기기 / 프로그램 종료</b> 확인창을 띄웁니다.</div>
         <div class="set-status" id="set-tray-state" style="font-size:9.5px">트레이 상태 확인 중…</div>
         <div class="set-status" id="set-update-info" style="font-size:9.5px">현재 v${meta.version || '1.3.1'} · 업데이트를 확인해 보세요</div>
@@ -886,7 +910,7 @@
 
     const metaLine = $('#set-meta-line');
     if (metaLine) {
-      metaLine.textContent = `v${meta.version || '1.3.1'} · 훈련 기록 ${n0(count)}회 · ${meta.frozen ? '배포 빌드' : '소스 실행'}`;
+      metaLine.textContent = `v${meta.version || '1.4.0'} · 훈련 기록 ${n0(count)}회`;
     }
   }
 
@@ -1638,6 +1662,41 @@
   }
 
   /* ------------------------------------------------------------ 5분 워밍업 */
+  /* ---------- 오늘 훈련 시작 팝업 (바로 Steam 을 켜지 않는다) ---------- */
+  function openToday() {
+    const mask = $('#today-mask');
+    const list = $('#today-list');
+    const rows = (typeof RECS !== 'undefined' && RECS[`${game}-${weapon}`]) || [];
+    if (list) {
+      if (!rows.length) {
+        list.innerHTML = '<div class="empty">추천을 계산하려면 훈련 기록이 필요합니다 · 시나리오에서 첫 점수를 남겨 주세요</div>';
+      } else {
+        list.innerHTML = rows.map((r, i) => {
+          const area = (typeof AREAS !== 'undefined' ? AREAS[r.area] : null) || { name: '', cls: '' };
+          const today = recTodayScore(r);
+          return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 74px 54px 54px;gap:8px;align-items:center;padding:7px 9px;border-radius:8px;background:${r.done ? 'rgba(52,211,153,.07)' : 'rgba(7,11,19,.5)'};border:1px solid ${r.done ? 'rgba(52,211,153,.26)' : 'rgba(148,163,184,.12)'}">
+            <div class="num" style="color:${r.done ? '#34D399' : '#F59E0B'};font-weight:800;font-size:11px;text-align:center">${r.done ? '✓' : i + 1}</div>
+            <div style="min-width:0"><div style="font-size:11.5px;font-weight:700;color:#EAF1FB;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</div>
+              <div style="font-size:8.5px;color:#8496AE;font-weight:600">${area.name} · ${r.diff || '초급'}</div></div>
+            <div style="font-family:var(--num);font-size:10.5px;text-align:right;color:${today == null ? '#5E6E85' : '#FDE8BD'}">${today == null ? '미기록' : Number(today).toLocaleString('ko-KR')}</div>
+            <button class="btn-tiny" data-today-score="${esc(r.name)}" title="이 시나리오 점수 입력">점수</button>
+            <button class="btn-tiny" data-today-run="${esc(r.name)}" style="color:#BFE9F7;border-color:rgba(56,189,248,.3);background:rgba(56,189,248,.12)">▶ 실행</button>
+          </div>`;
+        }).join('');
+      }
+    }
+    const sub = $('#today-sub');
+    if (sub) sub.textContent = `${game === 'kovak' ? "KovaaK's" : 'Aim Lab'} · ${weapon === 'sniper' ? '스나' : '라플'} · 추천 ${rows.length}종 · 개별 실행 또는 연속 실행`;
+    if (mask) mask.classList.add('show');
+  }
+
+  function openTodayScore(name) {
+    const mask = $('#today-mask');
+    if (mask) mask.classList.remove('show');
+    if (name && typeof openScenario === 'function') { openScenario(name); return; }
+    openScoreModal();
+  }
+
   async function openWarmup() {
     if (!AL.real) return toast('앱(.exe)에서 실행하면 워밍업이 열립니다', false);
     busy(true, '워밍업 3종을 고르는 중…');
@@ -1775,27 +1834,24 @@
     const detail = $('#perf-detail');
     if (detail) {
       const power = perf.power ? (perf.power.name || perf.power.guid) : (perf.label || '—');
-      detail.textContent = `전원 옵션 ${power} · 게임 모드 ${gmOn ? '켜짐' : '꺼짐'}`
-        + (perf.applied_at ? ` · 마지막 적용 ${fmtLabel(perf.applied_at)}` : '')
-        + (perf.backup ? ' · 복구 지점 있음' : '');
+      detail.textContent = `전원 옵션 ${power} · 게임 모드 ${gmOn ? '켜짐' : '꺼짐'}`;
     }
     const chip = $('#perf-chip');
     if (chip) {
-      chip.textContent = !perf.supported ? '윈도우 전용' : (perf.optimal ? '적용됨' : '대기');
-      chip.className = 'ustate' + (perf.optimal ? ' on' : (perf.supported ? ' warn' : ''));
+      chip.textContent = !perf.supported ? '윈도우 전용' : (optimal ? '적용됨' : '대기');
+      chip.className = 'ustate' + (optimal ? ' on' : (perf.supported ? ' warn' : ''));
     }
     const stateEl = $('#perf-state');
     if (stateEl) {
       const gm = perf.game_mode || {};
-      stateEl.textContent = gm.enabled === true ? '게임 모드 켜짐' : (gm.enabled === false ? '게임 모드 꺼짐' : '기본값');
-      stateEl.className = 'ustate' + (gm.enabled ? ' on' : '');
+      const gmTxt = gm.enabled === true ? '켜짐' : (gm.enabled === false ? '꺼짐' : '기본값');
+      stateEl.textContent = `게임 모드 ${gmTxt} · ${optimal ? '적용됨' : '적용 전'}`;
+      stateEl.className = '';
     }
     const label = $('#perf-label');
     if (label) {
       const power = perf.power ? (perf.power.name || perf.power.guid) : (perf.label || '—');
-      const applied = perf.applied_at ? ` · 마지막 적용 ${fmtLabel(perf.applied_at)}` : '';
-      const backup = perf.backup ? ' · 복구 지점 있음' : '';
-      label.textContent = `전원 옵션: ${power} · 게임 모드 ${(perf.game_mode || {}).enabled === true ? '켜짐' : '기본값'}${applied}${backup}`;
+      label.textContent = `전원 옵션 · ${power}`;
     }
   }
 
@@ -1947,6 +2003,16 @@
     g.beginPath(); g.moveTo(P, ry - 20); g.lineTo(W - P, ry - 20); g.stroke();
     g.fillStyle = '#C7D3E4'; g.font = `800 19px ${F}`;
     g.fillText('인게임 랭크전', P, ry + 18);
+    const brStats = (barracks || {}).stats || {};
+    const brName = (barracks || {}).nickname || ((st.nexon || {}).nickname || '');
+    if (brName) {
+      g.textAlign = 'right';
+      g.fillStyle = '#FDE8BD'; g.font = `800 18px ${F}`;
+      g.fillText(brName, W - P, ry + 18);
+      g.fillStyle = '#7E8FA6'; g.font = `600 14px ${F}`;
+      g.fillText(brStats.games ? `최근 ${brStats.games}판 · 승률 ${Number(brStats.win || 0).toFixed(1)}% · K/D ${Number(brStats.kd || 0).toFixed(1)}% · 딜량 ${Number(brStats.dmg || 0).toLocaleString('ko-KR')}` : '전적 미연동', W - P, ry + 40);
+      g.textAlign = 'left';
+    }
     const boxes = [
       { label: '솔로', tier: soloTier },
       { label: '파티', tier: partyTier }
@@ -1982,6 +2048,15 @@
       g.fillText(s.v, bx + bw3 / 2, sy + 72);
       g.textAlign = 'left';
     });
+
+    /* 워터마크 */
+    g.save();
+    g.globalAlpha = 0.055;
+    g.fillStyle = '#F8FAFC'; g.font = `800 64px ${FN}`;
+    g.textAlign = 'center';
+    g.fillText('SA AIM LABS', W / 2, 1084);
+    g.restore();
+    g.textAlign = 'left';
 
     /* 푸터 */
     g.beginPath(); g.moveTo(P, 1112); g.lineTo(W - P, 1112); g.stroke();
@@ -2056,6 +2131,651 @@
      ================================================================== */
   let bound = false;
 
+  /* ==================================================================
+     v1.4.0 — 스카우팅 · 듀오 시너지 · 맞춤 .plo · 온보딩 · 업데이트 · 연패 알림
+     ================================================================== */
+  const thCls = (v) => (Number(v) >= 75 ? 'hot' : Number(v) >= 55 ? 'mid' : 'low');
+
+  function openScout() {
+    const mask = $('#scout-mask');
+    if (mask) mask.classList.add('show');
+    const input = $('#scout-nicks');
+    if (input && !input.value) {
+      const names = (MEMBERS || []).filter((m) => !m.me && m.name).slice(0, 3).map((m) => m.name);
+      if (names.length) input.value = names.join(', ');
+    }
+  }
+
+  async function runScout() {
+    const input = $('#scout-nicks');
+    const raw = input ? input.value : '';
+    const names = raw.split(/[,，\n\t ]+/).map((s) => s.trim()).filter(Boolean).slice(0, 12);
+    if (!names.length) { toast('상대 닉네임을 1명 이상 입력해 주세요', false); return; }
+    if (!AL.real) { toast('앱(.exe)에서 상대 전적을 조회합니다', false); return; }
+    AL.scoutRoles = {};
+    busy(true, '상대 전적을 확인하는 중…');
+    const res = await call('scout_team', names.slice(0, 6));
+    busy(false);
+    if (!res || res.ok === false && !(res.rows || []).length) { fail(res, '스카우팅에 실패했습니다'); renderScout(res || {}); return; }
+    AL.scout = res;
+    renderScout(res);
+    if (res.message) toast(res.message, res.ok !== false);
+  }
+
+  function rolesApplied(rows) {
+    const roles = AL.scoutRoles || {};
+    return (rows || []).map((r) => {
+      if (!r || !r.weapon) return r;
+      const role = roles[r.name] || r.weapon.key;
+      return { ...r, weapon: { ...r.weapon, key: role, label: role === 'sniper' ? '스나' : '라플', manual: !!roles[r.name] } };
+    });
+  }
+
+  /* 화면에서 역할을 바꾸면 팀 스나수/전략을 즉시 다시 계산한다 (서버 규칙과 동일) */
+  function localTeam(rows) {
+    const players = (rows || []).filter((r) => r && !r.error);
+    if (!players.length) return { threat: 0, label: '정보 없음', tips: [], snipers: [], sniper_count: 0, sniper_style: '' };
+    const ranked = [...players].sort((a, b) => (b.threat || 0) - (a.threat || 0));
+    const avg = players.reduce((a, r) => a + (r.threat || 0), 0) / players.length;
+    const threat = Math.round(Math.min(100, avg * 0.65 + (ranked[0].threat || 0) * 0.35));
+    const label = threat >= 75 ? '위협' : threat >= 55 ? '경계' : threat >= 35 ? '평범' : '무난';
+    const snipers = players.filter((r) => (r.weapon || {}).key === 'sniper')
+      .sort((a, b) => ((b.weapon || {}).sniper_kd || 0) - ((a.weapon || {}).sniper_kd || 0));
+    const core = snipers.slice(0, 2);
+    const count = snipers.length;
+    let style = '';
+    let styleText = '';
+    const teamSize = players.length;
+    if (count >= 4 || (count === 3 && teamSize >= 6)) {
+      style = `${count}스나 과다`;
+      styleText = `상대 스나 ${count}명 — 연막·플래시로 시야를 끊고 숏·중거리 러시로 붙어서 싸우면 유리합니다.`;
+    } else if (count === 2) {
+      style = teamSize >= 6 ? '정석 2스나' : '정석 1~2스나';
+      styleText = '상대가 2스나 조합입니다. A롱·설대 긴 각만 피하고 2스나 각이 겹치는 구간을 먼저 끊으세요.';
+    } else if (count === 1) {
+      style = teamSize <= 5 ? '1스나 변칙' : '0~1스나 · 라플 위주';
+      styleText = `상대 스나가 ${count}명뿐인 라플 위주 팀입니다. 긴 거리에서 견제하며 먼 각에서 먼저 한 명을 따면 유리합니다.`;
+    } else {
+      style = '스나 없음 · 라플 위주';
+      styleText = '상대에 스나가 없습니다. 긴 각에서 먼저 한 명을 따고 천천히 밀어붙이면 유리합니다.';
+    }
+    const tips = [];
+    tips.push(`가장 위협적인 상대는 ${ranked[0].name} (${ranked[0].threat_label} ${ranked[0].threat}) — 솔로 ${ranked[0].solo_tier || '—'} · 최근 폼 K/D ${ranked[0].kd == null ? '—' : ranked[0].kd}%.`);
+    if (core.length) {
+      tips.push(`핵심 스나수 — ${core.map((c) => `${c.name}(스나 K/D ${(c.weapon || {}).sniper_kd == null ? '—' : (c.weapon || {}).sniper_kd}%)`).join(', ')}. 이 둘의 각을 동시에 주지 말고 연막으로 순서를 나눠 끊으세요.`);
+    }
+    tips.push(styleText);
+    const weak = players.map((r) => (r.weak_maps || [])[0]).find(Boolean);
+    if (weak) tips.push(`상대들이 약한 맵 ${weak.map} 를 유도하면 승률이 올라갑니다.`);
+    const sniperCount = count;
+    const rifleCount = players.length - sniperCount;
+    const teamN = players.length;
+    const ideal = teamN <= 5 ? (sniperCount === 1 || sniperCount === 2) : sniperCount === 2;
+    const balance = ideal ? 100 : sniperCount === 3 ? 74 : sniperCount === 0 ? 52
+      : sniperCount === 4 ? 44 : 24;
+    const balanceTxt = ideal ? (teamN <= 5 ? '정석 1~2스나' : '정석 2스나')
+      : sniperCount === 3 ? '3스나 편중' : sniperCount === 0 ? '스나 없음'
+      : sniperCount === 4 ? '4스나 편중' : `${sniperCount}스나 과다`;
+    const top2 = ranked.slice(0, 2);
+    const ace = Math.round(top2.reduce((a, r) => a + (r.threat || 0), 0) / Math.max(1, top2.length));
+    const power = Math.round(players.reduce((a, r) => a + (r.threat || 0), 0) / players.length);
+    const synScore = Math.round(balance * 0.45 + ace * 0.35 + power * 0.20);
+    const synLabel = synScore >= 80 ? '완성형 조합' : synScore >= 65 ? '균형 잡힌 조합' : synScore >= 50 ? '무난한 조합' : '구멍 있는 조합';
+    const synergy = { score: synScore, label: synLabel, balance, balance_txt: balanceTxt, ace,
+      sniper_count: sniperCount, rifle_count: rifleCount,
+      comment: `${balanceTxt} · 스나 ${sniperCount} / 라플 ${rifleCount} — 에이스 화력 ${ace}점` };
+    /* 실전 전력 = 기본 티어력 + 조합 시너지 보정 */
+    let adjust = 0;
+    const notes = [];
+    if (sniperCount === 2) { adjust += 6; notes.push('2스나 + 라플 보완 (+6)'); }
+    else if (teamN <= 5 && sniperCount === 1 && rifleCount >= 3) { adjust += 5; notes.push('5:5 1스나 변칙 (+5)'); }
+    else if (sniperCount > 2) { adjust -= 8 * (sniperCount - 2); notes.push(`스나 ${sniperCount}명 중복 (${-8 * (sniperCount - 2)})`); }
+    else if (sniperCount === 0) { adjust -= 6; notes.push('스나 없음 (-6)'); }
+    const styles = players.map((r) => (r.style || {}).key || '');
+    const rushN = styles.filter((x) => x === 'rush').length;
+    const stableN = styles.filter((x) => x === 'stable').length;
+    const supportN = styles.filter((x) => x === 'support').length;
+    const aceN = styles.filter((x) => x === 'ace').length;
+    if (rushN >= 1 && (stableN >= 1 || supportN >= 1)) { adjust += 4; notes.push('돌격형 + 안정/지원형 상성 (+4)'); }
+    if (stableN >= 3) { adjust -= 6; notes.push(`수비형 ${stableN}명 중복 (-6)`); }
+    if (rushN >= 3) { adjust -= 4; notes.push(`돌격형 ${rushN}명 · 앵커 부재 (-4)`); }
+    if (aceN >= 1) { adjust += 2; notes.push('에이스 캐리형 보유 (+2)'); }
+    const byDmg = [...players].filter((r) => r.dmg).sort((a, b) => b.dmg - a.dmg)[0];
+    const byWin = [...players].filter((r) => r.win != null).sort((a, b) => b.win - a.win)[0];
+    if (byDmg && byWin) {
+      if (byDmg.name !== byWin.name) { adjust += 4; notes.push('공격형+안정형 상호보완 (+4)'); }
+      else { adjust += 1; notes.push('에이스 단일 의존 (+1)'); }
+    }
+    const namesSet = new Set(players.map((r) => r.name));
+    let pairs = 0;
+    let pairBonus = 0;
+    players.forEach((r) => {
+      Object.entries(r.team_mates || {}).forEach(([mate, stat]) => {
+        if (mate === r.name || !namesSet.has(mate)) return;
+        const g = Number((stat || {}).games || 0);
+        if (g < 2) return;
+        pairs += 1;
+        const jointWin = Number((stat || {}).wins || 0) / g * 100;
+        if (jointWin >= Number(r.win || 0) + 2) pairBonus += 5;
+        else if (jointWin <= Number(r.win || 0) - 2) pairBonus -= 5;
+      });
+    });
+    if (pairs) {
+      pairBonus = Math.max(-10, Math.min(10, Math.round(pairBonus / Math.max(1, Math.floor(pairs / 2)))));
+      adjust += pairBonus;
+      notes.push(`합동 전적 케미 ${pairBonus >= 0 ? '+' : ''}${pairBonus}`);
+    }
+    const basePower = Math.round(avg);
+    const force = { base: basePower, adjust, power: Math.max(0, Math.min(100, basePower + adjust)), notes, pairs };
+    return { threat, label, tips, snipers: core, sniper_count: count, sniper_style: style, synergy, force };
+  }
+
+  function renderScoutSum(rows, team) {
+    const sum = $('#scout-sum');
+    if (!sum) return;
+    if (!rows.length) { sum.hidden = true; sum.innerHTML = ''; return; }
+    sum.hidden = false;
+    const force = team.force || { base: 0, adjust: 0, power: 0, notes: [] };
+    sum.innerHTML = `
+      <div class="sc"><span>기본 티어력</span><b>${force.base || 0}</b></div>
+      <div class="sc"><span>조합 시너지 보정</span><b style="color:${force.adjust >= 0 ? '#6EE7C0' : '#F7AFAE'}">${force.adjust > 0 ? '+' : ''}${force.adjust || 0}</b></div>
+      <div class="sc hl" title="${(force.notes || []).join(' · ')}"><span>실전 전력</span><b>${force.power || 0} <i style="font-style:normal;font-size:9.5px;color:#FBD48F">${team.synergy ? team.synergy.label : ''}</i></b></div>
+      <div class="sc" title="${team.synergy ? team.synergy.comment : ''}"><span>스나 구성</span><b style="font-size:12.5px">${team.sniper_style || '—'} <i style="font-style:normal;font-size:9.5px;color:#8FA1B8">(${team.sniper_count == null ? 0 : team.sniper_count}명)</i></b></div>`;
+  }
+
+  function renderScout(res) {
+    const raw = (res && res.rows) || [];
+    AL.scout = res || AL.scout || {};
+    if (!AL.scoutRoles) AL.scoutRoles = {};
+    const rows = rolesApplied(raw);
+    const team = rows.length ? localTeam(rows) : ((res && res.team) || {});
+    renderScoutSum(rows, team);
+    const table = $('#scout-table');
+    if (table) {
+      if (!rows.length) {
+        table.innerHTML = '<div class="empty">상대 닉네임을 입력하고 <b>조회</b>를 누르면 비교표가 나옵니다</div>';
+      } else {
+        const head = `<div class="scout-row hd"><span class="l">상대</span><span>솔로</span><span>파티</span><span>K/D</span><span>딜량</span><span>무기 K/D</span><span>위협</span></div>`;
+        const coreNames = new Set((team.snipers || []).map((s) => s.name));
+        const body = rows.map((r) => {
+          if (r.error) {
+            return `<div class="scout-row" style="border-color:rgba(239,68,68,.28)"><div class="nm">${r.name}<small style="color:#F7AFAE">${r.error}</small></div><div class="v">—</div><div class="v">—</div><div class="v">—</div><div class="v">—</div><div class="v">—</div><div class="v">—</div></div>`;
+          }
+          const w = r.weapon || {};
+          const core = coreNames.has(r.name);
+          return `<div class="scout-row"${core ? ' style="border-color:rgba(56,189,248,.34);background:rgba(56,189,248,.06)"' : ''}>
+            <div class="nm">
+              <div style="display:flex;align-items:center;gap:4px;min-width:0">
+                <b style="font-size:11.5px;font-weight:800;color:#EAF1FB;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.name}</b>
+                ${core ? '<span style="flex:0 0 auto;font-size:7.6px;color:#A9E5F8;font-weight:800;border:1px solid rgba(56,189,248,.32);border-radius:3px;padding:0 3px">핵심 스나</span>' : ''}
+                ${r.style ? `<span style="flex:0 0 auto;font-size:7.6px;color:#FCD9A0;font-weight:800;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.24);border-radius:3px;padding:0 3px" title="${r.style.desc || ''}">${r.style.emoji || ''} ${r.style.label}</span>` : ''}
+              </div>
+              <small style="display:block;margin-top:2px">${r.clan && r.clan !== '-' ? r.clan + ' 클랜 · ' : ''}최근 ${r.form && r.form.games ? r.form.games : (r.games || 0)}판 폼${r.form && r.form.streak >= 2 ? ' · ' + r.form.streak + '연승' : ''}</small>
+            </div>
+            <div class="v">${r.solo_tier || '—'}<br><span style="font-size:8.5px;color:#7E8FA6">${n0(r.solo)} RP</span></div>
+            <div class="v">${r.party ? (r.party_tier || '—') : '언랭크'}<br><span style="font-size:8.5px;color:#7E8FA6">${r.party ? n0(r.party) + ' RP' : '—'}</span></div>
+            <div class="v">${r.kd == null ? '—' : n0(r.kd, 1) + '%'}</div>
+            <div class="v">${r.dmg == null ? '—' : n0(r.dmg)}</div>
+            <div class="v" style="text-align:right">
+              <button class="btn-tiny" data-role="${esc(r.name)}" title="클릭해서 역할을 스나 ↔ 라플 로 바꿉니다" style="height:18px;font-size:8.5px;padding:0 5px">${w.manual ? w.label : (w.estimate || w.label || '—')}</button>
+              <br><span style="font-size:8px;color:#7E8FA6;white-space:nowrap">스나 K/D ${w.sniper_kd == null ? '—' : w.sniper_kd}% · 라플 K/D ${w.assault_kd == null ? '—' : w.assault_kd}%</span>
+            </div>
+            <div style="text-align:right"><span class="th ${thCls(r.threat)}">${r.threat} · ${r.threat_label}</span></div>
+          </div>`;
+        }).join('');
+        table.innerHTML = head + body +
+          ((team.tips || []).length
+            ? `<div class="scout-tips" style="margin-top:5px;padding:8px 10px;border-radius:8px;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.2)">
+                 ${team.tips.map((t) => `<div class="ti">${t}</div>`).join('')}</div>`
+            : '');
+      }
+    }
+    const note = $('#scout-note');
+    if (note) {
+      note.innerHTML = res && res.calls !== undefined
+        ? `이번 조회 API ${n0(res.calls)}건 · 이미 받은 전적은 캐시에서 사용 · <b>역할 버튼을 누르면 팀 스나수가 바로 다시 계산됩니다</b>`
+        : '스나/라플 수치는 사용 비중이 아니라 <b>무기별 K/D</b> 입니다 (합이 100%를 넘을 수 있습니다).';
+    }
+  }
+
+
+  function openDuo() {
+    const mask = $('#duo-mask');
+    if (mask) mask.classList.add('show');
+    if (AL.real && !AL.duoRankLoaded) { AL.duoRankLoaded = true; runDuoRank(); }
+    const input = $('#duo-nick');
+    if (input && !input.value) {
+      const friend = (MEMBERS || []).find((m) => !m.me && m.name);
+      if (friend) input.value = friend.name;
+    }
+  }
+
+  async function runDuo() {
+    const input = $('#duo-nick');
+    const names = String(input ? input.value : '').trim();
+    if (!names) { toast('함께 뛰는 친구 닉네임을 입력해 주세요', false); return; }
+    if (!AL.real) { renderDuo({ available: false, reason: '앱(.exe)에서 내 최근 매치 기록으로 분석합니다', friend: names }); return; }
+    busy(true, '최근 매치에서 함께 뛴 판을 찾는 중…');
+    const res = await call('duo_synergy', names);
+    busy(false);
+    AL.duo = res;
+    renderDuo(res || {});
+  }
+
+  function renderDuo(d) {
+    const box = $('#duo-body');
+    if (!box) return;
+    if (!d || !d.available) {
+      box.innerHTML = `<div class="digest-advice" style="background:rgba(245,158,11,.07);border-color:rgba(245,158,11,.24);color:#FDE8BD">
+          <span class="ic">🤝</span><span>${(d && (d.reason || d.label)) || '함께 뛴 판을 찾지 못했습니다'}</span></div>
+        <div class="mnote">병영수첩의 <b>전적 불러오기</b>를 한 번 실행해 두면 최근 100판의 같은 팀 정보로 비교합니다.</div>`;
+      return;
+    }
+    const t = d.together || {};
+    const a = d.alone || {};
+    const dl = d.delta || {};
+    const fmt = (v, u) => (v === null || v === undefined ? '—' : (u === '%' ? Number(v).toFixed(1) + '%' : n0(v)));
+    box.innerHTML = `
+      <div class="duo-grid">
+        <div class="duo-card together"><span>함께 뛴 판</span><b>${fmt(t.win, '%')}</b><i>승률 · ${t.games || 0}판</i></div>
+        <div class="duo-card alone"><span>혼자 뛴 판</span><b>${fmt(a.win, '%')}</b><i>승률 · ${a.games || 0}판</i></div>
+        <div class="duo-card"><span>차이</span><b style="color:${(dl.win || 0) >= 0 ? '#6EE7C0' : '#F7AFAE'}">${dl.win == null ? '—' : (dl.win > 0 ? '+' : '') + dl.win + '%p'}</b><i>K/D ${dl.kd == null ? '—' : (dl.kd > 0 ? '+' : '') + dl.kd + '%'} · 딜 ${dl.dmg == null ? '—' : (dl.dmg > 0 ? '+' : '') + n0(dl.dmg)}</i></div>
+      </div>
+      <div class="digest-advice" style="background:rgba(52,211,153,.07);border-color:rgba(52,211,153,.26);color:#CFF6E6">
+        <span class="ic">${d.tone === 'warn' ? '⚠️' : '🤝'}</span><span><b>${d.verdict || ''}</b> · ${d.label || ''}</span>
+      </div>
+      ${d.force ? `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:rgba(148,163,184,.05);border:1px solid rgba(148,163,184,.12);font-size:10px;font-weight:700;color:#93A4BA">
+        <span>기본 전력 <b class="num" style="color:#C7D3E4">${d.force.base}</b></span>
+        <span style="color:#4E5C72">+</span>
+        <span>케미 보정 <b class="num" style="color:${d.force.adjust >= 0 ? '#6EE7C0' : '#F7AFAE'}">${d.force.adjust > 0 ? '+' : ''}${d.force.adjust}</b></span>
+        <span style="color:#4E5C72">=</span>
+        <span>실전 전력 <b class="num" style="color:#FDE8BD;font-size:12px">${d.force.power}</b></span>
+        <span style="margin-left:auto;font-size:9px;color:#7E8FA6">${(d.force.notes || []).join(' · ')}</span>
+      </div>` : ''}
+      <div class="mnote">${d.note || ''}</div>`;
+  }
+
+  function renderUtilRecent(st) {
+    const opp = $('#util-opp');
+    const friends = $('#util-friends');
+    const meta = $('#util-recent-meta');
+    if (!opp || !friends) return;
+    const matches = ((st || AL.state || {}).barracks || {}).matches || [];
+    const first = matches[0] || null;
+    const me = String(((st || AL.state || {}).nexon || {}).nickname || '').trim().toLowerCase();
+    const names = [];
+    ((first && first.players) || []).forEach((p) => {
+      const nm = String((p && p[0]) || '').trim();
+      if (nm && nm.toLowerCase() !== me && !names.includes(nm)) names.push(nm);
+    });
+    const opponents = names.slice(0, 6);
+    if (meta) meta.textContent = first ? `${first.map || '최근 매치'} · ${(first.date || '').slice(5)}` : '최근 매치 없음';
+    opp.innerHTML = opponents.length
+      ? opponents.map((n) => `<button class="chip" data-opp="${esc(n)}" style="height:24px;font-size:9.5px;cursor:pointer" title="이 닉네임으로 스카우팅">${n}</button>`).join('')
+        + `<button class="ubtn" id="util-opp-run" style="height:24px;padding:0 10px;font-size:9.5px">이 5명 분석</button>`
+      : '<span style="font-size:10px;color:#6E7F95;font-weight:600">병영수첩을 불러오면 상대 5명이 자동으로 표시됩니다</span>';
+    const table = {};
+    matches.slice(0, 30).forEach((m) => {
+      (m.players || []).forEach((p) => {
+        const nm = String((p && p[0]) || '').trim();
+        if (!nm || nm.toLowerCase() === me) return;
+        table[nm] = table[nm] || { games: 0, wins: 0 };
+        table[nm].games += 1;
+        if (String(m.result) === '승') table[nm].wins += 1;
+      });
+    });
+    const top = Object.entries(table).sort((a, b) => b[1].games - a[1].games).slice(0, 4);
+    friends.innerHTML = top.length
+      ? `<div style="font-size:9px;font-weight:800;color:#71829A;letter-spacing:.04em">최근 함께 뛴 친구</div>` + top.map(([nm, v]) =>
+        `<div style="display:flex;align-items:center;gap:6px;font-size:10px;color:#C7D3E4"><span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${nm}</span>
+          <span style="margin-left:auto;font-family:var(--num);font-size:9px;color:#8FA1B8">${v.games}판 · ${Math.round(v.wins / v.games * 100)}%</span></div>`).join('')
+      : '';
+    const run = $('#util-opp-run');
+    if (run) run.addEventListener('click', () => { AL.pendingScout = opponents; runScoutAuto(); });
+    opp.querySelectorAll('[data-opp]').forEach((b) => b.addEventListener('click', () => {
+      const input = $('#scout-nicks');
+      if (input) input.value = b.dataset.opp;
+      openScout();
+    }));
+  }
+
+  async function runScoutAuto() {
+    if (!AL.real) { toast('앱(.exe)에서 방금 끝난 판 상대를 불러옵니다', false); return; }
+    busy(true, '방금 끝난 판 상대를 불러오는 중…');
+    const res = await call('scout_last_match');
+    busy(false);
+    if (!res || res.ok === false) { fail(res, '상대를 불러오지 못했습니다'); return; }
+    AL.scout = res;
+    AL.scoutRoles = {};
+    const input = $('#scout-nicks');
+    if (input && (res.opponents || []).length) input.value = res.opponents.join(', ');
+    const mask = $('#scout-mask');
+    if (mask) mask.classList.add('show');
+    renderScout(res);
+    toast(res.message || '방금 끝난 판 상대를 분석했습니다', true, 5000);
+  }
+
+  /* ---------- 내전 팀 자동 짜기 ---------- */
+  let balanceShown = false;
+  async function openBalance() {
+    const mask = $('#balance-mask');
+    if (mask) mask.classList.add('show');
+    if (!AL.real || balanceShown) return;
+    balanceShown = true;
+    const box = $('#balance-members');
+    if (box) box.innerHTML = '<div class="mnote">순위표 · 최근 동반 플레이어를 불러오는 중…</div>';
+    const res = await call('balance_candidates');
+    AL.balanceCands = res || {};
+    renderBalanceCandidates();
+  }
+
+  function renderBalanceCandidates() {
+    const box = $('#balance-members');
+    if (!box) return;
+    const members = (AL.balanceCands && AL.balanceCands.members) || [];
+    const mates = (AL.balanceCands && AL.balanceCands.coplayers) || [];
+    const row = (c) => {
+      const role = (AL.balanceRoles || {})[c.name] || (c.weapon === 'rifle' ? 'rifle' : 'sniper');
+      return `<label style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:7px;background:rgba(7,11,19,.5);border:1px solid rgba(148,163,184,.12);cursor:pointer">
+        <input type="checkbox" data-bal-name="${esc(c.name)}" style="accent-color:#F59E0B">
+        <span style="font-size:11px;font-weight:700;color:#EAF1FB;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name}${c.me ? ' <small style="color:#FBD48F">ME</small>' : ''}</span>
+        <button type="button" data-bal-role="${esc(c.name)}" title="클릭해서 스나 ↔ 라플" style="height:17px;font-size:8.5px;font-weight:800;padding:0 5px;border-radius:4px;border:1px solid ${role === 'sniper' ? 'rgba(245,158,11,.4)' : 'rgba(56,189,248,.4)'};background:${role === 'sniper' ? 'rgba(245,158,11,.15)' : 'rgba(56,189,248,.13)'};color:${role === 'sniper' ? '#FCD9A0' : '#A9E5F8'}">${role === 'sniper' ? '스나' : '라플'}</button>
+        <span style="margin-left:auto;font-family:var(--num);font-size:9px;color:#8FA1B8;white-space:nowrap">${c.source === 'match' ? `동반 ${c.games}판` : (c.solo ? n0(c.solo) + ' RP' : '언랭크')}</span>
+      </label>`;
+    };
+    const head = (t) => `<div style="grid-column:1/-1;font-size:8.5px;font-weight:800;color:#71829A;letter-spacing:.05em;margin:2px 0 -1px">${t}</div>`;
+    box.innerHTML = (members.length ? head('순위표 멤버') + members.map(row).join('') : '')
+      + (mates.length ? head('최근 매치 동반 플레이어 (캐시)') + mates.map(row).join('') : '');
+    if (!members.length && !mates.length) {
+      box.innerHTML = '<div class="mnote">후보가 없습니다 · 병영수첩을 최신화하거나 순위표에 친구를 등록해 주세요</div>';
+    }
+  }
+
+  function balanceNames() {
+    return $$('#balance-members input[data-bal-name]:checked').map((el) => el.dataset.balName);
+  }
+
+  async function runBalance() {
+    if (!AL.real) { toast('앱(.exe)에서 팀을 나눕니다', false); return; }
+    const names = balanceNames();
+    if (names.length && names.length < 6) { toast('내전은 3:3(6명) 이상 선택해 주세요', false); return; }
+    const box = $('#balance-result');
+    if (box) box.innerHTML = '<div class="mnote">균형을 계산하는 중…</div>';
+    const roles = {};
+    names.forEach((n) => { if ((AL.balanceRoles || {})[n]) roles[n] = AL.balanceRoles[n]; });
+    const res = await call('balance_teams', names, 0, roles);
+    renderBalance(res || {});
+  }
+
+  function renderBalance(res) {
+    const box = $('#balance-result');
+    if (!box) return;
+    if (!res || res.available === false) {
+      box.innerHTML = `<div class="digest-advice" style="background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.28);color:#FDE8BD"><span class="ic">⚖️</span><span>${(res && (res.reason || res.message)) || '멤버를 2명 이상 선택해 주세요'}</span></div>`;
+      return;
+    }
+    const team = (t, label, cls) => `
+      <div style="border-radius:10px;padding:9px 11px;background:rgba(7,11,19,.5);border:1px solid ${cls}">
+        <div style="display:flex;align-items:center;gap:7px;margin-bottom:6px">
+          <b style="font-size:12px;font-weight:900;color:#EAF1FB">${label}</b>
+          <span class="num" style="font-size:10px;color:#8FA1B8">평균 ${t.power} · 스나 ${t.snipers}명</span>
+        </div>
+        ${(t.rows || []).map((r) => `<div style="display:flex;align-items:center;gap:6px;font-size:10px;color:#C7D3E4;padding:2px 0">
+          <span style="color:${r.role === 'sniper' ? '#FCD9A0' : '#A9E5F8'};font-weight:800">${r.role === 'sniper' ? '스나' : '라플'}</span>
+          <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</span>
+          <span style="font-size:9px;color:#7E8FA6">${r.style_emoji || ''}${r.style || ''}</span>
+          <span class="num" style="margin-left:auto;font-size:9.5px;color:#FDE8BD">${r.power}</span>
+        </div>`).join('')}
+      </div>`;
+    box.innerHTML = `<div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
+        ${team(res.a, 'A팀', 'rgba(245,158,11,.34)')}
+        ${team(res.b, 'B팀', 'rgba(56,189,248,.34)')}
+      </div>
+      <div class="digest-advice" style="background:rgba(52,211,153,.07);border-color:rgba(52,211,153,.26);color:#CFF6E6">
+        <span class="ic">⚖️</span><span><b>${res.verdict}</b> · ${res.note}</span>
+      </div>`;
+    const note = $('#balance-note');
+    if (note) note.textContent = `${res.size} : ${res.size} 기준 · 후보 ${res.pool}명 — 체크를 바꾸면 다시 계산합니다`;
+  }
+
+  async function runDuoRank() {
+    if (!AL.real) { toast('앱(.exe)에서 순위표 멤버로 분석합니다', false); return; }
+    const box = $('#duo-rank');
+    if (box) box.innerHTML = '<div class="mnote">최근 매치에서 함께 뛴 판을 세는 중…</div>';
+    const res = await call('duo_rank', []);
+    renderDuoRank(res || {});
+  }
+
+  function renderDuoRank(res) {
+    const box = $('#duo-rank');
+    if (!box) return;
+    const rows = (res && res.rows) || [];
+    if (!rows.length) {
+      box.innerHTML = `<div class="mnote">${(res && (res.note || res.message)) || '함께 뛴 판이 2판 이상인 친구가 없습니다 — 병영수첩을 최신화해 주세요'}</div>`;
+      return;
+    }
+    const medal = ['🥇', '🥈', '🥉'];
+    box.innerHTML = rows.map((r, i) => `
+      <div style="display:grid;grid-template-columns:26px minmax(0,1fr) 58px 72px 70px;gap:7px;align-items:center;padding:6px 8px;border-radius:7px;background:rgba(7,11,19,.5);border:1px solid ${i === 0 ? 'rgba(245,158,11,.34)' : 'rgba(148,163,184,.12)'}">
+        <div style="font-size:12px;text-align:center">${medal[i] || (i + 1)}</div>
+        <div style="min-width:0"><div style="font-size:11px;font-weight:800;color:#EAF1FB;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.friend}</div>
+          <div style="font-size:8.5px;color:#7E8FA6;font-weight:600">함께 ${r.games}판 · 혼자 ${r.alone_games}판</div></div>
+        <div class="num" style="font-size:11px;text-align:right;color:${(r.win_delta || 0) >= 0 ? '#6EE7C0' : '#F7AFAE'}">${r.win_delta == null ? '—' : (r.win_delta > 0 ? '+' : '') + r.win_delta + '%p'}</div>
+        <div class="num" style="font-size:10px;text-align:right;color:#C7D3E4">K/D ${r.kd_delta == null ? '—' : (r.kd_delta > 0 ? '+' : '') + r.kd_delta}%</div>
+        <div style="text-align:right"><span class="num" style="font-size:11px;font-weight:800;color:#FDE8BD">${r.score}</span>
+          <div style="font-size:8px;color:#8FA1B8;font-weight:700">${r.verdict || ''}</div></div>
+      </div>`).join('');
+  }
+
+  async function openPersonalPlo() {
+    const mask = $('#plo-mask');
+    if (mask) mask.classList.add('show');
+    if (!AL.real) { toast('앱(.exe)에서 약점·무기 기준으로 만듭니다', false); return; }
+    busy(true, '약점 + 주무기로 플레이리스트를 고르는 중…');
+    const res = await call('personal_playlist', game, weapon, false);
+    busy(false);
+    if (!res || res.ok === false) { fail(res, '플레이리스트를 만들지 못했습니다'); return; }
+    AL.plan = res;
+    renderPlan(res);
+  }
+
+  function renderPlan(plan) {
+    const coach = $('#plo-coaching');
+    if (coach) {
+      coach.innerHTML = (plan.coaching || []).map((t) => `<div class="coach-row"><div class="ic">🤖</div><div class="tx"><div class="d" style="font-size:9.5px">${t}</div></div></div>`).join('');
+    }
+    const list = $('#plo-list');
+    if (list) {
+      list.innerHTML = (plan.reasons || []).map((r, i) => `
+        <div style="display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:8px;align-items:center;padding:6px 9px;border-radius:8px;background:rgba(7,11,19,.5);border:1px solid rgba(148,163,184,.12)">
+          <div class="num" style="color:#F59E0B;font-weight:800;font-size:11px">${i + 1}</div>
+          <div style="min-width:0"><div style="font-size:11px;font-weight:700;color:#EAF1FB;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</div>
+            <div style="font-size:8.8px;color:#8496AE;font-weight:600;margin-top:1px">${r.why || ''}</div></div>
+          <span class="area" style="height:18px;font-size:8.5px">${r.area || ''}</span>
+        </div>`).join('');
+    }
+    const sub = $('#plo-sub');
+    if (sub) sub.textContent = `약점 ${(plan.focus || []).join(' · ')} 우선 · ${plan.count}종 · ${plan.philosophy || ''}`;
+  }
+
+  async function savePersonalPlo() {
+    if (!AL.real) { toast('앱(.exe)에서 플레이리스트 파일을 저장합니다', false); return; }
+    const res = await call('personal_playlist', game, weapon, true);
+    if (!res || res.ok === false) { fail(res, '저장에 실패했습니다'); return; }
+    toast(res.message || '맞춤 플레이리스트를 저장했습니다', true, 5200);
+  }
+
+  /* ---------- 온보딩 ---------- */
+  let onbShown = false;
+  let onbStep = 0;
+  const onbPick = { weapon: 'sniper', game: 'kovak' };
+
+  function maybeShowOnboarding(st) {
+    if (!AL.real || onbShown) return;
+    const ob = (st && st.onboarding) || {};
+    if (!ob.needed) return;
+    onbShown = true;
+    onbPick.weapon = ob.weapon || (weapon || 'sniper');
+    onbPick.game = ob.game || (game || 'kovak');
+    onbStep = 0;
+    const nick = $('#onb-nick');
+    if (nick) nick.value = (st.nexon || {}).nickname || '';
+    paintOnb();
+    const mask = $('#onb-mask');
+    if (mask) mask.classList.add('show');
+  }
+
+  function paintOnb() {
+    const s0 = $('#onb-step-0');
+    const s1 = $('#onb-step-1');
+    const s2 = $('#onb-step-2');
+    if (s0) s0.hidden = onbStep !== 0;
+    if (s1) s1.hidden = onbStep !== 1;
+    if (s2) s2.hidden = onbStep !== 2;
+    ['0', '1', '2'].forEach((i) => { const d = $('#onb-dot-' + i); if (d) d.classList.toggle('on', onbStep >= Number(i)); });
+    const prev = $('#onb-prev');
+    if (prev) prev.hidden = onbStep <= 1;
+    const next = $('#onb-next');
+    if (next) { next.hidden = onbStep === 0; next.textContent = onbStep === 1 ? '다음' : '시작하기'; }
+    const skip = $('#onb-skip');
+    if (skip) skip.textContent = onbStep === 0 ? '건너뛰고 로컬로 시작' : '건너뛰기';
+    $$('#onb-weapons button').forEach((b) => b.classList.toggle('on', b.dataset.onbWeapon === onbPick.weapon));
+    $$('#onb-games button').forEach((b) => b.classList.toggle('on', b.dataset.onbGame === onbPick.game));
+  }
+
+  async function onbCloud(signup) {
+    if (!AL.real) { toast('앱(.exe)에서 로그인합니다', false); return; }
+    const email = String(($('#onb-email') || {}).value || '').trim();
+    const pw = String(($('#onb-pw') || {}).value || '');
+    const note = $('#onb-cloud-note');
+    if (!email || !pw) { toast('이메일과 비밀번호를 입력해 주세요', false); return; }
+    if (note) note.textContent = signup ? '가입 중…' : '로그인 중…';
+    const res = await call(signup ? 'cloud_signup' : 'cloud_signin', email, pw);
+    if (!res || res.ok === false) {
+      if (note) note.textContent = (res && res.message) || '로그인에 실패했습니다';
+      fail(res, '로그인에 실패했습니다');
+      return;
+    }
+    if (signup) {
+      if (note) note.textContent = '가입되었습니다 · 이어서 닉네임과 API 키를 설정합니다';
+      onbStep = 1;
+      paintOnb();
+      return;
+    }
+    busy(true, '클라우드 기록을 불러오는 중…');
+    await call('cloud_pull');
+    const done = await call('complete_onboarding', { nickname: '', api_key: '', weapon: onbPick.weapon, game: onbPick.game });
+    busy(false);
+    const mask = $('#onb-mask');
+    if (mask) mask.classList.remove('show');
+    if (done && done.state) applyState(done.state);
+    toast('클라우드 기록을 불러왔습니다 · 환영합니다', true, 4200);
+  }
+
+  async function finishOnboarding(skip) {
+    const mask = $('#onb-mask');
+    if (mask) mask.classList.remove('show');
+    if (!AL.real) { toast('앱(.exe)에서 저장합니다', true); return; }
+    if (skip) {
+      const res = await call('skip_onboarding');
+      if (res && res.state) applyState(res.state);
+      return;
+    }
+    const nick = ($('#onb-nick') || {}).value || '';
+    const key = ($('#onb-key') || {}).value || '';
+    const res = await call('complete_onboarding', {
+      nickname: nick.trim(), api_key: key.trim(), weapon: onbPick.weapon, game: onbPick.game,
+    });
+    if (!res || res.ok === false) { fail(res, '설정을 저장하지 못했습니다'); return; }
+    if (res.state) applyState(res.state);
+    if (nick.trim()) ME = nick.trim();
+    toast(res.message || '준비가 끝났습니다', true);
+  }
+
+  /* ---------- 구버전 차단 · 원클릭 업데이트 ---------- */
+  let gateShown = false;
+  function maybeShowUpdateGate(st) {
+    const g = (st && st.update_gate) || {};
+    AL.gate = g;
+    const mask = $('#update-mask');
+    if (!mask) return;
+    if (!g.blocked) {
+      if (gateShown && !mask.classList.contains('show')) return;
+      return;
+    }
+    if (gateShown) return;
+    gateShown = true;
+    const title = $('#update-title');
+    if (title) title.textContent = '새 버전으로 업데이트해 주세요';
+    const sub = $('#update-sub');
+    if (sub) sub.textContent = '이 버전은 더 이상 지원되지 않습니다 · 업데이트해야 계속 사용할 수 있습니다';
+    const ver = $('#update-version');
+    if (ver) ver.textContent = `v${g.current || ''} → ${g.latest ? 'v' + g.latest : 'new'}`;
+    const close = $('#update-close');
+    if (close) close.hidden = true;
+    const later = $('#update-later');
+    if (later) later.hidden = true;
+    const hint = $('#update-hint');
+    if (hint) hint.innerHTML = '내려받기 → 앱 종료 → 파일 교체 → 자동 재시작까지 한 번에 진행됩니다.<br><b style="color:#F7AFAE">구버전은 계속 사용할 수 없습니다.</b>';
+    mask.classList.add('show');
+  }
+
+  async function runUpdate() {
+    if (!AL.real) { toast('앱(.exe)에서 새 버전을 내려받습니다', false); return; }
+    const btn = $('#update-go');
+    if (btn) { btn.disabled = true; btn.textContent = '내려받는 중…'; }
+    const res = await call('install_update');
+    if (btn) { btn.disabled = false; btn.textContent = '지금 업데이트'; }
+    if (!res || res.ok === false) { fail(res, '업데이트에 실패했습니다'); return; }
+    const hint = $('#update-hint');
+    if (hint) hint.innerHTML = `<b style="color:#B7F5DA">${res.message || '새 버전을 받았습니다'}</b><br>[프로그램 종료]를 누르면 교체 후 자동으로 다시 시작됩니다.`;
+    const close = $('#update-close');
+    if (close) close.hidden = false;
+    const later = $('#update-later');
+    if (later) { later.hidden = false; later.textContent = '프로그램 종료'; }
+  }
+
+  /* ---------- 연패 브레이크 알림 ---------- */
+  let tiltTimer = null;
+  let tiltShown = null;
+  function startTiltPoll() {
+    if (tiltTimer || !AL.real) return;
+    tiltTimer = setInterval(async () => {
+      if (!AL.real) return;
+      const res = await call('tilt_state');
+      if (!res || !res.tilt) return;
+      AL.tilt = res.tilt;
+      const alerts = res.tilt.alerts || [];
+      const last = alerts[alerts.length - 1];
+      if (!last || !last.id || tiltShown === last.id) return;
+      tiltShown = last.id;
+      showTilt(last);
+    }, 60000);
+  }
+
+  function showTilt(a) {
+    const mask = $('#tilt-mask');
+    if (!mask) return;
+    const danger = a.tone === 'danger';
+    const hot = a.tone === 'hot';
+    const title = $('#tilt-title');
+    if (title) title.textContent = danger ? '🚨 위험 · 5연패 이상' : hot ? '🔥 연승 상승세' : '🧯 연패 브레이크 · 주의';
+    const sub = $('#tilt-sub');
+    if (sub) sub.textContent = danger ? '지금은 랭크를 멈추고 쉬어야 합니다'
+      : hot ? '지금 폼이 좋습니다 · 감도·무기는 그대로' : '잠깐 숨 고르고 다시 들어가세요';
+    const box = mask.querySelector('.digest-advice');
+    if (box) {
+      box.style.background = danger ? 'rgba(239,68,68,.10)' : hot ? 'rgba(52,211,153,.08)' : 'rgba(245,158,11,.08)';
+      box.style.borderColor = danger ? 'rgba(239,68,68,.42)' : hot ? 'rgba(52,211,153,.34)' : 'rgba(245,158,11,.30)';
+      box.style.color = danger ? '#FFD7D5' : hot ? '#CFF6E6' : '#FDE8BD';
+    }
+    const text = $('#tilt-text');
+    if (text) text.innerHTML = `<b>${a.title || ''}</b><br>${a.message || ''}`;
+    mask.classList.add('show');
+    toast(`${danger ? '🚨' : hot ? '🔥' : '🧯'} ${a.title || '연패 알림'}`, !(danger), 6000);
+    if (AL.real) call('ack_tilt', a.id || '').catch(() => {});
+  }
+
   function bind() {
     if (bound) return;
     bound = true;
@@ -2124,6 +2844,8 @@
       const b = $(sel);
       if (b) b.addEventListener('click', (e) => { e.preventDefault(); importKovak(false); });
     });
+    const reportBtnBr = $('#br-report');
+    if (reportBtnBr) reportBtnBr.addEventListener('click', (e) => { e.preventDefault(); saveReportCard(); });
     const reportBtn = $('#report-btn');
     if (reportBtn) reportBtn.addEventListener('click', (e) => { e.preventDefault(); saveReportCard(); });
     const ploBtn = $('#plo-btn');
@@ -2166,6 +2888,140 @@
     if (perfApplyBtn) perfApplyBtn.addEventListener('click', perfApply);
     const perfRestoreBtn = $('#perf-restore');
     if (perfRestoreBtn) perfRestoreBtn.addEventListener('click', perfRestore);
+
+    /* ---------- v1.4.0 · 전술 도구 · 스카우팅 · 듀오 · 맞춤 .plo ---------- */
+    ['#util-scout', '#br-scout', '#lb-scout'].forEach((sel) => {
+      const b = $(sel);
+      if (b) b.addEventListener('click', (e) => { e.preventDefault(); openScout(); });
+    });
+    ['#util-duo', '#br-duo', '#lb-duo'].forEach((sel) => {
+      const b = $(sel);
+      if (b) b.addEventListener('click', (e) => { e.preventDefault(); openDuo(); });
+    });
+    const scoutRun = $('#scout-run');
+    if (scoutRun) scoutRun.addEventListener('click', () => runScout());
+    const scoutTable = $('#scout-table');
+    if (scoutTable) scoutTable.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-role]');
+      if (!btn) return;
+      e.preventDefault();
+      const name = btn.dataset.role;
+      const current = (AL.scoutRoles || {})[name]
+        || (((AL.scout && AL.scout.rows) || []).find((r) => r.name === name) || {}).weapon?.key
+        || 'sniper';
+      AL.scoutRoles = { ...(AL.scoutRoles || {}), [name]: current === 'sniper' ? 'rifle' : 'sniper' };
+      renderScout(AL.scout || {});
+    });
+    const scoutInput = $('#scout-nicks');
+    if (scoutInput) scoutInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runScout(); } });
+    const scoutCopy = $('#scout-copy');
+    if (scoutCopy) scoutCopy.addEventListener('click', () => {
+      const team = (AL.scout && AL.scout.team) || {};
+      const text = [team.top ? `최고 위협: ${team.top} (${team.threat})` : '', ...(team.tips || [])].filter(Boolean).join('\n');
+      if (!text) { toast('먼저 스카우팅을 실행해 주세요', false); return; }
+      try {
+        navigator.clipboard.writeText(text);
+        toast('카운터 전략을 복사했습니다 · 디스코드에 붙여넣으세요', true);
+      } catch (err) { toast(text, true, 8000); }
+    });
+    const scoutAuto = $('#scout-auto');
+    if (scoutAuto) scoutAuto.addEventListener('click', () => runScoutAuto());
+    const utilScoutAuto = $('#util-scout-auto');
+    if (utilScoutAuto) utilScoutAuto.addEventListener('click', () => runScoutAuto());
+    const utilBalance = $('#util-balance');
+    if (utilBalance) utilBalance.addEventListener('click', () => openBalance());
+    const balBox = $('#balance-members');
+    if (balBox) balBox.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-bal-role]');
+      if (!btn) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const name = btn.dataset.balRole;
+      const cands = [...((AL.balanceCands || {}).members || []), ...((AL.balanceCands || {}).coplayers || [])];
+      const seed = cands.find((c) => c.name === name) || {};
+      const current = (AL.balanceRoles || {})[name] || (seed.weapon === 'rifle' ? 'rifle' : 'sniper');
+      AL.balanceRoles = { ...(AL.balanceRoles || {}), [name]: current === 'sniper' ? 'rifle' : 'sniper' };
+      renderBalanceCandidates();
+      const checked = new Set(balanceNames());
+      checked.forEach((n2) => { const el = document.querySelector(`#balance-members input[data-bal-name="${n2}"]`); if (el) el.checked = true; });
+    });
+    const balanceRun = $('#balance-run');
+    if (balanceRun) balanceRun.addEventListener('click', () => runBalance());
+    const balanceParse = $('#balance-parse');
+    if (balanceParse) balanceParse.addEventListener('click', () => {
+      const inp = $('#balance-paste');
+      const names = String(inp ? inp.value : '').split(/[,，\n\t ]+/).map((s) => s.trim()).filter(Boolean).slice(0, 16);
+      if (!names.length) { toast('닉네임을 붙여넣어 주세요', false); return; }
+      const cands = AL.balanceCands || (AL.balanceCands = { members: [], coplayers: [] });
+      const known = new Set([...(cands.members || []), ...(cands.coplayers || [])].map((c) => c.name));
+      names.filter((n) => !known.has(n)).forEach((n) => { cands.coplayers = cands.coplayers || []; cands.coplayers.unshift({ name: n, games: 0, source: 'match' }); });
+      renderBalanceCandidates();
+      $$('#balance-members input[data-bal-name]').forEach((el) => { el.checked = names.includes(el.dataset.balName); });
+      toast(`${names.length}명을 후보에 반영했습니다`, true);
+    });
+    AL.openToday = openToday;
+    const todayList = $('#today-list');
+    if (todayList) todayList.addEventListener('click', (e) => {
+      const run = e.target.closest('[data-today-run]');
+      if (run) { e.preventDefault(); const mask = $('#today-mask'); if (mask) mask.classList.remove('show'); launch(run.dataset.todayRun); return; }
+      const sc = e.target.closest('[data-today-score]');
+      if (sc) { e.preventDefault(); openTodayScore(sc.dataset.todayScore); }
+    });
+    const todayRunAll = $('#today-runall');
+    if (todayRunAll) todayRunAll.addEventListener('click', () => { const mask = $('#today-mask'); if (mask) mask.classList.remove('show'); launchAll(); });
+    const todayScore = $('#today-score');
+    if (todayScore) todayScore.addEventListener('click', () => { const mask = $('#today-mask'); if (mask) mask.classList.remove('show'); openScoreModal(); });
+    const duoRankBtn = $('#duo-rank-btn');
+    if (duoRankBtn) duoRankBtn.addEventListener('click', () => runDuoRank());
+    const duoRun = $('#duo-run');
+    if (duoRun) duoRun.addEventListener('click', () => runDuo());
+    const duoInput = $('#duo-nick');
+    if (duoInput) duoInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runDuo(); } });
+    const ploBtn2 = $('#personal-plo-btn');
+    if (ploBtn2) ploBtn2.addEventListener('click', (e) => { e.preventDefault(); openPersonalPlo(); });
+    const ploSave = $('#plo-save');
+    if (ploSave) ploSave.addEventListener('click', () => savePersonalPlo());
+
+    /* ---------- v1.4.0 · 온보딩 ---------- */
+    const onbLogin = $('#onb-login');
+    if (onbLogin) onbLogin.addEventListener('click', () => onbCloud(false));
+    const onbSignup = $('#onb-signup');
+    if (onbSignup) onbSignup.addEventListener('click', () => onbCloud(true));
+    const onbLocal = $('#onb-local');
+    if (onbLocal) onbLocal.addEventListener('click', () => { onbStep = 1; paintOnb(); });
+    const onbNext = $('#onb-next');
+    if (onbNext) onbNext.addEventListener('click', () => {
+      if (onbStep === 1) { onbStep = 2; paintOnb(); return; }
+      finishOnboarding(false);
+    });
+    const onbPrev = $('#onb-prev');
+    if (onbPrev) onbPrev.addEventListener('click', () => { onbStep = Math.max(0, onbStep - 1); paintOnb(); });
+    const onbSkip = $('#onb-skip');
+    if (onbSkip) onbSkip.addEventListener('click', () => finishOnboarding(true));
+    $$('#onb-weapons button').forEach((b) => b.addEventListener('click', () => { onbPick.weapon = b.dataset.onbWeapon; paintOnb(); }));
+    $$('#onb-games button').forEach((b) => b.addEventListener('click', () => { onbPick.game = b.dataset.onbGame; paintOnb(); }));
+
+    /* ---------- v1.4.0 · 업데이트 게이트 · 연패 알림 ---------- */
+    const upGo = $('#update-go');
+    if (upGo) upGo.addEventListener('click', () => runUpdate());
+    const upPage = $('#update-page');
+    if (upPage) upPage.addEventListener('click', () => {
+      const g = AL.gate || {};
+      if (g.url) call('open_external', g.url);
+      else toast('릴리스 페이지 주소가 없습니다', false);
+    });
+    const upLater = $('#update-later');
+    if (upLater) upLater.addEventListener('click', () => {
+      if ((AL.gate || {}).blocked) { call('close_window'); return; }
+      const mask = $('#update-mask');
+      if (mask) mask.classList.remove('show');
+    });
+    const tiltRest = $('#tilt-rest');
+    if (tiltRest) tiltRest.addEventListener('click', () => {
+      const mask = $('#tilt-mask');
+      if (mask) mask.classList.remove('show');
+      if (typeof openWarmup === 'function') openWarmup();
+    });
 
     /* ---------- 모달 닫기 ---------- */
     $$('[data-close]').forEach((btn) => {
@@ -2473,6 +3329,17 @@
       toast(result && result.ok
         ? `🪖 ${name || '내'} 병영수첩을 브라우저에서 엽니다`
         : ((result && result.message) || '병영수첩을 열지 못했습니다'), !!(result && result.ok), 5200);
+    };
+    AL.openClan = async function (ouid, name) {
+      const target = ouid || ((AL.state && AL.state.barracks) || {}).ouid || '';
+      if (!AL.real) {
+        toast('앱(.exe)에서 클랜 홈페이지를 엽니다', true);
+        return;
+      }
+      const result = await call('open_clan_page', target || null);
+      toast(result && result.ok
+        ? `🛡 ${name || ''} 클랜 홈페이지를 브라우저에서 엽니다`
+        : ((result && result.message) || '클랜 페이지를 열지 못했습니다'), !!(result && result.ok), 5200);
     };
     AL.saveMemo = async function (name, text) {
       if (!AL.real) return toast('앱(.exe)에서 메모를 저장합니다', false);

@@ -833,10 +833,15 @@ def heatmap(records: Sequence[dict[str, Any]], weeks: int = 14,
     weeks = max(6, min(26, int(weeks or 14)))
     start = today - _dt.timedelta(days=today.weekday()) - _dt.timedelta(weeks=weeks - 1)
     per_day: dict[str, int] = {}
+    day_scores: dict[str, list[float]] = {}
     for rec in records:
         day = _record_day(rec)
         names = {str(s.get("name")) for s in (rec.get("scenarios") or []) if s.get("score") is not None}
         per_day[day] = per_day.get(day, 0) + (len(names) or 1)
+        try:
+            day_scores.setdefault(day, []).append(float(score_of_record(rec)))
+        except (TypeError, ValueError):
+            pass
     # 점수 초기화 뒤에도 잔디가 남도록 날짜별 흔적을 함께 본다 (큰 쪽 사용)
     for day, slot in (attendance or {}).items():
         per_day[str(day)] = max(per_day.get(str(day), 0), int((slot or {}).get("n") or 0))
@@ -870,8 +875,11 @@ def heatmap(records: Sequence[dict[str, Any]], weeks: int = 14,
             if count:
                 trained_days += 1
                 total_runs += count
+            scores = day_scores.get(stamp) or []
+            avg = round(statistics.fmean(scores)) if scores else None
             column.append({"d": stamp, "n": count, "lvl": 0 if future else level(count),
-                           "future": future, "dow": dow})
+                           "future": future, "dow": dow, "score": avg,
+                           "sessions": len(scores)})
         grid.append(column)
     return {
         "weeks": weeks,

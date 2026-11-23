@@ -70,7 +70,7 @@ def build_store(base: Path):
     from app.store import Store
 
     store = Store(base / "data.json")
-    store.update_settings({"nickname": "휴가중.", "api_key": "test_9542ea5ac663d2c0"})
+    store.update_settings({"nickname": "휴가중.", "api_key": "test_9542ea5ac663d2c0", "onboarded": True})
     today = dt.date.today()
     # 여러 날 기록 → 잔디·연속일·추이
     for i, score in enumerate((152, 146, 158, 151, 161)):
@@ -104,7 +104,7 @@ def backend() -> None:
     from app import drs, nvidia, paths, scoring, winutil
     import shutil
 
-    check("APP_VERSION 1.3.1", paths.APP_VERSION == "1.3.1", paths.APP_VERSION)
+    check("APP_VERSION 1.4.0", paths.APP_VERSION == "1.4.0", paths.APP_VERSION)
 
     # ---- 1. 창: 크기만 고정, 위치는 자유 + 드래그 중 감시 pause
     plan = winutil.window_fix_plan((300, 900, 1600, 900), work=(0, 0, 1920, 1040))
@@ -394,8 +394,8 @@ def ui_checks() -> None:
 
         # ---------- 11 · 23. 8개 메뉴 · 설정 팝업
         nav = page.evaluate("""() => [...document.querySelectorAll('.nav-item')].map(b => b.dataset.screen)""")
-        expect = ["dashboard", "recs", "records", "barracks", "maps", "leaderboard", "tiers", "utils"]
-        check("사이드바 8개 메뉴로 세분화", nav == expect, str(nav))
+        expect = ["home", "dashboard", "recs", "records", "barracks", "maps", "leaderboard", "tiers", "utils"]
+        check("사이드바 9개 메뉴로 세분화", nav == expect, str(nav))
         check("설정은 메뉴에서 빠짐", "settings" not in nav, str(nav))
         page.click("#settings-btn")
         page.wait_for_timeout(450)
@@ -437,6 +437,8 @@ def ui_checks() -> None:
         # ---------- 3 · 18. 유틸: 버튼 2개 · 토글 스위치
         page.click('.nav-item[data-screen="utils"]')
         page.wait_for_timeout(450)
+        page.click('[data-util-tab="system"]')
+        page.wait_for_timeout(250)
         utils = page.evaluate("""() => ({
             applies: [...document.querySelectorAll('#s-utils [data-apply]')].map(b => b.dataset.apply),
             alias: !!document.querySelector('[data-apply="alias"]'),
@@ -554,7 +556,7 @@ def ui_checks() -> None:
         check("추천 5종 행", recs["rows"] >= 5, str(recs["rows"]))
         check("PB 배지가 행 안에서 잘리지 않음", recs["pbText"] and not recs["clipped"],
               f"{recs['pbText']} clipped={recs['clipped']}")
-        check("각 행에 PB 표시 (v1.3.1 — 평균·목표 표기 삭제)", all("PB" in m for m in recs["meta"]),
+        check("각 행에 최고 기록 표시 (평균·목표 표기 삭제)", all("최고" in m for m in recs["meta"]),
               str(recs["meta"][:1]))
         check("추천 행에서 평균·목표 문구 제거", not any(("평균" in m or "목표" in m) for m in recs["meta"]),
               str(recs["meta"][:1]))
@@ -565,8 +567,8 @@ def ui_checks() -> None:
                     stats: (row.querySelector('.rec-stat2')||{}).innerText.split('++').join(' '),
                     today: (row.querySelector('.rec-today')||{}).textContent};
         }""")
-        check("오늘 안 친 시나리오도 PB는 그대로 표시",
-              bool(todayless) and "PB" in (todayless["stats"] or "") and "132" in (todayless["stats"] or "")
+        check("오늘 안 친 시나리오도 최고 기록은 그대로 표시",
+              bool(todayless) and "최고" in (todayless["stats"] or "") and "132" in (todayless["stats"] or "")
               and "미기록" in (todayless["today"] or ""), str(todayless))
         page.screenshot(path=str(SHOTS / "v130-dashboard.png"))
         page.click("#rec-list .rec")
@@ -591,7 +593,7 @@ def ui_checks() -> None:
                     rows: cells.length / (cols || 1)};
         }""")
         page.screenshot(path=str(SHOTS / "v130-records.png"))
-        check("훈련 잔디 14주 × 7행", heat["cols"] == 14 and heat["rows"] == 7, str(heat))
+        check("훈련 잔디 12주 × 7행", heat["cols"] == 12 and heat["rows"] == 7, str(heat))
         check("잔디 맨 아래 줄이 카드 안에 들어옴", heat["overflow"] <= 0.5, f"overflow={heat['overflow']}px")
 
         # ---------- 9 · 13. 내부 문구·기준 표기 제거
@@ -612,8 +614,13 @@ def ui_checks() -> None:
         }""")
         check("화면 전환 애니메이션 0.3~0.4초", anim["cls"] and anim["name"] == "screenIn"
               and 0.25 <= float(str(anim["dur"]).replace("s", "") or 0) <= 0.45, str(anim))
-        page.hover('.micro .tip')
-        page.wait_for_timeout(350)
+        page.mouse.move(640, 420)
+        page.wait_for_timeout(200)
+        page.mouse.move(30, 600)
+        page.wait_for_timeout(400)
+        tip_box = page.evaluate("""() => { const t = document.querySelector('.micro .tip'); const r = t.getBoundingClientRect(); return {x: r.left + r.width/2, y: r.top + r.height/2}; }""")
+        page.mouse.move(tip_box["x"], tip_box["y"])
+        page.wait_for_timeout(400)
         tip = page.evaluate("""() => { const l = document.getElementById('tip-layer');
             return {exists: !!l, show: l ? l.classList.contains('show') : false,
                     text: l ? l.textContent.slice(0, 40) : ''}; }""")

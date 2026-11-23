@@ -16,7 +16,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from . import kovak, nexon, nvidia, paths, scoring, supabase_sync, tray, updates, winutil
+from . import kovak, nexon, nvidia, paths, scoring, supabase_sync, tilt, tray, updates, v140, winutil
 from .store import Store, now_iso, today_str
 
 GAMES = ("kovak", "aimlab")
@@ -68,6 +68,9 @@ class Api:
         self._perf_state: dict[str, Any] | None = None
         self._busy: str | None = None
         self._last_progress = 0.0
+        # v1.4.0 — 연패 브레이크 감시 (설정 ON + 서든 실행 중일 때만 동작)
+        self._tilt: tilt.TiltWatcher | None = None
+        self._tilt_lock = __import__("threading").Lock()
 
     def start_update_check(self) -> None:
         """앱 시작 시 백그라운드로 새 버전을 조용히 확인한다 (실패해도 무시)."""
@@ -389,7 +392,7 @@ class Api:
 
         # ── v1.2.0 · 잔디 히트맵 · 주간 목표 · 훈련 전후 비교 (모두 로컬 계산) ──
         try:
-            heatmap_state = scoring.heatmap(records, 14, today, attendance)
+            heatmap_state = scoring.heatmap(records, 12, today, attendance)
         except Exception:  # noqa: BLE001
             log.exception("state · heatmap failed")
             heatmap_state = None
@@ -420,6 +423,26 @@ class Api:
         except Exception:  # noqa: BLE001
             log.exception("state · map guides failed")
             guides = []
+
+        # ── v1.4.0 · 오늘 랭크 컨디션 · 일자별 히스토리 · 온보딩 ──
+        try:
+            condition = v140.rank_condition((barracks or {}).get("matches") or [])
+            stored = self.store.data.get("condition_history") or []
+            if condition.get("available"):
+                history = v140.condition_history(stored, condition, today=today.isoformat())
+                if history != stored:
+                    self.store.data["condition_history"] = history
+                    self.store.save()
+            else:
+                history = stored
+            condition["history"] = history[-14:]
+        except Exception:  # noqa: BLE001
+            log.exception("state · rank condition failed")
+            condition = {"available": False, "verdict": None, "label": "전적 없음", "history": []}
+        try:
+            gate_state = updates.gate(updates.cached(), paths.APP_VERSION)
+        except Exception:  # noqa: BLE001
+            gate_state = {"blocked": False, "reason": "unknown"}
 
         return {
             "meta": {
@@ -480,8 +503,28 @@ class Api:
             "tier_details": [scoring.tier_detail(i, profile["score"], distribution, profile["values"])
                              for i in range(len(scoring.TIERS))],
             "map_guides": guides,
+            "condition": condition,
+            "condition_history": condition.get("history") or [],
+            "onboarded": bool(settings.get("onboarded")),
+            "onboarding": {
+                # v1.4.0 — 로컬 닉네임·API 키·클라우드 세션이 모두 없을 때만 첫 화면을 띄운다.
+                "needed": (not bool(settings.get("onboarded"))
+                           and not settings.get("nickname")
+                           and not settings.get("api_key_set")
+                           and not bool((cloud_state or {}).get("signed_in"))),
+                "has_local": bool(settings.get("nickname") or settings.get("api_key_set")),
+                "cloud_signed_in": bool((cloud_state or {}).get("signed_in")),
+                "weapon": settings.get("weapon") or "sniper",
+                "game": settings.get("game") or "kovak"},
+            "cloud_config": {"url": (settings.get("supabase") or {}).get("url", ""),
+                             "email": (cloud_state or {}).get("email")},
+            "update_gate": gate_state,
+            "tilt": {"enabled": bool(settings.get("tilt_watch", True)),
+                     "interval": int(settings.get("tilt_interval") or tilt.DEFAULT_INTERVAL),
+                     "supported": os.name == "nt"},
             "v120": True,
             "v130": True,
+            "v140": True,
         }
 
     # ------------------------------------------------------------ v1.3.0 helpers
@@ -544,15 +587,17 @@ class Api:
         tier = (barracks or {}).get("tier") or {}
         solo_rp = ((tier.get("solo") or {}).get("rp") or 0)
         rows = [
-            ("목표 승률", float(stats.get("win") or 0), float(g.get("win") or 55), "%"),
-            ("목표 K/D", float(stats.get("kd") or 0), float(g.get("kd") or 60), "%"),
-            ("목표 평균 딜량", float(stats.get("dmg") or 0), float(g.get("dmg") or 1400), ""),
-            ("목표 솔로 RP", float(solo_rp), float(g.get("rp") or 4000), ""),
+            ("현재 승률", float(stats.get("win") or 0), float(g.get("win") or 55), "%"),
+            ("현재 K/D", float(stats.get("kd") or 0), float(g.get("kd") or 60), "%"),
+            ("현재 평균 딜량", float(stats.get("dmg") or 0), float(g.get("dmg") or 1400), ""),
+            ("현재 솔로 RP", float(solo_rp), float(g.get("rp") or 4000), ""),
         ]
         out = []
         for label, cur, tgt, unit in rows:
             gap = cur - tgt
-            out.append({"label": label, "cur": round(cur, 1), "tgt": tgt, "unit": unit,
+            target_txt = f"{tgt:,.1f}".rstrip("0").rstrip(".") if unit == "%" else f"{tgt:,.0f}"
+            out.append({"label": label, "target": f"(목표 {target_txt}{unit})",
+                        "cur": round(cur, 1), "tgt": tgt, "unit": unit,
                         "gap": round(gap, 1), "gaptxt": f"{abs(gap):.1f}".rstrip("0").rstrip(".")})
         return out
 
@@ -620,7 +665,8 @@ class Api:
     def save_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         allowed = {"nickname", "api_key", "kovak_path", "aimlab_path", "auto_sync", "auto_launch",
                    "tray_background", "notify", "autosave", "goals", "cloud_email",
-                   "hotkey_enabled", "kovak_stats_path", "kovak_autofill", "week_goals"}
+                   "hotkey_enabled", "kovak_stats_path", "kovak_autofill", "week_goals",
+                   "tilt_watch", "tilt_interval", "weapon", "game", "onboarded"}
         clean: dict[str, Any] = {}
         for key, value in (patch or {}).items():
             if key not in allowed:
@@ -647,6 +693,15 @@ class Api:
             elif isinstance(value, bool):
                 value = bool(value)
             clean[key] = value
+        if "tilt_watch" in clean:
+            try:
+                watcher = self._tilt_watcher()
+                if clean.get("tilt_watch"):
+                    watcher.start()
+                else:
+                    watcher.stop()
+            except Exception:  # noqa: BLE001 - 감시 토글이 저장을 막지 않는다
+                log.debug("tilt watcher toggle failed", exc_info=True)
         self.store.update_settings(clean)
         if "hotkey_enabled" in clean:
             self._apply_hotkey(bool(clean["hotkey_enabled"]))
@@ -835,7 +890,16 @@ class Api:
         if entry:
             recs = scoring.recs_for_names(entry["names"], values=values, records=records,
                                           game=game, weapon=weapon, today=today)
-            if len(recs) == len(entry["names"]):
+            # v1.4.0 — 스나 모드에 '트래킹·무빙'이 1순위로 뜨던 모순: 예전 로테이션에
+            # 남은 트래킹 시나리오는 버리고 무기 철학대로 다시 뽑는다.
+            if weapon == "sniper":
+                track_names = {s["name"] for s in scoring.scenarios_for(game, "sniper")
+                               if s.get("area_key") == "track"}
+                kept = [r for r in recs if str(r.get("name")) not in track_names]
+                if len(kept) != len(recs):
+                    entry = None
+                    recs = kept
+            if entry and len(recs) == len(entry["names"]):
                 return recs
         recs = scoring.build_recs(values=values, records=records, game=game, weapon=weapon,
                                   history=rows, today=today)
@@ -912,7 +976,8 @@ class Api:
     def search_user(self, nickname: str, api_key: str | None = None) -> dict[str, Any]:
         """닉네임 검색 1단계 — 가볍게 존재 여부와 기본 정보만 확인한다."""
         try:
-            nick = (nickname or "").strip()[:12]
+            # v1.4.0 — 닉네임 · ouid · 병영수첩 URL 모두 허용
+            nick = v140.normalize_target(nickname)
             if not nick:
                 raise ValueError("검색할 서든어택 닉네임을 입력해 주세요")
             key = (api_key or "").strip()
@@ -922,7 +987,7 @@ class Api:
                 raise ValueError("NEXON Open API 키를 먼저 저장해 주세요 · 설정 탭")
             client = self._client(key or None, force=True)
             try:
-                ouid = client.resolve_ouid(nick)
+                ouid = nick if v140.is_ouid(nick) else client.resolve_ouid(nick)
             except nexon.NexonError as exc:
                 if getattr(exc, "quota", False) or "한도" in str(exc):
                     return self._err(exc)
@@ -997,8 +1062,12 @@ class Api:
 
     def add_leaderboard_member(self, nickname: str, depth: int = 0, ouid: str | None = None) -> dict[str, Any]:
         try:
-            name = str(nickname or "").strip()[:12]
+            # v1.4.0 — 병영수첩 URL/ouid 를 붙여넣어도 그대로 등록
+            name = v140.normalize_target(nickname)
             ouid = str(ouid or "").strip() or None
+            if v140.is_ouid(name):
+                ouid = ouid or name
+                name = ""
             if not name and not ouid:
                 raise ValueError("닉네임을 입력해 주세요")
             members = self._ensure_me(None)
@@ -1093,6 +1162,19 @@ class Api:
         if not target:
             return {"ok": False, "message": "병영수첩을 한 번 최신화하면 홈페이지로 바로 갈 수 있습니다"}
         url = f"https://barracks.sa.nexon.com/{target}/detail"
+        result = winutil.open_target(url)
+        result.setdefault("url", url)
+        return result
+
+    def open_clan_page(self, ouid: str | None = None) -> dict[str, Any]:
+        """클랜명 클릭 → 클랜 홈페이지 (v1.4.0 · 같은 ouid 사용)."""
+        target = str(ouid or "").strip()
+        if not target:
+            barracks = self.store.barracks_cache().get(self.store.settings.get("nickname") or "", {})
+            target = str((barracks or {}).get("ouid") or "").strip()
+        if not target:
+            return {"ok": False, "message": "병영수첩을 한 번 최신화하면 클랜 페이지로 바로 갈 수 있습니다"}
+        url = f"https://barracks.sa.nexon.com/clan/{target}/home"
         result = winutil.open_target(url)
         result.setdefault("url", url)
         return result
@@ -1575,6 +1657,404 @@ class Api:
             return updates.check(paths.APP_VERSION, force=bool(force))
         except Exception as exc:  # noqa: BLE001 - 확인 실패는 조용히
             return {"ok": False, "newer": False, "current": paths.APP_VERSION, "message": str(exc)}
+
+    # ================================================================ v1.4.0
+    # 1) 클랜전 상대 스카우팅
+    def scout_team(self, nicknames: Any = None) -> dict[str, Any]:
+        """상대 1~5명 비교 — 이미 받은 전적은 캐시, 처음 보는 상대만 최근 10판 상세."""
+        import re
+
+        try:
+            # 닉네임·ouid·병영수첩 URL 을 섞어 붙여넣어도 된다 (최대 6명 = 6:6 상대 팀)
+            names = v140.split_targets(nicknames, limit=6)
+            if not names:
+                raise ValueError("상대 닉네임을 1명 이상 입력해 주세요 (최대 6명)")
+            client = self._client()
+            me_rp = 0
+            try:
+                cached = self.store.barracks_cache().get(self.store.settings.get("nickname") or "", {})
+                me_rp = int(((cached or {}).get("tier") or {}).get("solo", {}).get("rp") or 0)
+            except (TypeError, ValueError, AttributeError):
+                me_rp = 0
+            rows: list[dict[str, Any]] = []
+            for name in names:
+                try:
+                    rows.append(v140.scout_player(client, name, me_rp=me_rp))
+                except Exception as exc:  # noqa: BLE001 - 한 명 실패가 나머지를 막지 않는다
+                    rows.append({"name": name, "error": nexon.friendly_error(str(exc)),
+                                 "threat": 0, "threat_label": "정보 없음", "tips": [str(exc)]})
+            # v1.4.0 — 서든은 대부분 스나 K/D가 높아 개인별 판별이면 전원이 스나가 된다.
+            # 팀 단위로 격차 상위 2명만 추정 스나로 배정한다.
+            v140.assign_roles(rows)
+            for row in rows:
+                if not row.get("error"):
+                    row["tips"] = v140.counter_tips(row)
+            team = v140.team_summary(rows)
+            found = len([r for r in rows if not r.get("error")])
+            return {"ok": found > 0, "rows": rows, "team": team, "calls": int(getattr(client, "calls", 0)),
+                    "message": f"스카우팅 {found}/{len(rows)}명 완료 · {team.get('label')} (위협도 {team.get('threat')})"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, rows=[], team={})
+
+    # 2) 듀오·깐부 시너지
+    def duo_synergy(self, nickname: str = "") -> dict[str, Any]:
+        try:
+            cache = self.store.barracks_cache()
+            barracks = cache.get(self.store.settings.get("nickname") or "", None)
+            if barracks is None and cache:
+                barracks = list(cache.values())[-1]
+            matches = (barracks or {}).get("matches") or []
+            result = v140.duo_synergy(matches, nickname)
+            return {"ok": True, **result, "message": result.get("label") or result.get("reason") or ""}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def scout_last_match(self) -> dict[str, Any]:
+        """방금 끝난 판 상대 팀을 그대로 불러와 분석한다 (타이핑 없음)."""
+        try:
+            nick = (self.store.settings.get("nickname") or "").strip()
+            if not nick:
+                raise ValueError("설정에서 서든 닉네임과 API 키를 먼저 저장해 주세요")
+            client = self._client()
+            ouid = client.resolve_ouid(nick)
+            rows = client.recent_matches(ouid, 1)
+            if not rows:
+                raise ValueError("최근 경기를 찾지 못했습니다 · 전적을 한 번 최신화해 주세요")
+            latest = rows[0]
+            detail = client.match_detail_cached(latest.get("match_id")) or client.match_detail(latest.get("match_id"))
+            players = (detail or {}).get("match_detail") or []
+            my_team = None
+            for p in players:
+                if str(p.get("user_name") or "").strip().lower() == nick.lower():
+                    my_team = p.get("team_id")
+            if my_team is None:
+                raise ValueError("최근 경기 상세에서 내 팀 정보를 찾지 못했습니다")
+            opponents = [str(p.get("user_name") or "").strip() for p in players
+                         if p.get("team_id") != my_team and str(p.get("user_name") or "").strip()]
+            opponents = list(dict.fromkeys(opponents))[:6]  # 5:5 → 5명, 6:6 → 6명
+            if not opponents:
+                raise ValueError("상대 팀 닉네임을 찾지 못했습니다")
+            me_rp = 0
+            try:
+                cached = self.store.barracks_cache().get(nick, {})
+                me_rp = int(((cached or {}).get("tier") or {}).get("solo", {}).get("rp") or 0)
+            except (TypeError, ValueError, AttributeError):
+                me_rp = 0
+            out: list[dict[str, Any]] = []
+            for name in opponents:
+                try:
+                    out.append(v140.scout_player(client, name, me_rp=me_rp, depth=8))
+                except Exception as exc:  # noqa: BLE001
+                    out.append({"name": name, "error": nexon.friendly_error(str(exc)),
+                                "threat": 0, "threat_label": "정보 없음", "tips": [str(exc)]})
+            v140.assign_roles(out)
+            for row in out:
+                if not row.get("error"):
+                    row["tips"] = v140.counter_tips(row)
+            team = v140.team_summary(out)
+            found = len([r for r in out if not r.get("error")])
+            return {"ok": found > 0, "rows": out, "team": team, "opponents": opponents,
+                    "map": (detail or {}).get("match_map") or "-",
+                    "date": latest.get("date_match") or "",
+                    "calls": int(getattr(client, "calls", 0)),
+                    "message": f"방금 끝난 판 상대 {found}명 분석 · {team.get('label')} (실전 전력 {((team.get('force') or {}).get('power') or 0)})"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, rows=[], team={})
+
+    def _coplayers(self) -> list[dict[str, Any]]:
+        """내 최근 매치 캐시에 함께 등장한 플레이어(팀·상대 모두) 집계."""
+        cache = self.store.barracks_cache()
+        barracks = cache.get(self.store.settings.get("nickname") or "", None)
+        if barracks is None and cache:
+            barracks = list(cache.values())[-1]
+        matches = (barracks or {}).get("matches") or []
+        me = (self.store.settings.get("nickname") or "").strip().lower()
+        table: dict[str, dict[str, Any]] = {}
+        for m in matches:
+            won = str(m.get("result")) == "승"
+            for p in m.get("players") or []:
+                try:
+                    name = str(p[0]).strip()
+                    k, d, dmg = int(p[2] or 0), int(p[3] or 0), int(p[4] or 0)
+                except (IndexError, TypeError, ValueError):
+                    continue
+                if not name or name.lower() == me:
+                    continue
+                slot = table.setdefault(name, {"name": name, "games": 0, "k": 0, "d": 0, "dmg": 0, "wins": 0})
+                slot["games"] += 1
+                slot["k"] += k
+                slot["d"] += d
+                slot["dmg"] += dmg
+                slot["wins"] += 1 if won else 0
+        out = []
+        for slot in table.values():
+            g = slot["games"]
+            if g < 1:
+                continue
+            out.append({
+                "name": slot["name"], "games": g,
+                "kd": round(slot["k"] / (slot["k"] + slot["d"]) * 100, 1) if (slot["k"] + slot["d"]) else 0.0,
+                "dmg": int(round(slot["dmg"] / g)),
+                "win": round(slot["wins"] / g * 100, 1),
+                "solo": 0, "party": 0, "weapon": "sniper" if slot["k"] >= slot["d"] else "rifle",
+                "source": "match",
+            })
+        out.sort(key=lambda r: -r["games"])
+        return out[:30]
+
+    def balance_candidates(self) -> dict[str, Any]:
+        """밸런서 후보 — 순위표 멤버 + 최근 매치 동반 플레이어."""
+        try:
+            members = [{"name": m.get("name"), "solo": m.get("solo"), "party": m.get("party"),
+                        "weapon": m.get("weapon"), "kd": m.get("kd"), "dmg": m.get("dmg"),
+                        "win": m.get("win"), "me": bool(m.get("me")), "source": "leaderboard"}
+                       for m in self.store.leaderboard()]
+            names = {str(m.get("name") or "").strip().lower() for m in members}
+            coplayers = [c for c in self._coplayers() if c["name"].strip().lower() not in names]
+            return self._ok(members=members, coplayers=coplayers,
+                            message=f"순위표 {len(members)}명 · 최근 동반 {len(coplayers)}명")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, members=[], coplayers=[])
+
+    def balance_teams(self, names: Any = None, size: int = 0, roles: Any = None) -> dict[str, Any]:
+        """내전 팀 자동 짜기 — 순위표 멤버 + 최근 동반 플레이어로 A/B 균형 분배."""
+        try:
+            members = [dict(m) for m in self.store.leaderboard()]
+            by_name = {str(m.get("name") or "").strip().lower(): m for m in members}
+            wanted = v140.split_targets(names, limit=16)
+            client = None
+            pool = list(members)
+            if wanted:
+                pool = []
+                coplayers = {c["name"].strip().lower(): c for c in self._coplayers()}
+                for name in wanted:
+                    key = name.lower()
+                    if key in by_name:
+                        pool.append(by_name[key])
+                    elif key in coplayers:
+                        pool.append(coplayers[key])
+                    elif v140.is_ouid(name):
+                        try:
+                            client = client or self._client()
+                            pool.append(nexon.fetch_member(client, name, ouid=name))
+                        except Exception:  # noqa: BLE001 - 한 명 실패는 건너뛴다
+                            continue
+                    else:
+                        pool.append({"name": name, "solo": 0, "party": 0, "weapon": "sniper",
+                                     "kd": None, "dmg": None, "win": None})
+            role_map: dict[str, str] = {}
+            if isinstance(roles, dict):
+                role_map = {str(k): str(v) for k, v in roles.items() if str(v) in ("sniper", "rifle")}
+            result = v140.balance_teams(pool, size=(int(size) or None), roles=role_map)
+            return {"ok": bool(result.get("available")), **result,
+                    "members": [{"name": m.get("name"), "solo": m.get("solo"), "party": m.get("party"),
+                                 "weapon": m.get("weapon"), "me": bool(m.get("me"))} for m in pool]}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def duo_rank(self, extra: Any = None) -> dict[str, Any]:
+        """최고 궁합 깐부 순위 — 순위표 멤버 + 직접 입력 닉네임 (추가 API 0건)."""
+        try:
+            cache = self.store.barracks_cache()
+            barracks = cache.get(self.store.settings.get("nickname") or "", None)
+            if barracks is None and cache:
+                barracks = list(cache.values())[-1]
+            matches = (barracks or {}).get("matches") or []
+            me = (self.store.settings.get("nickname") or "").strip().lower()
+            names = [str(m.get("name") or "") for m in self.store.leaderboard()
+                     if str(m.get("name") or "").strip().lower() != me and not m.get("me")]
+            if isinstance(extra, str):
+                names += [n.strip() for n in extra.replace("\n", ",").split(",") if n.strip()]
+            elif isinstance(extra, (list, tuple)):
+                names += [str(n).strip() for n in extra if str(n).strip()]
+            result = v140.duo_ranking(matches, names)
+            return {"ok": True, **result,
+                    "message": (f"최고 궁합 1위 {result['rows'][0]['friend']}" if result.get("rows")
+                                else "함께 뛴 판이 2판 이상인 친구를 찾지 못했습니다")}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    # 3) 맞춤형 .plo + AI 코칭
+    def personal_playlist(self, game: str = "kovak", weapon: str = "sniper",
+                          save: bool = False, target_dir: str | None = None) -> dict[str, Any]:
+        try:
+            game = game if game in GAMES else "kovak"
+            weapon = weapon if weapon in WEAPONS else "sniper"
+            records = self.store.records()
+            today = _dt.date.today()
+            values = scoring.profile_values(records)
+            plan = v140.personal_plan(values, records, game=game, weapon=weapon, today=today)
+            if not plan["names"]:
+                raise ValueError("플레이리스트에 담을 시나리오를 고르지 못했습니다")
+            payload: dict[str, Any] = {"ok": True, **plan,
+                                       "message": f"🎯 맞춤 플레이리스트 {plan['count']}종 · {plan['focus'][0]} 우선"}
+            if save:
+                folder = kovak.find_playlists_dir(target_dir or None)
+                target = folder or paths.playlists_dir()
+                stamp = today.strftime("%m.%d")
+                written = kovak.write_playlist(
+                    f"SA AIM 맞춤 {stamp}", plan["names"], target=target,
+                    description=f"SA AIM LABS v{paths.APP_VERSION} · {weapon} · {today.isoformat()}",
+                )
+                note = "" if folder else " · 코박스 Playlists 폴더를 찾지 못해 앱 데이터 폴더에 저장했습니다"
+                payload.update(written)
+                payload["saved"] = True
+                payload["message"] = f"📜 맞춤 플레이리스트 {plan['count']}종 저장 · {target}{note}"
+            return payload
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    # 4) 오늘 랭크 컨디션
+    def rank_condition(self, force: bool = False) -> dict[str, Any]:
+        try:
+            cache = self.store.barracks_cache()
+            barracks = cache.get(self.store.settings.get("nickname") or "", None)
+            if barracks is None and cache:
+                barracks = list(cache.values())[-1]
+            condition = v140.rank_condition((barracks or {}).get("matches") or [])
+            stored = self.store.data.get("condition_history") or []
+            history = v140.condition_history(stored, condition, today=today_str()) if condition.get("available") else stored
+            if history != stored:
+                self.store.data["condition_history"] = history
+                self.store.save()
+            condition["history"] = history[-14:]
+            return self._ok(condition=condition, history=history[-14:])
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    # 5) 연패 브레이크 감시
+    def _tilt_watcher(self) -> tilt.TiltWatcher:
+        with self._tilt_lock:
+            if self._tilt is None:
+                try:
+                    interval = int(self.store.settings.get("tilt_interval") or tilt.DEFAULT_INTERVAL)
+                except (TypeError, ValueError):
+                    interval = tilt.DEFAULT_INTERVAL
+                def _notify(title: str, message: str, level: str = "info") -> None:
+                    icon = tray_ref()
+                    if icon is not None:
+                        icon.notify(title, message, level)
+
+                self._tilt = tilt.TiltWatcher(
+                    self._tilt_matches, interval=interval,
+                    enabled=lambda: bool(self.store.settings.get("tilt_watch", True)),
+                    notify=_notify,
+                )
+            return self._tilt
+
+    def _tilt_matches(self) -> list[dict[str, Any]]:
+        """가벼운 확인 — 최신 솔로·파티 매치 목록 1회씩(캐시 TTL 2분)."""
+        nick = (self.store.settings.get("nickname") or "").strip()
+        if not nick:
+            return []
+        client = self._client()
+        ouid = client.resolve_ouid(nick)
+        rows: list[dict[str, Any]] = []
+        for mtype in nexon.MATCH_TYPES:
+            try:
+                rows.extend(client.matches(ouid, mtype, ttl=120))
+            except nexon.NexonError:
+                continue
+        rows.sort(key=nexon.match_time, reverse=True)
+        return rows[:20]
+
+    def start_tilt_watch(self) -> None:
+        """main.py 가 앱 시작 시 한 번 호출 — 설정이 OFF 면 스레드는 놀고 있는다."""
+        try:
+            self._tilt_watcher().start()
+        except Exception:  # noqa: BLE001 - 감시 실패는 앱을 막지 않는다
+            log.debug("tilt watcher could not start", exc_info=True)
+
+    start_tilt_watch._serializable = False  # type: ignore[attr-defined]
+
+    def tilt_state(self) -> dict[str, Any]:
+        try:
+            watcher = self._tilt_watcher()
+            if bool(self.store.settings.get("tilt_watch", True)) and not watcher.running:
+                watcher.start()
+            state = watcher.state()
+            state["enabled"] = bool(self.store.settings.get("tilt_watch", True))
+            return self._ok(tilt=state)
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, tilt={})
+
+    def set_tilt_watch(self, enabled: bool = True, interval: int | None = None) -> dict[str, Any]:
+        try:
+            patch: dict[str, Any] = {"tilt_watch": bool(enabled)}
+            if interval is not None:
+                patch["tilt_interval"] = max(tilt.MIN_INTERVAL, min(tilt.MAX_INTERVAL, int(interval)))
+            self.store.update_settings(patch)
+            watcher = self._tilt_watcher()
+            if interval is not None:
+                watcher.interval = int(patch["tilt_interval"])
+            if enabled:
+                watcher.start()
+            else:
+                watcher.stop()
+            return self._ok(tilt={**watcher.state(), "enabled": bool(enabled)}, state=self._build_state(),
+                            message="연패 브레이크 감시를 켰습니다" if enabled else "연패 브레이크 감시를 껐습니다")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def ack_tilt(self, alert_id: str = "") -> dict[str, Any]:
+        try:
+            alerts = self._tilt_watcher().ack(alert_id or "")
+            return self._ok(alerts=alerts, message="")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    # 6) 원클릭 자동 업데이트 + 구버전 차단
+    def update_gate(self, force: bool = False) -> dict[str, Any]:
+        try:
+            result = updates.check(paths.APP_VERSION, force=bool(force))
+            gate_state = updates.gate(result, paths.APP_VERSION)
+            return self._ok(gate=gate_state, update=result)
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, gate={"blocked": False, "reason": "error"})
+
+    def install_update(self) -> dict[str, Any]:
+        try:
+            result = updates.cached() or updates.check(paths.APP_VERSION, force=True)
+            gate_state = updates.gate(result, paths.APP_VERSION)
+            url = str(gate_state.get("download") or "")
+            if not url:
+                raise ValueError("새 버전 다운로드 주소가 없습니다 · 릴리스 페이지를 열어 주세요")
+            prep = updates.prepare_install(url)
+            if not prep.get("ok"):
+                raise ValueError(prep.get("message") or "업데이트를 내려받지 못했습니다")
+            run = updates.run_install(str(prep["script"]))
+            if not run.get("ok"):
+                raise ValueError(run.get("message") or "업데이트를 실행하지 못했습니다")
+            return self._ok(path=prep.get("path"), size=prep.get("size"), message=run.get("message"))
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    # 7) 첫 실행 2단계 온보딩
+    def complete_onboarding(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            data = payload or {}
+            patch: dict[str, Any] = {"onboarded": True}
+            nick = str(data.get("nickname") or "").strip()[:12]
+            key = str(data.get("api_key") or "").strip()
+            if nick:
+                patch["nickname"] = nick
+            if key and not self._looks_masked(key):
+                patch["api_key"] = key
+            if data.get("weapon") in WEAPONS:
+                patch["weapon"] = data["weapon"]
+            if data.get("game") in GAMES:
+                patch["game"] = data["game"]
+            self.store.update_settings(patch)
+            return self._ok(state=self._build_state(), message="환영합니다 · 준비가 끝났습니다")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def skip_onboarding(self) -> dict[str, Any]:
+        try:
+            self.store.update_settings({"onboarded": True})
+            return self._ok(state=self._build_state(), message="설정에서 언제든 바꿀 수 있습니다")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
 
     # ------------------------------------------------------------ 1:1 비교
     def compare_friend(self, nickname: str) -> dict[str, Any]:
