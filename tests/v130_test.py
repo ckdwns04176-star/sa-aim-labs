@@ -104,7 +104,7 @@ def backend() -> None:
     from app import drs, nvidia, paths, scoring, winutil
     import shutil
 
-    check("APP_VERSION 1.3.0", paths.APP_VERSION == "1.3.0", paths.APP_VERSION)
+    check("APP_VERSION 1.3.1", paths.APP_VERSION == "1.3.1", paths.APP_VERSION)
 
     # ---- 1. 창: 크기만 고정, 위치는 자유 + 드래그 중 감시 pause
     plan = winutil.window_fix_plan((300, 900, 1600, 900), work=(0, 0, 1920, 1040))
@@ -284,6 +284,9 @@ def mock_js(state: dict) -> str:
       async bridge_ping() { return {ok: true, pong: true}; },
       async get_nvidia_state() { return {ok: true, utils: S().utils || {}, state: S()}; },
       async drag_window() { window.__CALLS.push(['drag_window']); return {ok: true, supported: true}; },
+      async start_window_drag() { window.__CALLS.push(['start_window_drag']); return {ok: true, supported: true}; },
+      async end_window_drag() { return {ok: true}; },
+      async move_window(dx, dy) { return {ok: true, supported: true}; },
       async toggle_maximize() { return {ok: true}; },
       async minimize_window() { return {ok: true}; },
       async close_window() { window.__CALLS.push(['close_window']); return {ok: true}; },
@@ -310,8 +313,16 @@ def mock_js(state: dict) -> str:
         st.utils = {...(st.utils||{}), mode: mode, alias: false};
         return {ok: true, mode, state: st, merged: true,
           changes: [{id: '0x00D55F7D', name: '계단현상 끄기', en: 'Antialiasing compatibility (DX9)',
-                     before: '0x00020041', after: '0x00401241', key: true}],
-          message: (mode === 'rifle' ? '라플 프로필' : '스나 프로필') + ' + 계단현상 끄기 적용 완료'};
+                     before: '0x00020041', after: '0x00401241', label_before: '기본값',
+                     label_after: '계단현상·타격효과 제거', key: true}],
+          base_changes: [{id: '0x10F9DC81', name: '드라이버 설정 0x10F9DC81', en: 'setting 0x10F9DC81',
+                          scope: '전역 프로필', before: '0x00000011', after: '없음'}],
+          files: [{name: 'nvdrsdb0.bin', before_size: 2355580, after_size: 1944984, changed: true}],
+          profile_items: [{id: '0x00D55F7D', name: '계단현상 끄기', en: 'Antialiasing compatibility (DX9)',
+                           value: '0x00401241', label: '계단현상·타격효과 제거'}],
+          checklist: [{id: '0x00D55F7D', name: '계단현상 끄기', want: '0x00401241 로 패치',
+                       label_value: '계단현상·타격효과 제거', status: 'ok'}],
+          message: (mode === 'rifle' ? '라플 프로필' : '스나 프로필') + ' + 계단현상 끄기 적용 완료 · 2개 항목 변경'};
       },
       async toggle_nvidia_alias(v) { return {ok: true, state: S(), message: '복구 완료'}; },
       async restore_nvidia_profile() { window.__CALLS.push(['restore_nvidia_profile']);
@@ -386,7 +397,7 @@ def ui_checks() -> None:
         expect = ["dashboard", "recs", "records", "barracks", "maps", "leaderboard", "tiers", "utils"]
         check("사이드바 8개 메뉴로 세분화", nav == expect, str(nav))
         check("설정은 메뉴에서 빠짐", "settings" not in nav, str(nav))
-        page.click("#profile-card")
+        page.click("#settings-btn")
         page.wait_for_timeout(450)
         cfg = page.evaluate("""() => ({
             open: document.getElementById('settings-mask').classList.contains('show'),
@@ -448,6 +459,8 @@ def ui_checks() -> None:
         page.screenshot(path=str(SHOTS / "v130-changes.png"))
         check("라플 최적화 적용 호출", "apply_nvidia_profile" in calls, str(calls))
         check("적용 후 변경 내역 모달 표시", chg["open"] and len(chg["rows"]) >= 2, str(chg["rows"])[:80])
+        check("변경 내역에 전역 프로필·파일 증거", any("Base" in r or "0x10F9DC81" in r for r in chg["rows"])
+              or any("nvdrsdb0.bin" in r for r in chg["rows"]), str(chg["rows"])[-200:])
         check("변경 내역에 0x00401241 표시", any("0x00401241" in r for r in chg["rows"]), str(chg["rows"])[:100])
         page.evaluate("() => document.querySelector('#changes-mask').classList.remove('show')")
         page.evaluate("() => { window.__CALLS = []; }")
@@ -541,7 +554,9 @@ def ui_checks() -> None:
         check("추천 5종 행", recs["rows"] >= 5, str(recs["rows"]))
         check("PB 배지가 행 안에서 잘리지 않음", recs["pbText"] and not recs["clipped"],
               f"{recs['pbText']} clipped={recs['clipped']}")
-        check("각 행에 PB·평균·목표 표시", all("PB" in m and "평균" in m and "목표" in m for m in recs["meta"]),
+        check("각 행에 PB 표시 (v1.3.1 — 평균·목표 표기 삭제)", all("PB" in m for m in recs["meta"]),
+              str(recs["meta"][:1]))
+        check("추천 행에서 평균·목표 문구 제거", not any(("평균" in m or "목표" in m) for m in recs["meta"]),
               str(recs["meta"][:1]))
         todayless = page.evaluate("""() => {
             const row = [...document.querySelectorAll('#rec-list .rec')].find(r => r.querySelector('.rec-today.none'));
@@ -550,7 +565,7 @@ def ui_checks() -> None:
                     stats: (row.querySelector('.rec-stat2')||{}).innerText.split('++').join(' '),
                     today: (row.querySelector('.rec-today')||{}).textContent};
         }""")
-        check("오늘 안 친 시나리오도 PB·평균은 그대로 표시",
+        check("오늘 안 친 시나리오도 PB는 그대로 표시",
               bool(todayless) and "PB" in (todayless["stats"] or "") and "132" in (todayless["stats"] or "")
               and "미기록" in (todayless["today"] or ""), str(todayless))
         page.screenshot(path=str(SHOTS / "v130-dashboard.png"))
@@ -610,11 +625,15 @@ def ui_checks() -> None:
         }""")
         check("글씨 크기 상향(본문 12px+)", fonts["rec"] >= 12 and fonts["nav"] >= 12.5 and fonts["sub"] >= 10.5, str(fonts))
         hover = page.evaluate("""() => {
-            const card = document.querySelector('#s-dashboard .card');
-            const before = getComputedStyle(card).transform;
-            return {before, transition: getComputedStyle(card).transitionProperty};
+            const plain = document.querySelector('#s-dashboard .card:not(.pop)');
+            const pop = document.querySelector('#s-dashboard .card.pop');
+            return {plain: plain ? getComputedStyle(plain).transitionProperty : 'MISSING',
+                    pop: pop ? getComputedStyle(pop).transitionProperty : 'MISSING',
+                    pops: document.querySelectorAll('.card.pop').length};
         }""")
-        check("카드 호버 애니메이션 준비", "transform" in (hover["transition"] or ""), str(hover))
+        check("팝업 여는 카드만 호버 볼록 효과 (v1.3.1 6번)",
+              "transform" in (hover["pop"] or "") and "transform" not in (hover["plain"] or "") and hover["pops"] >= 3,
+              str(hover))
 
         # ---------- 22. 닫기 X → 확인 팝업
         page.evaluate("() => { window.__CALLS = []; }")

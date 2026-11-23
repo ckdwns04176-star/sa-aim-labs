@@ -78,6 +78,12 @@ def mock_js(state: dict) -> str:
       },
       async save_settings(patch) { window.__CALLS.push(['save_settings', patch]); return {ok: true, state: S()}; },
       async drag_window() { window.__CALLS.push(['drag_window']); return {ok: true, supported: true}; },
+      async start_window_drag() { window.__CALLS.push(['start_window_drag']); return {ok: true, supported: true, mode: 'win32-cursor'}; },
+      async end_window_drag() { window.__CALLS.push(['end_window_drag']); return {ok: true}; },
+      async move_window(dx, dy) { window.__CALLS.push(['move_window', dx, dy]); return {ok: true, supported: true}; },
+      async open_reports_folder() { window.__CALLS.push(['open_reports_folder']); return {ok: true, folder: '/reports'}; },
+      async save_member_memo(name, text) { window.__CALLS.push(['save_member_memo', name, text]); return {ok: true, state: S(), memos: {[name]: text}, message: '메모 저장'}; },
+      async open_barracks_page(ouid) { window.__CALLS.push(['open_barracks_page', ouid]); return {ok: true, url: 'https://barracks.sa.nexon.com/' + (ouid || 'me') + '/detail'}; },
       async toggle_maximize() { window.__CALLS.push(['toggle_maximize']); return {ok: true, maximized: true}; },
       async minimize_window() { return {ok: true}; },
       async close_window() { return {ok: true}; },
@@ -185,10 +191,10 @@ def main() -> int:
         page.mouse.up()
         page.wait_for_timeout(150)
         calls = page.evaluate("window.__CALLS.map(c=>c[0])")
-        check("타이틀바 드래그 → drag_window 호출", "drag_window" in calls, str(calls[:6]))
+        check("타이틀바 드래그 → 창 이동 호출", ("start_window_drag" in calls) or ("drag_window" in calls), str(calls[:6]))
 
         # 2) 설정 팝업(v1.3.0): 좌측 하단 프로필/톱니바퀴 클릭 → 닉네임/API 키 placeholder 제거
-        page.click("#profile-card")
+        page.click("#settings-btn")
         page.wait_for_timeout(300)
         ph = page.evaluate("""() => {
             const nick = document.querySelector('#set-nick');

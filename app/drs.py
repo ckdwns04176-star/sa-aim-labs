@@ -51,21 +51,64 @@ KNOWN_AA_COMPAT = {
     0x00000000: "해제",
 }
 
-# v1.3.0 — 적용 후 '무엇이 바뀌었는지' 보여줄 설정 이름 (아는 항목만)
-SETTING_NAMES = {
+# 적용 후 '무엇이 바뀌었는지' 보여줄 설정 이름.
+# v1.3.1 — NVIDIA Profile Inspector 카탈로그(nvprofileinspector.com 설정 목록 · NVAPI 이름)로
+# 확인한 ID 를 쓴다.  예전 표는 0x1095DEF8(실제로는 SLI Compatibility Bits DX9)을
+# '안티앨리어싱 호환성 보조값'으로 표시하는 등 이름이 틀렸다.
+SETTING_NAMES: dict[int, tuple[str, str]] = {
     SETTING_AA_COMPAT: ("계단현상 끄기", "Antialiasing compatibility (DX9)"),
-    SETTING_AA_COMPAT2: ("안티앨리어싱 호환성 보조값", "Antialiasing compatibility (2)"),
-    0x00D55F49: ("앰비언트 오클루전", "Ambient Occlusion"),
-    0x00D55F4A: ("텍스처 필터링 품질", "Texture filtering quality"),
-    0x00D55F4B: ("수직 동기", "Vertical Sync"),
-    0x00D55F4D: ("최대 사전 렌더 프레임", "Maximum pre-rendered frames"),
-    0x00D55F4E: ("전원 관리 모드", "Power management mode"),
-    0x00D55F50: ("스레드 최적화", "Threaded optimization"),
-    0x00D55F51: ("저지연 모드", "Low latency mode"),
-    0x00D55F52: ("샤프닝", "Image sharpening"),
-    0x00D55F53: ("텍스처 품질", "Texture quality"),
-    0x00D55F55: ("이방성 필터링", "Anisotropic filtering"),
+    0x00A879CF: ("수직 동기", "Vertical Sync"),
+    0x1057EB71: ("전원 관리 모드", "Power Management - Mode"),
+    0x0005F543: ("저지연 모드 (제어판 상태)", "Ultra Low Latency - CPL State"),
+    0x10835000: ("저지연 모드 (사용)", "Ultra Low Latency - Enabled"),
+    0x007BA09E: ("최대 사전 렌더 프레임", "Maximum Pre-Rendered Frames"),
+    0x00CE2691: ("텍스처 필터링 품질", "Texture filtering - Quality"),
+    0x20C1221E: ("스레드 최적화", "Threaded optimization"),
+    0x10835002: ("프레임 제한 (V3)", "Frame Rate Limiter V3"),
+    0x00AC8497: ("셰이더 캐시 크기", "Shader Cache Size"),
+    0x0064B541: ("선호 주사율", "Preferred refresh rate"),
+    0x00A06946: ("SLI 호환 비트 (DX10·DX11)", "SLI Compatibility Bits Dx10 + Dx11"),
+    SETTING_AA_COMPAT2: ("SLI 호환 비트 (DX9)", "SLI Compatibility Bits DX9"),
+    0x1033CEC1: ("SLI 모드 (드라이버 정의)", "Nvidia Predefined SLI Mode"),
+    0x1033CEC2: ("SLI 모드 (DX10, 드라이버 정의)", "Nvidia Predefined SLI Mode On DirectX 10"),
+    0x1033DCD2: ("SLI GPU 수 (드라이버 정의)", "Nvidia Predefined Number Of Gpus To Use On SLI Rendering Mode"),
+    0x1033DCD3: ("SLI GPU 수 (DX10, 드라이버 정의)",
+                 "Nvidia Predefined Number Of Gpus To Use On SLI Rendering Mode On Directx 10"),
+    0x0095DEF9: ("SLI 브로드캐스트 (DX9)", "SLI Broadcast DX9"),
 }
+
+# 값 → 사람이 읽는 이름 (아는 것만 · 모르면 0x… 그대로 보여 준다)
+VALUE_LABELS: dict[int, dict[int, str]] = {
+    0x00A879CF: {0x00000000: "앱 설정 따름", 0x08416747: "강제 끔", 0x18888888: "강제 켬",
+                 0x60925292: "적응형", 0x034B2C88: "빠른 동기화"},
+    0x1057EB71: {0: "드라이버 제어", 1: "최대 성능 선호", 2: "최적 전력", 5: "일관 성능 선호"},
+    0x0005F543: {0: "끔", 1: "켬", 2: "울트라"},
+    0x10835000: {0: "끔", 1: "켬"},
+    0x007BA09E: {0: "0 (즉시)", 1: "1 프레임", 2: "2 프레임", 3: "3 프레임"},
+    0x00CE2691: {0: "고품질", 1: "품질", 2: "성능", 3: "고성능"},
+    0x20C1221E: {0: "끔", 1: "켬", 2: "자동"},
+    0x10835002: {0: "해제"},
+    SETTING_AA_COMPAT: KNOWN_AA_COMPAT,
+}
+
+# '고성능 게이밍' 체크리스트 — 적용 결과 팝업에서 항목별 상태를 보여 준다.
+CHECKLIST: tuple[tuple[int, str, str], ...] = (
+    (SETTING_AA_COMPAT, "계단현상 끄기", "0x00401241 로 패치"),
+    (0x1057EB71, "전원 관리 모드", "최대 성능 선호"),
+    (0x0005F543, "저지연 모드", "켬(1)"),
+    (0x007BA09E, "최대 사전 렌더 프레임", "1 프레임"),
+    (0x00CE2691, "텍스처 필터링 품질", "성능"),
+    (0x00A879CF, "수직 동기", "강제 끔"),
+)
+
+
+def value_label(setting_id: int, value: int | None) -> str:
+    if value is None:
+        return "없음"
+    names = VALUE_LABELS.get(setting_id) or {}
+    if value in names:
+        return names[value]
+    return f"0x{value:08X}"
 
 
 def setting_name(setting_id: int) -> tuple[str, str]:
@@ -93,13 +136,19 @@ def as_text(raw: bytes | None) -> str:
     return raw.hex() or "없음"
 
 
+def _dword(raw: bytes | None) -> int | None:
+    if not raw or len(raw) < 4:
+        return None
+    return int.from_bytes(raw[:4], "little")
+
+
 def change_list(before: bytes | bytearray | None, after: bytes | bytearray | None,
                 exe: str = GAME_EXE) -> list[dict[str, Any]]:
-    """두 Drs DB 사이에서 값이 달라진 서든어택 설정들 — 적용 내역 모달용.
+    """두 Drs DB 사이에서 값이 달라진 서든어택 프로필 설정들 — 적용 내역 모달용.
 
-    프로필 팩은 여러 설정을 한 번에 바꾸므로, 아는 이름은 한국어로, 모르는
-    항목은 설정 ID 그대로 돌려준다.  계단현상 끄기(0x00D55F7D)는 항상 맨 앞에
-    온다.
+    값은 ``before`` / ``after`` (0x…) 와 ``label_before`` / ``label_after`` (전원 관리
+    모드 → 최대 성능 선호 같은 읽는 이름) 를 함께 돌려준다.  계단현상 끄기
+    (0x00D55F7D) 는 항상 맨 앞에 온다.
     """
     old = values_of(before, exe) if before else {}
     new = values_of(after, exe) if after else {}
@@ -109,11 +158,135 @@ def change_list(before: bytes | bytearray | None, after: bytes | bytearray | Non
         if (was or b"") == (now or b""):
             continue
         ko, en = setting_name(setting_id)
+        was_v, now_v = _dword(was), _dword(now)
         rows.append({"id": f"0x{setting_id:08X}", "name": ko, "en": en,
                      "before": as_text(was), "after": as_text(now),
+                     "label_before": value_label(setting_id, was_v),
+                     "label_after": value_label(setting_id, now_v),
+                     "removed": now is None, "added": was is None,
                      "key": setting_id == SETTING_AA_COMPAT})
     rows.sort(key=lambda r: (not r["key"], r["id"]))
     return rows
+
+
+def profile_items(blob: bytes | bytearray | None, exe: str = GAME_EXE) -> list[dict[str, Any]]:
+    """서든어택 프로필에 실제로 들어 있는 설정 목록 (값 + 읽는 이름).
+
+    '값이 바뀐 항목이 없다'는 안내 대신, 이 프로필이 무엇을 설정하고 있는지
+    그대로 보여 주기 위한 자료다.
+    """
+    if not blob:
+        return []
+    off = profile_offset(blob, exe)
+    if off is None:
+        return []
+    out: list[dict[str, Any]] = []
+    for rec in iter_settings(blob, off):
+        sid = int(rec["setting_id"])
+        ko, en = setting_name(sid)
+        value = _dword(rec["value"])
+        out.append({"id": f"0x{sid:08X}", "name": ko, "en": en,
+                    "value": as_text(rec["value"]), "label": value_label(sid, value)})
+    out.sort(key=lambda r: (not (r["name"] != f"드라이버 설정 {r['id'].upper()}"), r["id"]))
+    return out
+
+
+def named_profile_offset(blob: bytes | bytearray | None, name: str) -> int | None:
+    """'Base Profile' 처럼 이름으로 저장된 프로필의 오프셋.
+
+    앱 프로필은 이름 뒤에 16바이트 앱 메타(0x016E)가 오지만, 기본 프로필은
+    이름 뒤에 곧바로 프로필 헤더(0x0053)가 온다 — 둘 다 찾아본다.
+    """
+    if not blob:
+        return None
+    needle = str(name).lower().encode("utf-16-le")
+    text = bytes(blob).lower()
+    idx = text.find(needle)
+    if idx < 0:
+        return None
+    end = idx + len(needle)
+    for pad in range(0, 17, 2):
+        pos = end + pad
+        if pos + PROFILE_HEAD_SIZE > len(blob):
+            return None
+        magic = struct.unpack_from("<H", blob, pos)[0]
+        if magic == APP_MAGIC:
+            meta = app_meta_offset(blob, idx, needle)
+            return None if meta is None else struct.unpack_from("<I", blob, meta + 12)[0]
+        if magic != PROFILE_MAGIC:
+            continue
+        _magic, _kind, nbytes, count, _next = struct.unpack_from("<HHIII", blob, pos)
+        if nbytes == 0 or count == 0 or pos + nbytes > len(blob):
+            continue
+        return pos
+    return None
+
+
+def base_change_list(before: bytes | bytearray | None, after: bytes | bytearray | None) -> list[dict[str, Any]]:
+    """전역('Base Profile') 설정 중 바뀐 항목 — 저지연·전원 관리·수직 동기 등이 여기 산다."""
+    if not before or not after:
+        return []
+    off_a = named_profile_offset(before, "Base Profile")
+    off_b = named_profile_offset(after, "Base Profile")
+    if off_a is None or off_b is None:
+        return []
+    old = {rec["setting_id"]: rec["value"] for rec in iter_settings(before, off_a)}
+    new = {rec["setting_id"]: rec["value"] for rec in iter_settings(after, off_b)}
+    rows: list[dict[str, Any]] = []
+    for sid in sorted(set(old) | set(new)):
+        was, now = old.get(sid), new.get(sid)
+        if (was or b"") == (now or b""):
+            continue
+        ko, en = setting_name(sid)
+        was_v, now_v = _dword(was), _dword(now)
+        rows.append({"id": f"0x{sid:08X}", "name": ko, "en": en, "scope": "전역 프로필",
+                     "before": as_text(was), "after": as_text(now),
+                     "label_before": value_label(sid, was_v),
+                     "label_after": value_label(sid, now_v),
+                     "removed": now is None, "added": was is None})
+    return rows
+
+
+def checklist_state(blob: bytes | bytearray | None) -> list[dict[str, Any]]:
+    """표준 '고성능 게이밍' 항목이 이 프로필에서 어떻게 되어 있는지."""
+    if not blob:
+        return []
+    off = profile_offset(blob, GAME_EXE)
+    values = {rec["setting_id"]: _dword(rec["value"]) for rec in iter_settings(blob, off)} if off is not None else {}
+    base_off = named_profile_offset(blob, "Base Profile")
+    base = ({rec["setting_id"]: _dword(rec["value"]) for rec in iter_settings(blob, base_off)}
+            if base_off is not None else {})
+    rows: list[dict[str, Any]] = []
+    for sid, label, want in CHECKLIST:
+        mine = values.get(sid)
+        inherited = base.get(sid)
+        if mine is None:
+            rows.append({"id": f"0x{sid:08X}", "name": label, "want": want, "value": None,
+                         "label_value": "전역 설정 상속" if inherited is None else value_label(sid, inherited),
+                         "status": "global"})
+            continue
+        status = "ok" if (sid == SETTING_AA_COMPAT and mine == STAIRFIX_VALUE) else "profile"
+        rows.append({"id": f"0x{sid:08X}", "name": label, "want": want, "value": mine,
+                     "label_value": value_label(sid, mine), "status": status})
+    return rows
+
+
+def file_signature(paths: Iterable[Any]) -> dict[str, dict[str, Any]]:
+    """Drs 파일별 크기·해시 — 실제로 폴더가 바뀌었는지 보여 주는 증거."""
+    import hashlib
+    from pathlib import Path as _Path
+
+    out: dict[str, dict[str, Any]] = {}
+    for item in paths or []:
+        path = _Path(item)
+        try:
+            data = path.read_bytes()
+        except OSError:
+            out[path.name] = {"exists": False, "size": 0, "sha": ""}
+            continue
+        out[path.name] = {"exists": True, "size": len(data),
+                          "sha": hashlib.sha256(data).hexdigest()}
+    return out
 
 
 class DrsFormatError(RuntimeError):

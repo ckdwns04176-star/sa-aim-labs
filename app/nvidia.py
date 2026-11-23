@@ -63,6 +63,32 @@ def _no_window_flags() -> int:
     return getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
+def _file_rows(before: dict[str, dict[str, Any]], after: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drs 파일별 before → after (크기·해시) — 실제로 폴더가 바뀐 증거."""
+    rows: list[dict[str, Any]] = []
+    for name in DRS_FILES:
+        old = before.get(name) or {}
+        new = after.get(name) or {}
+        if not old.get("exists") and not new.get("exists"):
+            continue
+        rows.append({"name": name,
+                     "before_size": int(old.get("size") or 0), "after_size": int(new.get("size") or 0),
+                     "before_sha": str(old.get("sha") or "")[:16], "after_sha": str(new.get("sha") or "")[:16],
+                     "changed": (old.get("sha") or "") != (new.get("sha") or "")})
+    return rows
+
+
+def _readiness(blob: bytes | None, changes: list[dict[str, Any]], base_changes: list[dict[str, Any]],
+               mode: str | None) -> str:
+    """'바뀐 항목이 없다'는 안내 대신 왜 그런지 분명히 설명한다."""
+    if changes or base_changes:
+        return ""
+    label = MODES.get(mode or "", "프로필")
+    same = "이미 같은 프로필이 적용되어 있어" if mode else "설정이 그대로여서"
+    return (f"{same} 세부 값이 바뀌지 않았습니다 · {label}의 서든어택 프로필 값이 직전 Drs DB와 같습니다. "
+            f"아래 '이 프로필이 설정하는 항목'에서 현재 값을 확인할 수 있습니다.")
+
+
 def _same_except_stairfix(a: bytes, b: bytes) -> bool:
     """두 Drs DB 가 계단현상 끄기(AA compatibility) 값만 다른지.
 
@@ -220,7 +246,8 @@ class DrsManager:
     def state(self) -> dict[str, Any]:
         modes = self.available_modes()
         backups = self.list_backups()
-        stair_value = self.stairfix_value()
+        blob = self.live_blob()          # 2MB 파일 — 한 번만 읽는다
+        stair_value = None if blob is None else drs.aa_compat(blob)
         mode = self.current_mode()
         return {
             "supported": self.supported,
@@ -242,6 +269,8 @@ class DrsManager:
             "backups": backups,
             "last_backup": backups[0]["created"] if backups else None,
             "platform": os.name,
+            "profile_items": drs.profile_items(blob),
+            "checklist": drs.checklist_state(blob),
         }
 
     # ------------------------------------------------------------ backups
@@ -296,12 +325,18 @@ class DrsManager:
 
     # ------------------------------------------------------------ apply
     def apply(self, mode: str, *, force: bool = False) -> dict[str, Any]:
-        """프로필 팩 적용 + 계단현상 끄기 병합 (v1.3.0).
+        """프로필 팩 적용 + 계단현상 끄기 병합 (v1.3.1).
 
-        예전에는 `라플 최적화` · `스나 최적화` · `계단현상끄기` 세 버튼이 따로
-        있었지만, 이제 프로필을 적용할 때 Antialiasing compatibility
-        (``0x00D55F7D``) 값을 ``0x00401241`` 로 같이 패치해 **두 버튼**으로
-        통일했다.  복구는 기존 백업(적용 전 폴더) 하나로 둘 다 되돌아간다.
+        결과에 **실제로 무엇이 바뀌었는지**를 함께 담는다.
+
+          · ``changes``      — 서든어택 프로필 설정 before → after (읽는 이름 포함)
+          · ``base_changes`` — 전역('Base Profile') 설정 before → after
+          · ``files``        — Drs 파일 5개 크기·해시 before → after (진짜로 바뀐 증거)
+          · ``profile_items``— 적용 후 프로필이 설정하고 있는 전체 항목
+          · ``checklist``    — 계단현상·전원 관리·저지연·사전 렌더·텍스처 품질·수직 동기 상태
+          · ``unchanged_reason`` — 바뀐 값이 없을 때 그 이유
+
+        적용 전 폴더는 항상 백업되고, 서든어택이 실행 중이면 거부한다.
         """
         self.ensure_supported()
         if mode not in MODES:
@@ -320,21 +355,29 @@ class DrsManager:
         if not force and self.game_running():
             raise DrsError("서든어택이 실행 중입니다 · 게임을 완전히 종료한 뒤 다시 시도해 주세요")
 
+        running = bool(self.game_running())
         prev = self.current_mode()
         if prev == mode:
             merged = self._merge_stairfix()
+            after_blob = self.live_blob()
             if merged.get("changed"):
                 return {
                     "ok": True, "mode": mode, "merged": True, "stairfix": merged,
-                    "changes": merged.get("changes", []),
+                    "changes": merged.get("changes", []), "base_changes": [],
+                    "files": [], "profile_items": drs.profile_items(after_blob),
+                    "checklist": drs.checklist_state(after_blob),
                     "message": f"{MODES[mode]} 유지 · 계단현상 끄기를 함께 적용했습니다",
                     "applied_at": _now(),
                 }
             return {"ok": True, "mode": mode, "unchanged": True, "merged": bool(merged.get("ok")),
-                    "stairfix": merged, "changes": [],
+                    "stairfix": merged, "changes": [], "base_changes": [], "files": [],
+                    "profile_items": drs.profile_items(after_blob),
+                    "checklist": drs.checklist_state(after_blob),
+                    "unchanged_reason": _readiness(after_blob, [], [], mode),
                     "message": f"{MODES[mode]}이 이미 적용되어 있습니다"}
 
         before_blob = self.live_blob()
+        before_files = drs.file_signature(self.drs_dir / name for name in DRS_FILES)
         backup = self._make_backup(f"{MODES[mode]} 적용 전", prev)
         try:
             for path in files:
@@ -356,6 +399,13 @@ class DrsManager:
             changes = drs.change_list(before_blob, after_blob)
         except Exception:  # noqa: BLE001 - 내역 표시는 최선 노력
             changes = []
+        try:
+            base_changes = drs.base_change_list(before_blob, after_blob)
+        except Exception:  # noqa: BLE001
+            base_changes = []
+        after_files = drs.file_signature(self.drs_dir / name for name in DRS_FILES)
+        file_rows = _file_rows(before_files, after_files)
+        touched = [row["name"] for row in file_rows if row["changed"]]
         return {
             "ok": True,
             "mode": mode,
@@ -363,8 +413,18 @@ class DrsManager:
             "merged": bool(merged.get("ok")),
             "stairfix": merged,
             "changes": changes,
-            "message": (f"{MODES[mode]} + 계단현상 끄기 적용 완료 · 이전 설정 자동 백업"
-                        if merged.get("ok") else f"{MODES[mode]} 적용 완료 · 이전 설정 자동 백업"),
+            "base_changes": base_changes,
+            "files": file_rows,
+            "files_changed": touched,
+            "profile_items": drs.profile_items(after_blob),
+            "checklist": drs.checklist_state(after_blob),
+            "unchanged_reason": _readiness(after_blob, changes, base_changes, mode),
+            "game_running": running,
+            "message": ((f"{MODES[mode]} + 계단현상 끄기 적용 완료 · "
+                         f"{len(changes) + len(base_changes)}개 항목 변경"
+                         if merged.get("ok") else
+                         f"{MODES[mode]} 적용 완료 · {len(changes) + len(base_changes)}개 항목 변경")
+                        + (" · ⚠ 서든어택을 재실행해야 적용됩니다" if running else " · 이전 설정 자동 백업")),
             "applied_at": _now(),
         }
 
@@ -419,12 +479,12 @@ class DrsManager:
                          "before": f"0x{before:08X}", "after": f"0x{drs.STAIRFIX_VALUE:08X}", "key": True}],
         }
 
-    def restore(self, backup_id: str) -> dict[str, Any]:
+    def restore(self, backup_id: str, *, force: bool = False) -> dict[str, Any]:
         self.ensure_supported()
         folder = self.backup_root / str(backup_id)
         if not folder.is_dir():
             raise DrsError(f"복구 지점을 찾지 못했습니다 · {backup_id}")
-        if self.game_running():
+        if not force and self.game_running():
             raise DrsError("서든어택이 실행 중입니다 · 게임을 완전히 종료한 뒤 다시 시도해 주세요")
         meta = {}
         if (folder / "meta.json").exists():
@@ -465,6 +525,10 @@ class DrsManager:
             raise DrsError(str(exc)) from exc
         if before == drs.STAIRFIX_VALUE:
             return {"ok": True, "mode": "stairfix", "unchanged": True,
+                    "changes": [], "base_changes": [], "files": [],
+                    "profile_items": drs.profile_items(blob),
+                    "checklist": drs.checklist_state(blob),
+                    "unchanged_reason": "계단현상 끄기(Antialiasing compatibility 0x00401241)가 이미 적용되어 있습니다",
                     "message": "계단현상 끄기가 이미 적용되어 있습니다",
                     "value": f"0x{drs.STAIRFIX_VALUE:08X}"}
         if not force and self.game_running():
@@ -488,16 +552,25 @@ class DrsManager:
         after = self.stairfix_value()
         if after != drs.STAIRFIX_VALUE:
             raise DrsError("Drs DB 검증에 실패했습니다 · 적용 후 값을 다시 확인해 주세요")
+        current = self.live_blob()
+        changes = [{"id": f"0x{drs.SETTING_AA_COMPAT:08X}", "name": "계단현상 끄기",
+                    "en": "Antialiasing compatibility (DX9)",
+                    "before": (f"0x{before:08X}" if before is not None else "없음"),
+                    "after": f"0x{drs.STAIRFIX_VALUE:08X}",
+                    "label_before": drs.value_label(drs.SETTING_AA_COMPAT, before),
+                    "label_after": drs.value_label(drs.SETTING_AA_COMPAT, drs.STAIRFIX_VALUE),
+                    "key": True}]
         return {
             "ok": True,
             "mode": "stairfix",
             "backup": backup["id"],
             "changed": report.get("changed", True),
             "value": f"0x{drs.STAIRFIX_VALUE:08X}",
-            "changes": [{"id": f"0x{drs.SETTING_AA_COMPAT:08X}", "name": "계단현상 끄기",
-                         "en": "Antialiasing compatibility (DX9)",
-                         "before": (f"0x{before:08X}" if before is not None else "없음"),
-                         "after": f"0x{drs.STAIRFIX_VALUE:08X}", "key": True}],
+            "changes": changes,
+            "base_changes": [],
+            "files": [],
+            "profile_items": drs.profile_items(current),
+            "checklist": drs.checklist_state(current),
             "message": "계단현상 끄기 적용 완료 · Antialiasing compatibility 0x00401241 (계단현상·타격효과·중세철창 제거)",
             "applied_at": _now(),
         }
@@ -508,26 +581,30 @@ class DrsManager:
             return self.apply_stairfix()
         return self.restore_latest()
 
-    def restore_latest(self) -> dict[str, Any]:
+    def restore_latest(self, *, force: bool = True) -> dict[str, Any]:
         backups = self.list_backups()
         if not backups:
             raise DrsError("복구 지점이 없습니다 · 먼저 프로필을 적용해 주세요")
-        return self.restore(backups[0]["id"])
+        return self.restore(backups[0]["id"], force=force)
 
     # ------------------------------------------------------------ elevation
-    def elevate_help(self, mode: str) -> dict[str, Any]:
-        """Re-launch this executable elevated to finish the copy (UAC prompt)."""
+    def elevate_help(self, mode: str, *, restore: bool = False) -> dict[str, Any]:
+        """Re-launch this executable elevated to finish the copy (UAC prompt).
+
+        ``restore=True`` 이면 백업 복구를 관리자 권한으로 실행한다.
+        """
         if os.name != "nt":
             raise DrsError("관리자 권한 상승은 윈도우에서만 지원합니다")
         import ctypes
 
         result_file = paths.data_dir() / RESULT_FILE
+        flag = "--drs-restore" if restore else f'--drs-apply "{mode}"'
         if getattr(sys, "frozen", False):
-            exe, args = sys.executable, f'--drs-apply "{mode}" --result "{result_file}"'
+            exe, args = sys.executable, f'{flag} --result "{result_file}"'
         else:
             exe = sys.executable
             script = Path(__file__).resolve().parent.parent / "main.py"
-            args = f'"{script}" --drs-apply "{mode}" --result "{result_file}"'
+            args = f'"{script}" {flag} --result "{result_file}"'
         try:
             rc = ctypes.windll.shell32.ShellExecuteW(None, "runas", exe, args, None, 1)  # type: ignore[attr-defined]
         except Exception as exc:  # noqa: BLE001 - pywin32-less environment
@@ -557,6 +634,20 @@ def read_result() -> dict[str, Any] | None:
     except OSError:
         pass
     return data
+
+
+def run_elevated_restore(result_path: str | os.PathLike[str]) -> int:
+    """Entry point of the elevated helper process (``--drs-restore``)."""
+    try:
+        mgr = DrsManager()
+        result = mgr.restore_latest()
+        result["elevated"] = True
+        result["mode"] = None
+        write_result(result_path, result)
+        return 0
+    except Exception as exc:  # noqa: BLE001
+        write_result(result_path, {"ok": False, "elevated": True, "message": str(exc)})
+        return 1
 
 
 def run_elevated_cli(mode: str, result_path: str | os.PathLike[str]) -> int:

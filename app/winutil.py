@@ -181,6 +181,180 @@ def open_folder(path: str) -> dict[str, Any]:
         return {"ok": False, "path": path, "message": str(exc)}
 
 
+# ------------------------------------------------------------------ window style · drag (v1.3.1)
+WS_MAXIMIZEBOX = 0x00010000
+WS_THICKFRAME = 0x00040000
+WS_MAXIMIZE = 0x01000000
+GWL_STYLE = -16
+SWP_NOSIZE = 0x0001
+SWP_NOMOVE = 0x0002
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+VK_LBUTTON = 0x01
+
+_DRAG_STATE: dict[str, Any] = {"thread": None, "stop": threading.Event(), "origin": None}
+
+
+def fixed_style(style: int) -> int:
+    """최대화·크기조절 비트를 지운 창 스타일 (순수 함수 · 테스트용).
+
+    1200×750 고정 창에서 최대화 후 복귀가 어긋나던 문제를 원천 차단한다.
+    """
+    return int(style) & ~(WS_MAXIMIZEBOX | WS_THICKFRAME | WS_MAXIMIZE)
+
+
+def fixed_window_style(hwnd: int) -> dict[str, Any]:
+    """실제 창에 고정 스타일을 적용한다 (Windows 전용 · 실패는 조용히)."""
+    if os.name != "nt" or not hwnd:
+        return {"ok": False, "supported": False}
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        get_long = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        set_long = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+        style = int(get_long(ctypes.c_void_p(hwnd), GWL_STYLE))
+        target = fixed_style(style)
+        if target != style:
+            set_long(ctypes.c_void_p(hwnd), GWL_STYLE, target)
+        return {"ok": True, "supported": True, "before": f"0x{style:08X}", "after": f"0x{target:08X}",
+                "maximize": False, "resizable": bool(target & WS_THICKFRAME)}
+    except Exception as exc:  # noqa: BLE001 - 스타일 고정은 최선 노력
+        return {"ok": False, "supported": True, "message": str(exc)}
+
+
+def _window_rect(hwnd: int) -> tuple[int, int, int, int] | None:
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        if not ctypes.windll.user32.GetWindowRect(ctypes.c_void_p(hwnd), ctypes.byref(rect)):  # type: ignore[attr-defined]
+            return None
+        return int(rect.left), int(rect.top), int(rect.right - rect.left), int(rect.bottom - rect.top)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _cursor_pos() -> tuple[int, int] | None:
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        point = wintypes.POINT()
+        if not ctypes.windll.user32.GetCursorPos(ctypes.byref(point)):  # type: ignore[attr-defined]
+            return None
+        return int(point.x), int(point.y)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _place(hwnd: int, x: int, y: int) -> bool:
+    """크기는 그대로, 위치만 옮긴다 (SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE)."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        return bool(ctypes.windll.user32.SetWindowPos(  # type: ignore[attr-defined]
+            ctypes.c_void_p(hwnd), 0, int(x), int(y), 0, 0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def start_drag_loop(hwnd: int, *, max_seconds: float = 120.0) -> dict[str, Any]:
+    """마우스 왼쪽 버튼을 누르고 있는 동안 창을 커서에 붙여 움직인다.
+
+    pywebview 의 JS 브리지는 백그라운드 스레드에서 돌기 때문에 모달 이동 루프
+    (``WM_NCLBUTTONDOWN``)를 쓰면 실패할 수 있다.  여기서는 커서 위치를 직접
+    읽어 ``SetWindowPos`` 로만 옮기므로 스레드·DOM 이벤트와 무관하게 동작한다.
+    """
+    if os.name != "nt" or not hwnd:
+        return {"ok": False, "supported": False}
+    rect = _window_rect(hwnd)
+    cursor = _cursor_pos()
+    if rect is None or cursor is None:
+        return {"ok": False, "supported": False, "message": "창/커서 위치를 읽지 못했습니다"}
+    thread = _DRAG_STATE.get("thread")
+    if thread is not None and thread.is_alive():
+        _DRAG_STATE["stop"].set()
+        thread.join(timeout=0.2)
+    stop = threading.Event()
+    _DRAG_STATE.update({"stop": stop, "origin": {"x": rect[0], "y": rect[1], "cx": cursor[0], "cy": cursor[1]},
+                        "hwnd": hwnd})
+
+    def _run() -> None:
+        import time as _time
+
+        ox, oy = rect[0], rect[1]
+        cx0, cy0 = cursor[0], cursor[1]
+        deadline = _time.monotonic() + max(1.0, float(max_seconds))
+        try:
+            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        except Exception:  # noqa: BLE001
+            return
+        moved = False
+        while not stop.is_set() and _time.monotonic() < deadline:
+            try:
+                if not (int(user32.GetAsyncKeyState(VK_LBUTTON)) & 0x8000):
+                    break
+            except Exception:  # noqa: BLE001
+                break
+            point = _cursor_pos()
+            if point is None:
+                break
+            x = ox + (point[0] - cx0)
+            y = oy + (point[1] - cy0)
+            if _place(hwnd, x, y):
+                moved = True
+            _time.sleep(0.008)
+        _DRAG_STATE["origin"] = None
+        _DRAG_STATE["moved"] = moved
+
+    thread = threading.Thread(target=_run, name="sa-window-drag", daemon=True)
+    _DRAG_STATE["thread"] = thread
+    thread.start()
+    return {"ok": True, "supported": True, "start": [rect[0], rect[1]]}
+
+
+def end_drag_loop() -> None:
+    stop = _DRAG_STATE.get("stop")
+    if isinstance(stop, threading.Event):
+        stop.set()
+
+
+def move_window_by(hwnd: int, dx: int, dy: int) -> dict[str, Any]:
+    """드래그 시작 지점 기준 (dx, dy) 만큼 이동 — JS mousemove 폴백.
+
+    CSS px 로 들어오므로 DPI 배율(96 기준)을 곱해 실제 픽셀만큼 옮긴다.
+    """
+    if os.name != "nt" or not hwnd:
+        return {"ok": False, "supported": False}
+    origin = _DRAG_STATE.get("origin")
+    rect = _window_rect(hwnd)
+    if rect is None:
+        return {"ok": False, "supported": False}
+    if not origin:
+        origin = {"x": rect[0], "y": rect[1]}
+        _DRAG_STATE["origin"] = origin
+    try:
+        import ctypes
+
+        dpi = int(ctypes.windll.user32.GetDpiForWindow(ctypes.c_void_p(hwnd))) or 96  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        dpi = 96
+    scale = (dpi / 96.0) if dpi else 1.0
+    x = int(origin["x"]) + int(round(float(dx) * scale))
+    y = int(origin["y"]) + int(round(float(dy) * scale))
+    ok = _place(hwnd, x, y)
+    return {"ok": ok, "supported": True, "x": x, "y": y}
+
+
 # ------------------------------------------------------------------ window size lock
 def work_area_of_point(x: int, y: int) -> tuple[int, int, int, int]:
     """Work area (taskbar excluded) of the monitor that contains the point."""

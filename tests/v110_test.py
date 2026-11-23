@@ -172,7 +172,7 @@ def mock_js(state: dict) -> str:
 def backend() -> None:
     from app import scoring, winutil, paths
 
-    check("버전 1.3.0", paths.APP_VERSION == "1.3.0", paths.APP_VERSION)
+    check("버전 1.3.1", paths.APP_VERSION == "1.3.1", paths.APP_VERSION)
 
     records = [
         {"date": "2026-11-22", "created_at": "2026-11-22T21:00:00", "game": "kovak", "weapon": "sniper",
@@ -380,22 +380,25 @@ def ui() -> None:
                 .find((e) => e.dataset.scen === 'Reflex Micro++ flick reload small');
             return item ? item.parentElement.textContent.replace(/\\s+/g, ' ').trim() : '';
         }""")
-        check("라이브러리 행에도 오늘 내 점수 표시", "182" in lib_row, lib_row[:70])
+        check("라이브러리 행에 PB 표시 (v1.3.1 — 오늘 글자 대신 PB)", "PB" in lib_row, lib_row[:70])
         page.click('.seg-game .seg-btn[data-game="aimlab"]')
         page.wait_for_timeout(450)
-        aim_sub = page.evaluate("""() => ({sub: document.querySelector('#rec-grid-sub').textContent,
+        aim_sub = page.evaluate("""() => ({sub: (document.querySelector('#hd2-count')||{}).textContent || '',
             head: document.querySelector('#hd2-count').textContent,
-            chip: document.querySelector('#rec-head-chip').textContent,
-            items: document.querySelectorAll('#rec-grid [data-scen]').length})""")
+            chip: (document.querySelector('#rec-head-chip')||{}).textContent || '',
+            items: document.querySelectorAll('#rec-grid [data-scen]').length,
+            noSub: !document.getElementById('rec-grid-sub')})""")
         check("추천 화면 · 에임랩 스나 라이브러리 24종 이상", aim_sub["items"] >= 24, str(aim_sub))
         check("추천 화면 · 스나 철학 표시", "롱 트래킹 제외" in aim_sub["chip"], aim_sub["chip"])
+        check("추천 화면 · 회색 부연 설명 제거 (v1.3.1)", aim_sub.get("noSub") is True, str(aim_sub.get("noSub")))
         page.screenshot(path=str(SHOTS / "v110-recs-aimlab-sniper.png"))
         page.click('.seg-weapon .seg-btn[data-weapon="rifle"]')
         page.wait_for_timeout(450)
-        rifle = page.evaluate("""() => ({sub: document.querySelector('#rec-grid-sub').textContent,
+        rifle = page.evaluate("""() => ({sub: (document.querySelector('#hd2-count')||{}).textContent || '',
             head: document.querySelector('#hd2-count').textContent,
-            chip: document.querySelector('#rec-head-chip').textContent,
-            items: document.querySelectorAll('#rec-grid [data-scen]').length})""")
+            chip: (document.querySelector('#rec-head-chip')||{}).textContent || '',
+            items: document.querySelectorAll('#rec-grid [data-scen]').length,
+            noSub: !document.getElementById('rec-grid-sub')})""")
         check("추천 화면 · 라플 24종 이상 + 트래킹 위주", rifle["items"] >= 24 and "트래킹" in rifle["chip"],
               str(rifle))
         check("헤더 종목 수가 실제 라이브러리와 일치", "27" in rifle["head"] and "25" in aim_sub["head"],
@@ -457,7 +460,7 @@ def ui() -> None:
               me["cells"][1]["tier"] == "그랜드마스터 III" and "3,435" in me["cells"][1]["rp"],
               json.dumps(me["cells"][1], ensure_ascii=False))
         page.screenshot(path=str(SHOTS / "v110-leaderboard.png"))
-        page.click('#lb-sorts [data-sort="party"]')
+        page.click('#lb-head [data-lbsort="party"]')
         page.wait_for_timeout(300)
         order = page.evaluate("""() => [...document.querySelectorAll('#lb-rows .lb-row')]
             .map((r) => Number((r.querySelectorAll('.lb-tier .tt span')[1] || {}).textContent.replace(/[^0-9]/g, '') || 0))""")

@@ -165,11 +165,11 @@ def backend_checks() -> None:
     real_fetch = updates.fetch_latest
     try:
         updates.clear()
-        updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.3.1", "name": "v1.3.1",
+        updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.3.2", "name": "v1.3.2",
                                                     "url": "https://github.com/x/y", "download": "https://x/y.exe",
                                                     "published_at": "2026-11-23T00:00:00Z", "notes": ""}
         newer = updates.check(paths.APP_VERSION, force=True)
-        check("새 버전 감지", newer.get("ok") and newer.get("newer") and newer.get("latest") == "1.3.1",
+        check("새 버전 감지", newer.get("ok") and newer.get("newer") and newer.get("latest") == "1.3.2",
               str(newer.get("message")))
         updates.clear()
         updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.0.0", "url": "", "download": ""}
@@ -309,7 +309,8 @@ def backend_checks() -> None:
           all(set(("icon", "title", "text", "tone")) <= set(t) for t in coach), str(coach[0] if coach else {}))
     flat = " ".join(t.get("text", "") + " " + t.get("title", "") for t in coach)
     check("코칭이 실제 수치를 인용", any(token in flat for token in ("승률", "K/D", "딜량", "RP")), flat[:80])
-    check("약한 맵 코칭 포함", any("약한 맵" in t.get("title", "") for t in coach),
+    check("약한 맵 코칭 포함 (v1.3.1 — 맵 이름·승률·K/D 제목)",
+          any("판 · 승률" in t.get("title", "") and "K/D" in t.get("title", "") for t in coach),
           str([t.get("title") for t in coach]))
     thin = scoring.play_coaching({"stats": {"games": 0}})
     check("표본 없으면 코칭 비움", thin == [], str(thin))
@@ -322,8 +323,8 @@ def backend_checks() -> None:
         "recent": {"sniper": 30, "assault": 70}})
     check("연패·솔로격차 코칭", 3 <= len(streaks) <= 4 and any("최근 5판" in t["title"] for t in streaks),
           str([t["title"] for t in streaks]))
-    check("코칭 문구가 수치에 맞음", any("900" in t["text"] or "44.0" in t["text"] for t in streaks),
-          str([t["text"][:40] for t in streaks]))
+    check("코칭 문구가 수치에 맞음", any("44.0" in t["text"] or "900" in t["text"] for t in streaks),
+          str([t["text"][:60] for t in streaks]))
     gap = scoring.play_coaching({
         "stats": {"games": 100, "win": 53.0, "kd": 55.0, "dmg": 1200},
         "tier": {"solo": {"rp": 2100}, "party": {"rp": 2600}},
@@ -334,7 +335,7 @@ def backend_checks() -> None:
           str([t["title"] for t in gap]))
 
     # ---- 12. 앱 버전 · API 노출
-    check("APP_VERSION 1.3.0", paths.APP_VERSION == "1.3.0", paths.APP_VERSION)
+    check("APP_VERSION 1.3.1", paths.APP_VERSION == "1.3.1", paths.APP_VERSION)
     import main as app_main
 
     exposed = app_main._public_names(api)
@@ -679,7 +680,7 @@ def ui_checks() -> None:
         check("적용 후 상태 칩 갱신", "적용됨" in (chip_after or ""), str(chip_after))
 
         # ---------- 설정 팝업 (v1.3.0 — 좌측 하단 프로필/톱니바퀴)
-        page.evaluate("() => document.querySelector('#profile-card').click()")
+        page.evaluate("() => document.querySelector('#settings-btn').click()")
         page.wait_for_timeout(500)
         settings = page.evaluate("""() => {
             const q = (id) => { const el = document.getElementById(id); return el ? el.value || el.textContent : null; };
@@ -735,7 +736,7 @@ def ui_checks() -> None:
         page.click(".nav-item[data-screen='recs']")
         page.wait_for_timeout(400)
         recs = page.evaluate("""() => ({warm: !!document.getElementById('warmup-btn-2'),
-            imp: !!document.getElementById('kovak-import-2'),
+            imp: !!document.getElementById('kovak-import-head'),
             head: !!document.getElementById('score-input-btn')})""")
         check("추천 5종 화면에 워밍업·코박스 버튼", recs["warm"] and recs["imp"] and recs["head"], str(recs))
         page.screenshot(path=str(SHOTS / "v120-recs.png"))

@@ -183,15 +183,18 @@ def _center_position(width: int, height: int) -> tuple[int | None, int | None]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--drs-apply", metavar="MODE", help="internal: apply a Drs profile elevated")
+    parser.add_argument("--drs-restore", action="store_true", help="internal: restore the latest Drs backup elevated")
     parser.add_argument("--result", metavar="FILE", help="internal: write the elevated result JSON here")
     parser.add_argument("--serve", nargs="?", const=8710, type=int, help="dev: serve ui/ over HTTP")
     parser.add_argument("--debug", action="store_true", help="verbose log + devtools")
     args = parser.parse_args(argv)
 
-    if args.drs_apply:
+    if args.drs_apply or args.drs_restore:
         from app import nvidia
 
         target = args.result or str(paths.data_dir() / "elevated_result.json")
+        if args.drs_restore:
+            return nvidia.run_elevated_restore(target)
         return nvidia.run_elevated_cli(args.drs_apply, target)
 
     if args.serve is not None:
@@ -292,6 +295,16 @@ def main(argv: list[str] | None = None) -> int:
     else:
         log.info("window guard off (Windows 전용)")
 
+    # ── 최대화 완전 차단 (v1.3.1) ──
+    # 1200×750 고정.  타이틀바의 최대화 버튼을 없애고, Win32 스타일에서도
+    # WS_MAXIMIZEBOX·WS_THICKFRAME·WS_MAXIMIZE 를 지워 더블클릭·단축키로도
+    # 최대화되지 않게 한다 (최대화 후 복귀가 어긋나던 문제 자체를 막는다).
+    try:
+        locked = winutil.fixed_window_style(api._hwnd() or 0)
+        log.info("window style fixed · %s", locked)
+    except Exception:  # noqa: BLE001 - 스타일 고정은 최선 노력
+        log.debug("window style could not be fixed", exc_info=True)
+
     # ── 새 버전 확인 (백그라운드 · 실패해도 조용히) ──
     api.start_update_check()
 
@@ -321,12 +334,29 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:  # noqa: BLE001
             log.exception("tray quit failed")
 
+    def _show_window_and_settings() -> None:
+        """트레이 `설정` — 창을 띄우고 설정 팝업을 바로 연다."""
+        try:
+            window.show()
+            _set_hidden(False)
+        except Exception:  # noqa: BLE001
+            log.exception("tray settings · show failed")
+        try:
+            window.evaluate_js(
+                "window.AL && window.AL.openSettings ? window.AL.openSettings() : "
+                "document.querySelector('#settings-mask')?.classList.add('show');"
+            )
+        except Exception:  # noqa: BLE001 - 페이지가 아직 준비되지 않았을 수 있다
+            log.debug("tray settings · evaluate_js failed", exc_info=True)
+
     tray_icon: tray.TrayIcon | None = None
     if os.name == "nt":
         tray_icon = tray.TrayIcon(
             title=paths.APP_TITLE,
             icon_path=str(paths.icon_file()),
             on_toggle=_toggle_window,
+            on_open=lambda: (window.show(), _set_hidden(False)),
+            on_settings=_show_window_and_settings,
             on_quit=_quit_app,
             hotkey="Ctrl+Shift+A",
         )
@@ -353,6 +383,11 @@ def main(argv: list[str] | None = None) -> int:
     #  사용자가 "앱이 꺼졌다"고 오해하므로, UI 실행 중에는 X 로 닫도록 안내한다.)
     def _on_loaded() -> None:
         log.info("ui loaded · bridge should be ready")
+        # 창은 webview.start() 안에서 만들어지므로, 스타일 고정은 로드 직후에 한 번 더 한다
+        try:
+            log.info("window style fixed(after load) · %s", winutil.fixed_window_style(api._hwnd() or 0))
+        except Exception:  # noqa: BLE001
+            log.debug("window style could not be fixed after load", exc_info=True)
 
     try:
         window.events.loaded += _on_loaded

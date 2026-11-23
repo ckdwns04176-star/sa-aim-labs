@@ -41,6 +41,7 @@ DEFAULTS: dict[str, Any] = {
     },
     "records": [],
     "leaderboard": [],
+    "memos": {},
     "rotation": [],
     "more": [],
     "barracks": {},
@@ -186,6 +187,24 @@ class Store:
     def set_leaderboard(self, members: list[dict[str, Any]]) -> None:
         self.data["leaderboard"] = members[:10]
         self.save()
+
+    # ------------------------------------------------------------ friend memos (v1.3.1)
+    def memos(self) -> dict[str, str]:
+        """친구별 메모 {'닉네임': '메모'} — 순위표 우클릭으로 적는 한 줄 기록."""
+        return self.data.setdefault("memos", {})
+
+    def set_memo(self, nickname: str, text: str) -> dict[str, str]:
+        name = str(nickname or "").strip()
+        if not name:
+            raise ValueError("닉네임이 없습니다")
+        body = str(text or "").strip()[:400]
+        table = self.memos()
+        if body:
+            table[name] = body
+        else:
+            table.pop(name, None)
+        self.save()
+        return table
 
     # ------------------------------------------------------------ rotation
     def rotation(self) -> list[dict[str, Any]]:

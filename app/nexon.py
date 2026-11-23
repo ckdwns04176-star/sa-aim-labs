@@ -34,7 +34,7 @@ BASE_URL = "https://open.api.nexon.com"
 MATCH_MODE = "폭파미션"
 MATCH_TYPES = ("랭크전 솔로", "랭크전 파티")
 RECENT_N = 100
-MATCH_ROWS = 20
+MATCH_ROWS = 100   # 맵별 매치 히스토리 팝업까지 쓰려면 최근 100판이 필요하다
 MAP_MIN = 5
 DETAIL_DEPTH = 0   # 순위표는 API 상세 호출 0건 (디스크 캐시에 있는 상세만 사용)
 
@@ -399,10 +399,43 @@ def aggregate(rows: Sequence[dict[str, Any]], details: Sequence[dict[str, Any] |
     }
 
 
-def _match_rows(rows: Sequence[dict[str, Any]], details: Sequence[dict[str, Any] | None], nickname: str, limit: int = MATCH_ROWS) -> list[dict[str, Any]]:
+def _match_players(detail: dict[str, Any] | None, nickname: str) -> list[list[Any]]:
+    """경기 상세 → [[이름, 팀, 킬, 데스, 딜량], …] (나 포함 · 병영수첩 느낌의 전적 팝업용).
+
+    10명까지만 남겨 data.json 이 커지지 않게 한다.  상세 캐시가 없으면 빈 목록.
+    """
+    out: list[list[Any]] = []
+    my_team = None
+    target = (nickname or "").strip().lower()
+    for p in (detail or {}).get("match_detail") or []:
+        name = str(p.get("user_name") or "").strip()
+        if not name:
+            continue
+        team = str(p.get("team_id") if p.get("team_id") is not None else "-")
+        if name.lower() == target:
+            my_team = team
+    for p in (detail or {}).get("match_detail") or []:
+        name = str(p.get("user_name") or "").strip()
+        if not name:
+            continue
+        team = str(p.get("team_id") if p.get("team_id") is not None else "-")
+        side = "?" if my_team is None else ("팀" if team == my_team else "적")
+        try:
+            dmg = int(round(float(p.get("damage") or 0)))
+        except (TypeError, ValueError):
+            dmg = 0
+        out.append([name, side, int(p.get("kill") or 0), int(p.get("death") or 0), dmg])
+        if len(out) >= 10:
+            break
+    return out
+
+
+def _match_rows(rows: Sequence[dict[str, Any]], details: Sequence[dict[str, Any] | None], nickname: str,
+                limit: int = MATCH_ROWS) -> list[dict[str, Any]]:
     out = []
     for idx, m in enumerate(rows[:limit]):
-        one = _player_detail(details[idx] if idx < len(details) else None, nickname)
+        detail = details[idx] if idx < len(details) else None
+        one = _player_detail(detail, nickname)
         k = int(m.get("kill") or 0)
         d = int(m.get("death") or 0)
         raw = str(m.get("date_match") or "")
@@ -414,11 +447,13 @@ def _match_rows(rows: Sequence[dict[str, Any]], details: Sequence[dict[str, Any]
         out.append({
             "date": date_txt, "time": time_txt,
             "type": "솔로" if "솔로" in str(m.get("match_type")) else "파티",
+            "mode": str(m.get("match_mode") or ""),
             "map": one["map"] or "-",
             "result": "승" if str(m.get("match_result")) == "1" else "패",
             "k": k, "d": d,
             "kd": round(k / (k + d) * 100, 1) if (k + d) else 0.0,
             "damage": None if one["damage"] is None else int(round(one["damage"])),
+            "players": _match_players(detail, nickname),
         })
     return out
 

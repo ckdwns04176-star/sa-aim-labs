@@ -654,7 +654,7 @@ tr.cur td{background:rgba(245,158,11,.055)}
 
 .lb-table{padding:4px 13px 8px;flex:1;min-height:0;display:flex;flex-direction:column}
 .lb-row{
-  display:grid;grid-template-columns:38px minmax(0,1fr) 84px 150px 150px 66px 70px 58px 24px;
+  display:grid;grid-template-columns:38px minmax(0,1fr) 84px 146px 146px 62px 66px 54px 78px;
   align-items:center;gap:8px;height:48px;border-bottom:1px solid rgba(148,163,184,.05);
   padding:0 7px;border-radius:7px;
 }
@@ -866,8 +866,9 @@ tr.cur td{background:rgba(245,158,11,.055)}
 .app-toast{position:absolute;left:50%;bottom:16px;transform:translate(-50%,10px);opacity:0;pointer-events:none;
   min-height:32px;max-width:560px;padding:7px 14px;border-radius:9px;display:flex;align-items:center;gap:6px;
   font-size:11.5px;font-weight:700;color:#FDE8BD;background:rgba(17,25,40,.98);
-  border:1px solid rgba(245,158,11,.42);box-shadow:0 16px 34px rgba(0,0,0,.6);transition:.2s;z-index:60}
-.app-toast.show{opacity:1;transform:translate(-50%,0)}
+  border:1px solid rgba(245,158,11,.42);box-shadow:0 16px 34px rgba(0,0,0,.6);transition:.2s;z-index:9000}
+.app-toast.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+.app-toast .tt-act{pointer-events:auto}
 .app-toast.ok{color:#B7F5DA;border-color:rgba(52,211,153,.44)}
 
 /* misc */
@@ -1248,8 +1249,8 @@ table.maps-t td.map{font-size:11.8px}
   font-size:8.5px;font-weight:800;color:#A9B9CE;background:rgba(148,163,184,.1);border:1px solid rgba(148,163,184,.2)}
 .rec-diff.lv-mid{color:#FCD9A0;border-color:rgba(245,158,11,.32);background:rgba(245,158,11,.1)}
 .rec-diff.lv-high{color:#F7AFAE;border-color:rgba(239,68,68,.32);background:rgba(239,68,68,.1)}
-.rec-stat2{display:flex;flex-direction:column;gap:1px;min-width:0}
-.rec-stat2 span{font-size:9.3px;color:#7B8BA1;font-weight:600;white-space:nowrap;display:flex;align-items:center;justify-content:flex-start;gap:5px}
+.rec-stat2{display:flex;flex-direction:column;gap:1px;min-width:0;align-items:flex-end}
+.rec-stat2 span{font-size:9.3px;color:#7B8BA1;font-weight:600;white-space:nowrap;display:flex;align-items:center;justify-content:flex-end;gap:5px}
 .rec-stat2 span b{min-width:34px;text-align:right}
 .rec-stat2 b{font-family:var(--num);font-size:10.5px;color:#DCE6F5;font-weight:700}
 .rec-stat2 .tgt b{color:#9AE6C9}
@@ -1448,6 +1449,154 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
 #set-tabs{margin-bottom:9px}
 #set-tabs button{height:31px;font-size:11px}
 
+
+/* ================= v1.3.1 =================
+   1) 호버 '볼록' 효과는 팝업/모달을 여는 요소에만 (.pop · .weak · .tier-row · .lb-row · .heat-cell)
+   2) 설정 기어 버튼 · 그래프 툴팁 · 날짜/매치/메모 팝업 스타일 */
+.card{transition:border-color .2s,background .2s}
+.card:hover{transform:none;box-shadow:none;border-color:rgba(148,163,184,.16)}
+.card.pop{cursor:pointer;transition:transform .22s cubic-bezier(.2,.8,.3,1),border-color .2s,background .2s,box-shadow .22s}
+.card.pop:hover,.card.pop:focus-visible{
+  transform:translateY(-2px);border-color:rgba(245,158,11,.34);
+  box-shadow:0 14px 30px rgba(0,0,0,.42), inset 0 1px 0 rgba(255,255,255,.06), 0 0 0 1px rgba(245,158,11,.14);
+  outline:none;
+}
+.card.pop:active{transform:translateY(0)}
+.util-row:hover{transform:none;box-shadow:none;border-color:rgba(148,163,184,.2)}
+.lb-tile:hover{transform:none;border-color:rgba(148,163,184,.16)}
+.goal:hover{background:none}
+.rec:hover{transform:none}
+.weak,.tier-row,.lb-row,.heat-cell,[data-map][data-row],.rec,.rec-today-pop{cursor:pointer}
+
+.settings-btn{
+  display:flex;align-items:center;justify-content:center;gap:7px;height:34px;border-radius:10px;
+  border:1px solid rgba(148,163,184,.16);background:linear-gradient(180deg,rgba(30,41,64,.5),rgba(16,23,38,.6));
+  color:#A9B9CE;font-size:11px;font-weight:800;letter-spacing:.02em;margin:0 2px;
+  transition:background .18s,color .18s,border-color .18s,transform .18s,box-shadow .18s;
+}
+.settings-btn svg{width:15px;height:15px;transition:transform .3s}
+.settings-btn:hover{background:rgba(245,158,11,.13);border-color:rgba(245,158,11,.36);color:#FDE8BD;transform:translateY(-1px)}
+.settings-btn:hover svg{transform:rotate(35deg)}
+
+/* 기록 표·맵 표 행 클릭 */
+#records-table tbody tr,#map-table tbody tr{transition:background .15s}
+#records-table tbody tr:hover,#map-table tbody tr:hover{background:rgba(245,158,11,.08)}
+
+/* 친구 순위표 메모 · 병영수첩 */
+.lb-name{display:flex;align-items:center;gap:5px;min-width:0}
+.lb-memo{width:16px;height:16px;flex:0 0 16px;border-radius:4px;display:inline-flex;align-items:center;justify-content:center;
+  background:rgba(245,158,11,.18);border:1px solid rgba(245,158,11,.4);color:#FDE8BD;font-size:9px;
+  cursor:pointer;padding:0}
+.lb-memo:hover{background:rgba(245,158,11,.32)}
+.lb-site{height:20px;min-width:44px;padding:0 5px;border-radius:5px;font-size:8.5px;font-weight:800;white-space:nowrap;
+  display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;
+  background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.32);color:#A9E5F8;cursor:pointer}
+.lb-site:hover{background:rgba(56,189,248,.26)}
+.lb-row{cursor:context-menu}
+
+/* 그래프 툴팁 */
+.chart-tip{position:fixed;z-index:10050;pointer-events:none;opacity:0;transform:translateY(4px);
+  transition:opacity .12s,transform .12s;padding:6px 9px;border-radius:8px;
+  background:rgba(7,11,19,.96);border:1px solid rgba(245,158,11,.4);box-shadow:0 10px 24px rgba(0,0,0,.5);
+  font-size:10.5px;font-weight:700;color:#EAF1FB;white-space:nowrap;line-height:1.5}
+.chart-tip.show{opacity:1;transform:none}
+.chart-tip b{font-family:var(--num);color:#FDE8BD}
+.chart-tip .d{display:block;font-size:9px;color:#8496AE;font-weight:700}
+
+/* 큰 그래프 */
+.bigchart{position:relative;width:100%;height:268px;border-radius:10px;background:rgba(7,11,19,.55);
+  border:1px solid rgba(148,163,184,.12);padding:4px}
+.bigchart svg{width:100%;height:100%}
+.chart-facts{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:8px}
+.chart-fact{border-radius:8px;padding:7px 9px;background:rgba(148,163,184,.05);border:1px solid rgba(148,163,184,.12)}
+.chart-fact span{font-size:9px;color:#7E8FA6;font-weight:700;display:block}
+.chart-fact b{font-family:var(--num);font-size:14px;color:#EAF1FB;font-weight:700}
+.chart-fact i{font-style:normal;font-size:9.5px;color:#6EE7C0;font-weight:700;margin-left:4px}
+.chart-legend{display:flex;gap:10px;font-size:9.5px;color:#8496AE;font-weight:700;margin-top:6px}
+.chart-legend i{display:inline-block;width:8px;height:8px;border-radius:2px;margin-right:4px;vertical-align:middle}
+
+/* 5영역 상세 */
+.aim-rows{display:flex;flex-direction:column;gap:6px}
+.aim-row{display:grid;grid-template-columns:78px 46px 1fr 132px;align-items:center;gap:9px;
+  padding:8px 10px;border-radius:9px;background:rgba(148,163,184,.05);border:1px solid rgba(148,163,184,.12)}
+.aim-row.weak{border-color:rgba(239,68,68,.34);background:rgba(239,68,68,.07)}
+.aim-row .nm{font-size:11.5px;font-weight:800;color:#E4ECF8}
+.aim-row .sc{font-family:var(--num);font-size:17px;font-weight:700;color:#FDE8BD;text-align:right}
+.aim-row .bar{height:6px;border-radius:4px;background:rgba(148,163,184,.14);overflow:hidden}
+.aim-row .bar i{display:block;height:100%;border-radius:4px}
+.aim-row .scen{font-size:9px;color:#8496AE;font-weight:600;line-height:1.5;text-align:right}
+
+/* 날짜별 상세 */
+.day-list{display:flex;flex-direction:column;gap:5px;max-height:330px;overflow:auto}
+.day-row{display:grid;grid-template-columns:minmax(0,1fr) 74px 70px;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;
+  background:rgba(148,163,184,.05);border:1px solid rgba(148,163,184,.1)}
+.day-row .nm{font-size:11px;font-weight:700;color:#DCE6F5;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.day-row .tag{font-size:8.5px;font-weight:800;color:#A9E5F8;background:rgba(56,189,248,.12);border-radius:4px;
+  padding:2px 5px;text-align:center;justify-self:stretch;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.day-row .sc{font-family:var(--num);font-size:13px;font-weight:700;color:#FDE8BD;text-align:right}
+.day-head{display:flex;align-items:center;justify-content:space-between;font-size:10px;font-weight:800;color:#8496AE;
+  padding:0 2px 4px;border-bottom:1px solid rgba(148,163,184,.12);margin-bottom:4px}
+
+/* 맵 매치 전적 */
+.mm-list{display:flex;flex-direction:column;gap:7px;max-height:430px;overflow:auto}
+.mm-match{border-radius:9px;border:1px solid rgba(148,163,184,.14);background:rgba(148,163,184,.04);padding:8px 10px}
+.mm-top{display:flex;align-items:center;gap:8px;font-size:10.5px;font-weight:800;color:#C7D3E4}
+.mm-top .res{height:18px;padding:0 6px;border-radius:4px;font-size:9px;display:inline-flex;align-items:center}
+.mm-top .res.win{background:rgba(52,211,153,.16);border:1px solid rgba(52,211,153,.4);color:#9AE6C9}
+.mm-top .res.lose{background:rgba(239,68,68,.14);border:1px solid rgba(239,68,68,.36);color:#F7AFAE}
+.mm-top .st{margin-left:auto;font-family:var(--num);font-size:10px;color:#8496AE}
+.mm-players{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:7px}
+.mm-side{display:flex;flex-direction:column;gap:2px;min-width:0}
+.mm-side+.mm-side{border-left:1px solid rgba(148,163,184,.12);padding-left:10px}
+.mm-side-hd{display:flex;align-items:center;justify-content:space-between;font-size:8.5px;font-weight:800;
+  color:#7E8FA6;letter-spacing:.04em;padding-bottom:3px;margin-bottom:2px;border-bottom:1px solid rgba(148,163,184,.08)}
+.mm-side-hd b{font-family:var(--num);color:#8496AE;font-size:9px}
+.mm-p{display:grid;grid-template-columns:minmax(0,1fr) 40px 46px;align-items:center;gap:6px;
+  font-size:9.5px;font-weight:600;color:#B4C2D6;padding:1px 2px;border-radius:3px}
+.mm-p:nth-child(odd){background:rgba(148,163,184,.035)}
+.mm-p .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mm-p.me{color:#FDE8BD;font-weight:800}
+.mm-p .k{font-family:var(--num);font-size:9px;color:#A9E5F8;text-align:right}
+.mm-p .dm{font-family:var(--num);font-size:9px;color:#7E8FA6;text-align:right}
+
+/* 스위치 상태 강조 */
+.switch.on{box-shadow:0 0 12px rgba(52,211,153,.35)}
+
+/* 변경 내역 팝업 — 안쪽 목록이 잘리지 않게 모달 본문이 스크롤한다 */
+#changes-mask .modal-bd{max-height:520px;overflow:auto}
+#changes-mask .change-list{max-height:none;overflow:visible}
+#changes-mask .modal{width:780px}
+#change-list > div:not(.change-row){position:sticky;top:0;background:rgba(11,17,28,.96);padding:2px 0;z-index:1}
+
+/* v1.3.1 · 순위표 정렬 헤더 · 슬롯/푸터 제거 */
+.lb-row.hd [data-lbsort]{cursor:pointer;user-select:none;transition:color .15s}
+.lb-row.hd [data-lbsort]:hover{color:#FCD9A0}
+.lb-row.hd [data-lbsort].on{color:#FBD48F}
+.lb-row.hd .lbar{font-size:8px;margin-left:3px;opacity:.45}
+.lb-row.hd [data-lbsort].on .lbar{opacity:1;color:#F59E0B}
+
+/* v1.3.1 · 병영수첩 배너 — 무기/클랜 링크/어제 대비 변화 */
+.bn-sub .bn-clan{color:#C4D2E5;font-weight:700;cursor:pointer;border-bottom:1px dashed rgba(148,163,184,.45);
+  padding-bottom:1px;transition:color .15s,border-color .15s}
+.bn-sub .bn-clan:hover{color:#FDE8BD;border-bottom-color:rgba(245,158,11,.7)}
+.bn-stat{border-radius:8px;padding:5px 12px;margin-left:6px;position:relative;transition:background .2s,border-color .2s}
+.bn-stat.up{background:linear-gradient(160deg,rgba(52,211,153,.15),rgba(52,211,153,.02));border:1px solid rgba(52,211,153,.26)}
+.bn-stat.down{background:linear-gradient(160deg,rgba(239,68,68,.15),rgba(239,68,68,.02));border:1px solid rgba(239,68,68,.26)}
+.bn-delta{display:inline-flex;align-items:center;gap:2px;font-style:normal;font-family:var(--num);
+  font-size:9px;font-weight:800;margin-top:3px;letter-spacing:.01em}
+.bn-delta.up{color:#6EE7C0}.bn-delta.down{color:#F7AFAE}.bn-delta.same{color:#8496AE}
+
+/* 병영수첩 헤더 — 버튼이 많아 제목·부제가 줄바꿈되지 않게 */
+#s-barracks .head{height:auto;flex:0 0 auto;align-items:flex-end;gap:10px}
+#s-barracks .head > div:first-child{min-width:0}
+#s-barracks .head .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#s-barracks .head-right{flex-wrap:nowrap;gap:6px}
+#s-barracks .head-right .btn, #s-barracks .head-right .chip{height:26px;padding:0 8px;font-size:10px;white-space:nowrap}
+
+/* 토스트 액션 버튼 */
+.app-toast .tt-act{margin-left:9px;height:22px;padding:0 9px;border-radius:6px;font-size:10px;font-weight:800;
+  background:rgba(245,158,11,.22);border:1px solid rgba(245,158,11,.5);color:#FDE8BD;cursor:pointer}
+.app-toast .tt-act:hover{background:rgba(245,158,11,.36)}
 </style>
 </head>
 <body>
@@ -1547,7 +1696,7 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
 
 <div class="app">
   <!-- ================= TITLE BAR ================= -->
-  <div class="titlebar" id="titlebar">
+  <div class="titlebar pywebview-drag-region" id="titlebar" data-drag="win32">
     <div class="tb-left">
       <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
         <defs>
@@ -1579,7 +1728,6 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
     </div>
     <div class="winbtns">
       <button class="winbtn" id="win-min" title="최소화"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.1"><path d="M2 6h8"/></svg></button>
-      <button class="winbtn" id="win-max" title="최대화"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.1"><rect x="2.2" y="2.2" width="7.6" height="7.6" rx="1"/></svg></button>
       <button class="winbtn close" id="win-close" title="닫기"><svg viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2"><path d="M2.4 2.4l7.2 7.2M9.6 2.4l-7.2 7.2"/></svg></button>
     </div>
   </div>
@@ -1603,7 +1751,7 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
       <nav class="nav">
         <div class="nav-group">HOME</div>
         <button class="nav-item on" data-screen="dashboard"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-dash"/></svg>대시보드</button>
-        <button class="nav-item" data-screen="recs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-target"/></svg>오늘의 훈련</button>
+        <button class="nav-item" data-screen="recs"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-target"/></svg>시나리오 라이브러리</button>
         <div class="nav-group">AIM</div>
         <button class="nav-item" data-screen="records"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-up"/></svg>에임 기록·분석</button>
         <div class="nav-group">SUDDEN</div>
@@ -1618,20 +1766,10 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
 
       <div class="side-spacer"></div>
       <div class="sync" id="sync-line"><span class="pulse"></span>기록 자동 저장 · 23:50</div>
-      <div class="profile" id="profile-card" role="button" tabindex="0" title="설정 열기 — API 키 · 닉네임 · 클라우드 · 점수 초기화">
-        <div class="pf-top">
-          <div class="avatar" id="pf-avatar">휴<i></i></div>
-          <div style="min-width:0;flex:1">
-            <div class="pf-name" id="pf-name">휴가중.</div>
-            <div class="pf-meta"><span id="pf-clan">리드 클랜</span><span style="color:#5F7088">·</span><span id="pf-tier">골드 I</span></div>
-          </div>
-          <svg id="settings-gear" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
-               style="width:15px;height:15px;color:#8FA1B8;flex:0 0 15px"><use href="#i-gear"/></svg>
-        </div>
-        <div class="pf-rank"><span id="pf-rank-name">솔로 그랜드마스터 II</span><span id="pf-rp">3,261 RP</span></div>
-        <div class="pf-bar"><i id="pf-bar-i"></i></div>
-        <div class="pf-cap"><span id="pf-cap-lo">3,200</span><span id="pf-cap-hi">3,400</span></div>
-      </div>
+      <button class="settings-btn" id="settings-btn" title="설정 — API 키 · 닉네임 · 클라우드 · 점수 초기화">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"><use href="#i-gear"/></svg>
+        <span>설정</span>
+      </button>
     </aside>
 
     <!-- ================= MAIN ================= -->
@@ -1652,7 +1790,7 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
         </div>
 
         <div class="kpis">
-          <div class="card kpi k1">
+          <div class="card kpi k1 pop" id="kpi-tier-card" data-chart="tier" role="button" tabindex="0" title="클릭 → 티어 변화 그래프">
             <div class="kpi-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#i-medal"/></svg>현재 종합 티어</div>
             <div class="kpi-main">
               <div class="kpi-tierrow">
@@ -1666,7 +1804,7 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
             <div class="kpi-foot"><span>다음 <b id="kpi-next">골드 II</b>까지 <b id="kpi-left">34점</b></span><span id="kpi-grade">골드 I</span></div>
           </div>
 
-          <div class="card kpi k2">
+          <div class="card kpi k2" id="kpi-streak-card">
             <div class="kpi-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-flame"/></svg>연속 훈련일 · STREAK</div>
             <div class="kpi-main">
               <span class="kpi-val num" id="kpi-streak">12</span><span class="kpi-unit" style="align-self:flex-end;padding-bottom:3px">일</span>
@@ -1678,7 +1816,7 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
             <div class="kpi-foot"><span>최고 <b id="streak-best">12일</b> · 이번 주 <b id="streak-week">6/7</b></span><span id="streak-badge">배지까지 <b>3일</b></span></div>
           </div>
 
-          <div class="card kpi k3">
+          <div class="card kpi k3 pop" id="kpi-trend-card" data-chart="score" role="button" tabindex="0" title="클릭 → 점수 변화 그래프">
             <div class="kpi-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-up"/></svg>최근 7일 추세</div>
             <div class="kpi-main">
               <span class="kpi-val num" id="kpi-delta" style="color:#6EE7C0">+124</span>
@@ -1689,7 +1827,7 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
             <div class="kpi-foot"><span id="trend-prev">직전 주 <b>+96점</b> 대비 <b>+28</b></span><span id="trend-best">최고 1,966</span></div>
           </div>
 
-          <div class="card kpi k4">
+          <div class="card kpi k4 pop" id="kpi-kd-card" data-chart="kd" role="button" tabindex="0" title="클릭 → 인게임 K/D 변화 그래프">
             <div class="kpi-label"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-target"/></svg>인게임 랭크전 · 최근 100판</div>
             <div class="kpi-main">
               <span style="font-size:9px;color:#8FA1B8;font-weight:800;align-self:flex-end;padding-bottom:4px;letter-spacing:.04em">K/D</span>
@@ -1703,7 +1841,7 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
 
         <div class="mid">
           <!-- radar -->
-          <div class="card radar-wrap">
+          <div class="card radar-wrap pop" id="radar-card" data-chart="balance" role="button" tabindex="0" title="클릭 → 5영역 세부 점수">
             <div class="card-hd">
               <div>
                 <div class="card-title"><span class="bar"></span>5영역 에임 밸런스</div>
@@ -1778,30 +1916,37 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
       <section class="screen" id="s-recs" hidden>
         <div class="head">
           <div>
-            <h1>오늘의 추천 5종</h1>
+            <h1>시나리오 라이브러리</h1>
             <div class="sub"><span id="hd2-count">40종 실측 시나리오</span><span class="sep">/</span><b id="hd2-trainer">KovaaK's</b><span class="sep">·</span><span>추천 시나리오 <b id="hd2-weapon">스나</b></span><span class="sep">·</span><span>약점 우선 정렬</span></div>
           </div>
           <div class="head-right">
             <span class="chip amber" id="rec-head-chip">정밀 플릭 · 초급 난이도 매칭</span>
-            <button class="btn btn-primary" id="run-all-btn"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>5종 연속 실행</button>
+            <button class="btn btn-ghost" id="warmup-btn-2" title="랭크전 직전 5분 워밍업 3종">
+              <svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-flame"/></svg>워밍업
+            </button>
+            <button class="btn btn-ghost" id="rec-more-2" title="오늘 목록에 없는 약점 보완 시나리오 3종 추가">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>더 연습하기
+            </button>
+            <button class="btn btn-ghost" id="kovak-import-head" title="코박스 stats 폴더에서 오늘 점수를 자동으로 가져옵니다 (최신화)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-download"/></svg>코박스 점수
+            </button>
+            <button class="btn btn-ghost" id="score-input-btn" title="오늘 추천 5종 점수를 한 번에 입력">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-save"/></svg>5칸 점수 입력
+            </button>
+            <button class="btn btn-primary" id="run-all-btn" title="5종을 순서대로 실행하고 점수 입력 창을 엽니다"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>5종 연속 실행</button>
           </div>
         </div>
         <div class="card" style="flex:1;min-height:0;display:flex;flex-direction:column">
-          <div class="card-hd" style="padding-bottom:8px">
+          <div class="card-hd" style="padding-bottom:6px">
             <div>
-              <div class="card-title"><span class="bar"></span>시나리오 라이브러리 · 5개 에임 영역 × 난이도</div>
-              <div class="card-sub" id="rec-grid-sub">메인 10종 + 영역별 보완 30종 · 지금 티어에 맞는 난이도만 활성화됩니다</div>
+              <div class="card-title"><span class="bar"></span>시나리오 라이브러리</div>
             </div>
-            <div class="card-hd-r"><span class="chip">클릭 = 점수 입력 + 실행</span></div>
           </div>
-          <div id="rec-grid" style="flex:1;min-height:0;display:grid;grid-template-columns:repeat(5,1fr);gap:8px;padding:2px 12px 8px"></div>
-          <div style="margin:0 12px 12px;height:46px;border-radius:9px;display:flex;align-items:center;gap:10px;padding:0 12px;background:linear-gradient(90deg,rgba(245,158,11,.12),rgba(245,158,11,.03));border:1px solid rgba(245,158,11,.24)">
-            <span style="font-size:9.5px;font-weight:800;color:#FBD48F;letter-spacing:.04em;white-space:nowrap">오늘의 5종 순서</span>
-            <div id="today-order" style="display:flex;align-items:center;gap:5px;flex:1;overflow:hidden"></div>
-            <button class="btn btn-ghost" id="warmup-btn-2" style="height:26px;padding:0 9px" title="랭크전 직전 5분 워밍업 3종"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-flame"/></svg>워밍업</button>
-            <button class="btn btn-ghost" id="kovak-import-2" style="height:26px;padding:0 9px" title="코박스 stats 폴더에서 오늘 점수 자동 인식"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-download"/></svg>코박스</button>
-            <button class="btn btn-ghost" id="rec-more-2" style="height:26px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>더 연습하기</button>
-            <button class="btn btn-primary" id="score-input-btn" style="height:26px"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>5칸 점수 입력</button>
+          <div id="rec-grid" style="flex:1;min-height:0;min-width:0;display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;padding:2px 12px 6px"></div>
+          <div id="rec-grid-note" style="display:flex;align-items:center;gap:8px;margin:0 12px 8px;font-size:9px;color:#6E7F95;font-weight:600;white-space:nowrap;overflow:hidden">
+            <span style="color:#8496AE;font-weight:800">PB</span>= 역대 최고 기록
+            <span style="color:#3C4A5E">·</span>이름을 누르면 점수 입력/수정과 Steam 실행이 함께 열립니다
+            <span style="color:#3C4A5E">·</span>오늘 기록 여부는 이름을 눌러 확인합니다
           </div>
         </div>
       </section>
@@ -1896,9 +2041,10 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
               <input id="br-search-input" maxlength="12" autocomplete="off" spellcheck="false">
               <button class="btn btn-ghost" id="br-search-btn">검색</button>
             </div>
-            <button class="btn btn-ghost" id="br-digest"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-up"/></svg>변화 다시 보기</button>
+            <button class="btn btn-ghost" id="br-site" title="서든 병영수첩 홈페이지에서 내 계정 상세 열기">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-shield"/></svg>내 병영수첩
+            </button>
             <span class="chip cyan" id="br-refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-sync"/></svg>전적 불러오기</span>
-            <button class="btn btn-ghost" id="br-export"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-save"/></svg>기록 내보내기</button>
           </div>
         </div>
 
@@ -2001,26 +2147,19 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
               <button class="add-btn" id="lb-add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>등록</button>
             </div>
             <div class="slots">현재 <b id="lb-count">10</b> / 10명 등록됨</div>
-            <div class="pips" id="lb-pips"></div>
-            <div class="lb-sorts" id="lb-sorts">
-              <button class="sort-btn on" data-sort="solo">솔로 RP 순</button>
-              <button class="sort-btn" data-sort="party">파티 RP 순</button>
-              <button class="sort-btn" data-sort="kd">K/D 순</button>
-              <button class="sort-btn" data-sort="dmg">평균 딜량 순</button>
-            </div>
             <div class="lb-toast" id="lb-toast"></div>
           </div>
 
           <div class="lb-table">
-            <div class="lb-row hd">
+            <div class="lb-row hd" id="lb-head">
               <span style="text-align:center">순위</span>
-              <span>닉네임</span>
+              <span data-lbsort="name">닉네임<span class="lbar">↕</span></span>
               <span>주 무기</span>
-              <span>솔로 티어 · RP</span>
-              <span>파티 티어 · RP</span>
-              <span class="r">최근 K/D</span>
-              <span class="r">평균 딜량</span>
-              <span class="r">승률</span>
+              <span data-lbsort="solo" class="sortable">솔로 티어 · RP<span class="lbar">↕</span></span>
+              <span data-lbsort="party" class="sortable">파티 티어 · RP<span class="lbar">↕</span></span>
+              <span data-lbsort="kd" class="sortable r">최근 K/D<span class="lbar">↕</span></span>
+              <span data-lbsort="dmg" class="sortable r">평균 딜량<span class="lbar">↕</span></span>
+              <span data-lbsort="win" class="sortable r">승률<span class="lbar">↕</span></span>
               <span></span>
             </div>
             <div id="lb-rows" style="display:flex;flex-direction:column"></div>
@@ -2037,7 +2176,7 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
             </div>
             <div class="lb-tile c3">
               <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-shield"/></svg></div>
-              <div class="tx"><span>솔로 RP 평균</span><b><span id="sum-avg">2,798</span><i id="sum-avg-n">/ 10명</i></b></div>
+              <div class="tx"><span>1위와 파티 RP 차</span><b><span id="sum-party-gap">0</span> RP</b></div>
             </div>
             <div class="lb-tile c4">
               <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-target"/></svg></div>
@@ -2045,10 +2184,6 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
             </div>
           </div>
 
-          <div class="lb-foot">
-            <span>정렬 기준 <b id="lb-sort-name">솔로 RP 순</b> · 1~3위 메달 강조 · 본인 <b id="lb-me-name">휴가중.</b> 고정 · <b>행을 클릭하면 1:1 비교</b> · ✕ 삭제</span>
-            <span class="rb">레전드 <b id="lb-lg">0</b>명 · 그랜드마스터 <b id="lb-gm">4</b>명 · 마스터 이상 <b id="lb-top">6</b>명</span>
-          </div>
         </div>
       </section>
 
@@ -2079,7 +2214,7 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
         <div class="head">
           <div>
             <h1>최적화 유틸</h1>
-            <div class="sub"><span>엔비디아 그래픽</span><span class="sep">/</span><span>윈도우 에임</span><span class="sep">/</span><span>PC방 · 다중 PC 백업</span><span class="sep">·</span><span>버튼 한 번으로 적용</span></div>
+            <div class="sub"><span>엔비디아 그래픽</span><span class="sep">/</span><span>윈도우 에임</span><span class="sep">/</span><span>기록 백업</span><span class="sep">·</span><span>버튼 한 번으로 적용</span></div>
           </div>
           <div class="head-right">
             <span class="chip" id="util-sum">적용 <b>0</b> / 3</span>
@@ -2090,9 +2225,9 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
         <div class="warn-banner">
           <div class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><use href="#i-warn"/></svg></div>
           <div class="tx">
-            <span>서든어택이 <b>꺼진 상태</b>에서 적용해 주세요</span>
+            <span>서든어택이 <b>켜져 있어도 적용</b>됩니다</span>
             <span class="sep">·</span>
-            <span class="dim">적용 전 현재 설정 자동 백업</span>
+            <span class="dim">적용 후 게임을 재실행하면 반영 · 적용 전 현재 설정 자동 백업</span>
           </div>
           <div class="sp"></div>
           <button class="btn btn-ghost" id="nv-restore"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-undo"/></svg>원래 설정으로 복구</button>
@@ -2113,7 +2248,6 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
                 <div class="util-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:22px;height:22px;color:#A9E5F8"><use href="#i-rifle"/></svg></div>
                 <div style="min-width:0">
                   <div class="util-name">라플 최적화 <em>DRS DB</em></div>
-                  <div class="util-desc">라플 프로필 + 계단현상 끄기(0x00401241) 한 번에 · 적용 내역 표시</div>
                 </div>
                 <span class="ustate" data-state="rifle">대기</span>
                 <button class="ubtn" data-apply="rifle">적용</button>
@@ -2122,7 +2256,6 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
                 <div class="util-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:22px;height:22px;color:#FCD9A0"><use href="#i-sniper"/></svg></div>
                 <div style="min-width:0">
                   <div class="util-name">스나 최적화 <em>DRS DB</em></div>
-                  <div class="util-desc">스나 프로필 + 계단현상 끄기(0x00401241) 한 번에 · 적용 내역 표시</div>
                 </div>
                 <span class="ustate" data-state="sniper">대기</span>
                 <button class="ubtn" data-apply="sniper">적용</button>
@@ -2189,9 +2322,6 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
                 </div>
                 <div class="switch off-danger" id="accel-switch" role="switch" aria-checked="false"><i></i></div>
               </div>
-              <div class="mnote">
-                <span>PC방 마우스가 미끄럽거나 둔하게 느껴질 때, 조준이 늦게 따라올 때 켜 두세요.</span>
-              </div>
             </div>
           </div>
 
@@ -2199,10 +2329,10 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
           <div class="card util-card" id="bk-card">
             <div class="card-hd" style="padding-bottom:1px">
               <div>
-                <div class="card-title"><span class="bar"></span>PC방 · 다중 PC 백업/복원 <span class="tip" data-tip="훈련 기록 · API 키 · 10명 순위표 · 유틸 설정을 <b>한 JSON 파일</b>로 담습니다. PC방에서도 1초면 그대로 복원됩니다.">?</span></div>
-                <div class="card-sub">훈련 기록 · API 키 · 10명 순위표를 한 파일로</div>
+                <div class="card-title"><span class="bar"></span>기록 백업 · 복원 <span class="tip" data-tip="훈련 기록 · API 키 · 10명 순위표 · 유틸 설정을 <b>한 JSON 파일</b>로 담습니다.">?</span></div>
+                <div class="card-sub">훈련 기록 · API 키 · 순위표를 한 파일로</div>
               </div>
-              <span class="ustate on">1초 복원</span>
+              <span class="ustate on">백업 파일</span>
             </div>
             <div class="util-hold">
               <div class="bk-btns">
@@ -2543,6 +2673,98 @@ th.sortable.on .ar{opacity:1;color:#F59E0B}
     </div>
   </div>
 
+  <!-- ================= v1.3.1 · KPI 그래프 ================= -->
+  <div class="mask" id="chart-mask">
+    <div class="modal wide" style="width:780px;max-width:96%">
+      <div class="modal-hd">
+        <div><h3 id="chart-title">티어 변화</h3><span id="chart-sub">최근 기록 기준 · 점에 마우스를 올리면 날짜와 숫자가 나옵니다</span></div>
+        <button class="x" data-close="chart-mask">✕</button>
+      </div>
+      <div class="modal-bd">
+        <div class="bigchart"><svg id="chart-big" viewBox="0 0 720 260" preserveAspectRatio="none"></svg></div>
+        <div class="chart-facts" id="chart-facts"></div>
+        <div class="chart-legend" id="chart-legend"></div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" data-close="chart-mask">닫기</button>
+        <button class="btn btn-primary" id="chart-go">오늘 훈련 열기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= v1.3.1 · 5영역 에임 밸런스 상세 ================= -->
+  <div class="mask" id="aim-mask">
+    <div class="modal wide" style="width:720px;max-width:96%">
+      <div class="modal-hd">
+        <div><h3>5영역 에임 밸런스</h3><span id="aim-sub">각 영역 점수 · 반영된 시나리오 · 약점 분석</span></div>
+        <button class="x" data-close="aim-mask">✕</button>
+      </div>
+      <div class="modal-bd">
+        <div class="aim-rows" id="aim-rows"></div>
+        <div class="digest-advice"><span class="ic">🎯</span><span id="aim-advice">가장 약한 영역부터 채우면 종합 점수가 가장 빨리 오릅니다.</span></div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" data-close="aim-mask">닫기</button>
+        <button class="btn btn-primary" id="aim-go">오늘 훈련 열기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= v1.3.1 · 날짜별 훈련 상세 ================= -->
+  <div class="mask" id="day-mask">
+    <div class="modal" style="width:640px;max-width:95%">
+      <div class="modal-hd">
+        <div><h3 id="day-title">훈련 상세</h3><span id="day-sub">그날 연습한 시나리오와 점수</span></div>
+        <button class="x" data-close="day-mask">✕</button>
+      </div>
+      <div class="modal-bd">
+        <div class="day-list" id="day-list"></div>
+        <div class="mnote" id="day-note">점수는 그날 적은 값 그대로입니다.</div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" data-close="day-mask">닫기</button>
+        <button class="btn btn-primary" id="day-go">같은 날짜로 점수 입력</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= v1.3.1 · 맵별 매치 전적 ================= -->
+  <div class="mask" id="mapmatch-mask">
+    <div class="modal wide" style="width:860px;max-width:96%">
+      <div class="modal-hd">
+        <div><h3 id="mm-title">맵 전적</h3><span id="mm-sub">최근 100판 중 이 맵에서 치른 경기</span></div>
+        <button class="x" data-close="mapmatch-mask">✕</button>
+      </div>
+      <div class="modal-bd">
+        <div class="mm-list" id="mm-list"></div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" data-close="mapmatch-mask">닫기</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= v1.3.1 · 친구 메모 ================= -->
+  <div class="mask" id="memo-mask">
+    <div class="modal" style="width:430px">
+      <div class="modal-hd">
+        <div><h3 id="memo-title">친구 메모</h3><span id="memo-sub">순위표에서 우클릭하면 언제든 고칠 수 있습니다</span></div>
+        <button class="x" data-close="memo-mask">✕</button>
+      </div>
+      <div class="modal-bd">
+        <div class="mfield">
+          <label>메모</label>
+          <textarea id="memo-text" rows="4" maxlength="400" placeholder="예: 스나 1픽 · A롱 담당 · 콜 맞추기 좋음"></textarea>
+          <div class="hint" id="memo-hint">비우고 저장하면 메모가 지워집니다</div>
+        </div>
+      </div>
+      <div class="modal-ft">
+        <button class="btn btn-ghost" data-close="memo-mask">취소</button>
+        <button class="btn btn-primary" id="memo-save">메모 저장</button>
+      </div>
+    </div>
+  </div>
+
   <div class="bz-overlay" id="busy">
     <div class="bz-card"><span class="spinner"></span><span id="busy-label">전적을 불러오는 중…</span><span class="t" id="busy-count"></span></div>
   </div>
@@ -2740,6 +2962,8 @@ let MEMBERS = [
   {name:'배치중',     clan:'친구', weapon:'sniper', solo:0,    party:null, kd:null, dmg:null, win:null}
 ];
 let lbSort='solo';
+let lbSortDir='desc';   /* v1.3.1 — 표 헤더 클릭 정렬 (▲/▼) */
+let MEMOS = {};   /* 친구별 메모 (서버 state.memos) */
 
 /* ================= RADAR ================= */
 function drawRadar(){
@@ -2847,6 +3071,13 @@ function drawTrend(){
   const lastPts=pts.filter(Boolean).slice(-1)[0];
   if(lastPts) s+=`<text x="${lastPts[0].toFixed(1)}" y="${(lastPts[1]-8).toFixed(1)}" text-anchor="end" font-family="Chakra" font-size="10" font-weight="700" fill="#FDE68A">${known[known.length-1].toLocaleString()}</text>`;
   svg.innerHTML=s;
+  /* 마우스 오버 → 그 날짜·정확한 점수 툴팁 (v1.3.1) */
+  CHART_GEOM.trend={
+    vw:W,
+    points:data.map((v,i)=>v===null?null:{x:X(i),y:Y(v),label:labels[i]||'',value:v})
+  };
+  bindChartHover(svg,'trend');
+  registerBigChart('score',{labels:labels.slice(),values:data.slice()});
 }
 
 /* ================= GAME CHART ================= */
@@ -2896,6 +3127,19 @@ function drawGame(){
     s+=`<text x="${(q[0]-6).toFixed(1)}" y="${(q[1]-7).toFixed(1)}" text-anchor="end" font-family="Chakra" font-size="10" font-weight="700" fill="#BAE6FD">${lastK.toFixed(1)}%</text>`;
   }
   svg.innerHTML=s;
+  /* 마우스 오버 → 날짜·K/D·딜량 툴팁 (v1.3.1) */
+  CHART_GEOM.game={
+    vw:W,
+    points:labels.map((lb,i)=>{
+      const k=kd[i], dm=dmg[i];
+      if((k===null||k===undefined)&&(dm===null||dm===undefined)) return null;
+      const x=padL+i*bw+bw/2;
+      const y=(k===null||k===undefined)?null:YK(k);
+      return {x,y,label:lb,k,damage:dm};
+    })
+  };
+  bindChartHover(svg,'game');
+  registerBigChart('kd',{labels:labels.slice(),kd:kd.slice(),dmg:dmg.slice()});
 }
 
 /* ================= LADDER ================= */
@@ -2951,15 +3195,10 @@ function recRowHtml(r,i,mark){
   /* 주의: 'mid'/'high' 만 쓰면 대시보드 레이아웃 클래스(.mid)와 충돌한다 → lv- 접두사 */
   const diffCls = r.diff==='상급' ? 'lv-high' : r.diff==='중급' ? 'lv-mid' : '';
   const bestTxt = has(r.best) ? fmt(r.best) : '—';
-  const avgTxt = has(r.avg) ? fmt(r.avg) : '—';
   const lastTxt = has(r.score) ? fmt(r.score) : '—';
-  const target = has(r.next_target) ? Number(r.next_target) : null;
-  const goalTxt = target===null ? '최고 티어' : fmt(Math.round(target));
-  const goalPct = (target!==null && target>0 && has(today)) ? Math.max(2,Math.min(100,Number(today)/target*100)) : 0;
   const cell = (today===null||today===undefined)
     ? `<div class="rec-today none">미기록</div>`
     : `<div class="rec-today"><span class="lb">오늘</span>${fmt(today)}<i>점</i></div>`;
-  const goalBar = target===null ? '' : `<div class="rec-goal-bar" title="다음 티어 목표 ${goalTxt}점"><i style="width:${goalPct.toFixed(1)}%"></i></div>`;
   return `<div class="rec ${r.done?'done':''}" data-rec="${i}" data-name="${escAttr(r.name)}" data-areakey="${a.key}" title="클릭 → 점수 입력/수정 · 역대 추이 · 게임에서 재생">
     <div class="rec-idx">${mark}</div>
     <div style="min-width:0">
@@ -2972,12 +3211,9 @@ function recRowHtml(r,i,mark){
     </div>
     <div class="rec-stat2">
       <span>PB <b class="${pb?'pb':''}">${bestTxt}</b>${pb?'<span class="rec-row-pb" title="오늘 최고 기록 경신">🏆 PB</span>':''}</span>
-      <span>평균 <b>${avgTxt}</b></span>
-      <span class="tgt">목표 <b>${goalTxt}</b></span>
     </div>
     <div class="rec-todaywrap">
       ${cell}
-      ${goalBar}
     </div>
     <button class="run" data-run="${i}"><svg viewBox="0 0 24 24" fill="currentColor"><use href="#i-play"/></svg>실행</button>
   </div>`;
@@ -3026,15 +3262,21 @@ function libraryFor(g, w){
   return LIB;
 }
 
+/* 0(빨강) ~ 50(주황/노랑) ~ 100(녹색) 연속 그라데이션 — 5개 에임 영역 점수 색 */
+function areaScoreColor(v){
+  const x=Math.max(0,Math.min(100,Number(v)||0));
+  const stops=[[0,239,68,68],[50,245,158,11],[100,52,211,153]];
+  let a=stops[0], b=stops[2];
+  if(x<=50){ a=stops[0]; b=stops[1]; } else { a=stops[1]; b=stops[2]; }
+  const t=(x-(a===stops[0]?0:50))/50;
+  const mix=(i)=>Math.round(a[i]+(b[i]-a[i])*t);
+  return `rgb(${mix(1)},${mix(2)},${mix(3)})`;
+}
+window.areaScoreColor=areaScoreColor;
+
 function drawRecGrid(){
   const el=$('#rec-grid');
   const lib=libraryFor(game, weapon);
-  const sub=$('#rec-grid-sub');
-  if(sub){
-    const total=Object.values(lib).reduce((a,b)=>a+b.length,0);
-    const ph=(typeof PHILOSOPHY!=='undefined'&&PHILOSOPHY&&PHILOSOPHY[weapon])||'';
-    sub.textContent = `${game==='aimlab'?'Aim Lab':"KovaaK's"} ${weapon==='sniper'?'스나':'라플'} ${total}종 · ${ph||'약점 우선 추천'} · 클릭하면 점수 입력 + 바로 실행`;
-  }
   const headChip=$('#rec-head-chip');
   if(headChip) headChip.textContent = PHILOSOPHY[weapon] || '약점 우선 정렬';
   const hdCount=$('#hd2-count');
@@ -3045,21 +3287,31 @@ function drawRecGrid(){
   el.innerHTML=AREAS.map((a,i)=>{
     const items=lib[i]||[];
     const today=(RECS[`${game}-${weapon}`]||[]).filter(r=>r.area===i).map(r=>r.name);
-    return `<div style="display:flex;flex-direction:column;gap:5px;min-height:0">
+    return `<div style="display:flex;flex-direction:column;gap:5px;min-height:0;min-width:0">
       <div style="display:flex;align-items:center;justify-content:space-between;padding:2px 2px 5px;border-bottom:1px solid rgba(148,163,184,.10)">
         <div>
           <div style="font-size:11px;font-weight:800;color:#E4ECF8">${a.name}</div>
           <div style="font-size:8.5px;color:#6E7F95;margin-top:1px">${a.desc}</div>
         </div>
-        <span class="num" style="font-size:13px;font-weight:700;color:${a.color}">${VALUES[a.key]}</span>
+        <span class="num" style="font-size:13px;font-weight:700;color:${areaScoreColor(VALUES[a.key])}">${VALUES[a.key]}</span>
       </div>
       ${items.map(n=>{
         const hot=today.includes(n);
         const mine=todayScore(n);
-        return `<div style="display:flex;align-items:center;gap:5px;flex:0 0 23px;min-height:23px;padding:0 6px;border-radius:5px;background:${hot?'rgba(245,158,11,.10)':'rgba(148,163,184,.045)'};border:1px solid ${hot?'rgba(245,158,11,.26)':'transparent'}">
+        /* v1.3.1 — 라이브러리 모든 행에 역대 최고점(PB)을 표시한다 (오늘 점수와 별개) */
+        const pbRec=(window.AL && AL.pbs && AL.pbs[n]) || null;
+        const pbv=(pbRec && pbRec.best!==null && pbRec.best!==undefined) ? Number(pbRec.best) : null;
+        const todayTxt=(mine===null||mine===undefined)?'':Number(mine).toLocaleString('ko-KR');
+        const todaysDiffers=false;   /* v1.3.1 — 오른쪽엔 PB만 (오늘 점수는 툴팁·모달에서) */
+        return `<div style="display:flex;align-items:center;gap:4px;flex:1 1 26px;max-height:34px;min-height:26px;min-width:0;overflow:hidden;padding:0 5px;border-radius:5px;background:${hot?'rgba(245,158,11,.10)':'rgba(148,163,184,.045)'};border:1px solid ${hot?'rgba(245,158,11,.26)':'transparent'}">
           <span style="width:4px;height:4px;border-radius:50%;background:${hot?'#F59E0B':'#3C4A5E'};flex:0 0 4px"></span>
-          <span data-scen="${n}" data-scen-area="${a.key}" title="클릭하면 점수 입력 · 게임에서 재생" style="cursor:pointer;font-size:9.5px;color:${hot?'#FDE8BD':'#A9B9CE'};font-weight:${hot?700:500};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1">${n}</span>
-          <span style="font-family:Chakra;font-size:8px;color:${mine===null?'#5E6E85':'#9AE6C9'};font-weight:700;white-space:nowrap">${mine===null?(hot?'오늘':''):Number(mine).toLocaleString('ko-KR')}</span>
+          <span data-scen="${n}" data-scen-area="${a.key}" title="클릭하면 점수 입력 · 게임에서 재생 · PB ${pbv===null?'—':pbv.toLocaleString('ko-KR')}${todayTxt?' · 오늘 '+todayTxt:''}" style="cursor:pointer;font-size:9.3px;color:${hot?'#FDE8BD':'#A9B9CE'};font-weight:${hot?700:500};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;flex:1 1 auto;min-width:0">${n}</span>
+          <span style="flex:0 0 auto;font-family:Chakra;font-size:8px;font-weight:700;white-space:nowrap;text-align:right">
+            ${pbv===null
+              ? `<span style="color:#5E6E85">PB —</span>`
+              : `<span style="color:#FCD9A0">PB ${pbv.toLocaleString('ko-KR')}</span>`}
+            ${todaysDiffers?`<span style="color:#9AE6C9;margin-left:3px">· ${Number(mine).toLocaleString('ko-KR')}</span>`:''}
+          </span>
         </div>`;
       }).join('')}
     </div>`;
@@ -3159,7 +3411,7 @@ function drawMaps(){
   }).join('');
 
   const body=sortedMapRows().map(m=>`
-    <tr class="${m.map===weak[0].map?'cur':''}">
+    <tr class="${m.map===weak[0].map?'cur':''}" data-map="${escAttr(m.map)}" title="${escAttr(m.map)} · 클릭하면 이 맵 최근 경기 전적">
       <td class="rk">${m.rk||''}</td>
       <td class="l map">${m.map}</td>
       <td>${m.games}판</td>
@@ -3191,7 +3443,8 @@ function drawTierTable(){
     let sum=0; for(let i=TIERS.length-1;i>tier;i--) sum+=Number((dist[i]||{}).pct||0);
     return sum;
   };
-  const rows=TIERS.map((t,i)=>{
+  /* v1.3.1 — 맨 위가 별레전드(가장 어려움), 맨 아래가 브론즈 I */
+  const rows=TIERS.map((t,i)=>({t,i})).reverse().map(({t,i})=>{
     const next=TIERS[i+1];
     const spanNext=next && next.cut>t.cut;
     const range = spanNext ? `${t.cut.toLocaleString()} ~ ${(next.cut-1).toLocaleString()}` : (t.cut>=3600? '3,600+' : '');
@@ -3280,13 +3533,21 @@ function drawUserStyle(){
 }
 
 /* ================= LEADERBOARD RENDER ================= */
-const SORT_KEY={solo:'solo', party:'party', kd:'kd', dmg:'dmg'};
-const SORT_NAME={solo:'솔로 RP 순', party:'파티 RP 순', kd:'K/D 순', dmg:'평균 딜량 순'};
+const SORT_KEY={solo:'solo', party:'party', kd:'kd', dmg:'dmg', win:'win', name:'name'};
+const SORT_NAME={solo:'솔로 RP', party:'파티 RP', kd:'최근 K/D', dmg:'평균 딜량', win:'승률', name:'닉네임'};
 
 function sortedMembers(){
   const k=SORT_KEY[lbSort];
-  const v=x=> x[k]==null ? -1 : x[k];
-  return [...MEMBERS].sort((a,b)=> v(b)-v(a));
+  const dir=lbSortDir==='asc'?1:-1;
+  const v=x=> x[k]==null ? -1 : Number(x[k]);
+  return [...MEMBERS].sort((a,b)=>{
+    if(lbSort==='name') return String(a.name||'').localeCompare(String(b.name||''),'ko')*dir;
+    const av=v(a), bv=v(b);
+    if(av<0&&bv<0) return 0;
+    if(av<0) return 1;
+    if(bv<0) return -1;
+    return (av-bv)*dir;
+  });
 }
 
 function drawLeaderboard(){
@@ -3303,12 +3564,17 @@ function drawLeaderboard(){
       const medal = rk===1?'top1':rk===2?'top2':rk===3?'top3':'';
       const pct = v => (v===null||v===undefined) ? '—' : `${Number(v).toFixed(1)}<i>%</i>`;
       const num = v => (v===null||v===undefined) ? '—' : Number(v).toLocaleString();
-      return `<div class="lb-row ${m.me?'me':''}${hit}" data-cmp="${m.name}" title="클릭하면 ${m.me?'내 전적':'나와 1:1 비교'}">
+      const memo=(typeof MEMOS!=='undefined' && MEMOS && MEMOS[m.name]) || '';
+      const memoBtn=memo
+        ? `<button class="lb-memo" data-memo="${escAttr(m.name)}" title="메모: ${escAttr(memo)}">✎</button>`
+        : '';
+      return `<div class="lb-row ${m.me?'me':''}${hit}" data-cmp="${m.name}" data-lbname="${escAttr(m.name)}" title="클릭 = 1:1 비교 · 우클릭 = 메모">
         <div class="lb-rank ${medal}">${rk}</div>
         <div class="lb-name">
           <b title="${m.name}">${m.name}</b>
           ${m.me?'<span class="lb-me">ME</span>':''}
           <span class="lb-clan">${m.clan||'친구'}</span>
+          ${memoBtn}
         </div>
         <span class="wp ${m.weapon}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><use href="${m.weapon==='rifle'?'#i-rifle':'#i-sniper'}"/></svg>${m.weapon==='rifle'?'라플 유저':'스나 유저'}</span>
         <div class="lb-tier">
@@ -3319,11 +3585,13 @@ function drawLeaderboard(){
           <div class="emb"><img src="assets/${(m.party>0?partyBandOf(Number(m.party)):UNRANKED).img}.png" alt="${m.party_tier||''}"></div>
           <div class="tt"><b>${m.party>0?(m.party_tier||partyBandOf(Number(m.party)).n):'언랭크'}</b><span>${m.party>0?Number(m.party).toLocaleString()+' RP':'—'}</span></div>
         </div>
-        <div class="lb-num ${lbSort==='kd'?'':'dim'}">${pct(m.kd)}</div>
+        <div class="lb-num lb-kd ${lbSort==='kd'?'':'dim'}" data-kd="${m.kd==null?'':Number(m.kd)}">${pct(m.kd)}</div>
         <div class="lb-num ${lbSort==='dmg'?'':'dim'}">${num(m.dmg)}</div>
         <div class="lb-num">${pct(m.win)}</div>
-        ${m.me?'<div></div>'
-               :`<button class="lb-del" data-del="${idx}" title="삭제"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#i-x"/></svg></button>`}
+        <div style="display:flex;align-items:center;gap:4px;justify-content:flex-end">
+          <button class="lb-site" data-site="${escAttr(m.ouid||'')}" data-site-name="${escAttr(m.name)}" title="${escAttr(m.name)} 병영수첩 홈페이지">병영</button>
+          ${m.me?'':`<button class="lb-del" data-del="${idx}" title="삭제"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#i-x"/></svg></button>`}
+        </div>
       </div>`;
     }).join('');
   }
@@ -3331,35 +3599,41 @@ function drawLeaderboard(){
   const n=MEMBERS.length;
   $('#lb-count').textContent=n;
   $('#lb-count').classList.toggle('full',n>=10);
-  $('#lb-pips').innerHTML=Array.from({length:10},(_,i)=>`<i class="${i<n?'on':''}"></i>`).join('');
+  const pips=$('#lb-pips'); if(pips) pips.innerHTML=Array.from({length:10},(_,i)=>`<i class="${i<n?'on':''}"></i>`).join('');
   $('#lb-add').classList.toggle('is-full',n>=10);
   $('#lb-add').title = n>=10 ? '10명이 가득 찼습니다 · 한 명을 삭제한 뒤 등록하세요' : '';
-  $('#lb-sort-name').textContent=SORT_NAME[lbSort];
-  $$('#lb-sorts .sort-btn').forEach(b=>b.classList.toggle('on',b.dataset.sort===lbSort));
+  const sortName=$('#lb-sort-name'); if(sortName) sortName.textContent=SORT_NAME[lbSort];
+  const sorts=$('#lb-sorts'); if(sorts) $$('#lb-sorts .sort-btn').forEach(b=>b.classList.toggle('on',b.dataset.sort===lbSort));
+  $$('#lb-head [data-lbsort]').forEach(el=>{
+    const on=el.dataset.lbsort===lbSort;
+    el.classList.toggle('on',on);
+    const ar=el.querySelector('.lbar');
+    if(ar) ar.textContent=on?(lbSortDir==='asc'?'▲':'▼'):'↕';
+  });
 
-  const ranked=MEMBERS.filter(m=>m.solo>0);
   const gm=MEMBERS.filter(m=>m.solo>=3000).length;
   const lg=MEMBERS.filter(m=>m.solo>=3600).length;
   const top=MEMBERS.filter(m=>m.solo>=2400).length;
-  $('#lb-lg').textContent=lg;
-  $('#lb-gm').textContent=gm;
-  $('#lb-top').textContent=top;
+  const setTxt=(sel,v)=>{ const el=$(sel); if(el) el.textContent=v; };
+  setTxt('#lb-lg',lg); setTxt('#lb-gm',gm); setTxt('#lb-top',top);
 
   const meRow=MEMBERS.find(m=>m.me);
   const mePos=list.findIndex(m=>m.me)+1;
-  $('#sum-mine').textContent=mePos>0?mePos:'-';
+  const sumMine=$('#sum-mine'); if(sumMine) sumMine.textContent=mePos>0?mePos:'-';
   const sumMineN=$('#sum-mine-n'); if(sumMineN) sumMineN.textContent=`/ ${n}명`;
   const topRp=list.length?(list[0].solo||0):0;
-  $('#sum-gap').textContent=meRow?Math.max(0,topRp-(meRow.solo||0)).toLocaleString():'—';
-  const avg=ranked.length?Math.round(ranked.reduce((a,m)=>a+(m.solo||0),0)/ranked.length):0;
-  $('#sum-avg').textContent=avg.toLocaleString();
-  $('#sum-avg-n').textContent=`/ ${ranked.length}명`;
+  const sumGap=$('#sum-gap'); if(sumGap) sumGap.textContent=meRow?Math.max(0,topRp-(meRow.solo||0)).toLocaleString():'—';
+  const partyList=MEMBERS.filter(m=>(m.party||0)>0);
+  const topParty=partyList.length?Math.max(...partyList.map(m=>Number(m.party)||0)):0;
+  const myParty=meRow?Number(meRow.party||0):0;
+  const partyGap=$('#sum-party-gap');
+  if(partyGap) partyGap.textContent=(topParty&&myParty)?Math.max(0,topParty-myParty).toLocaleString():'—';
   const kdRows=MEMBERS.filter(m=>m.kd!==null&&m.kd!==undefined);
   if(kdRows.length){
     const best=kdRows.reduce((a,m)=>Number(m.kd)>Number(a.kd)?m:a,kdRows[0]);
-    $('#sum-kd').textContent=`${Number(best.kd).toFixed(1)}% · ${best.name}`;
+    setTxt('#sum-kd', `${Number(best.kd).toFixed(1)}% · ${best.name}`);
   }else{
-    $('#sum-kd').textContent='—';
+    setTxt('#sum-kd','—');
   }
 }
 
@@ -3409,8 +3683,11 @@ $('#lb-rows').addEventListener('click',e=>{
   const row=e.target.closest('[data-cmp]');
   if(row && window.AL && window.AL.compareFriend){ window.AL.compareFriend(row.dataset.cmp); }
 });
-$$('#lb-sorts .sort-btn').forEach(b=>b.addEventListener('click',()=>{
-  lbSort=b.dataset.sort; drawLeaderboard();
+$$('#lb-head [data-lbsort]').forEach(el=>el.addEventListener('click',()=>{
+  const key=el.dataset.lbsort;
+  if(lbSort===key) lbSortDir = lbSortDir==='desc'?'asc':'desc';
+  else { lbSort=key; lbSortDir = key==='name' ? 'asc' : 'desc'; }
+  drawLeaderboard();
 }));
 
 /* ================= UTILS SCREEN (v1.3.0 · 2버튼 + 토글) ================= */
@@ -3431,9 +3708,20 @@ function addPoint(label){
   while(p.children.length>3) p.lastElementChild.remove();
 }
 
-function appToast(msg, ok){
+function appToast(msg, ok, action){
+  /* action = {label, onClick} — 리포트 카드 저장 토스트의 '폴더 열기' 처럼
+     자동 사라짐 시간은 그대로 두고 버튼만 하나 붙인다. */
   const t=$('#app-toast'); if(!t) return;
-  t.textContent=msg;
+  t.textContent='';
+  t.appendChild(document.createTextNode(String(msg||'')));
+  if(action && action.label){
+    const b=document.createElement('button');
+    b.className='tt-act';
+    b.type='button';
+    b.textContent=action.label;
+    b.addEventListener('click',(e)=>{ e.stopPropagation(); if(typeof action.onClick==='function') action.onClick(); });
+    t.appendChild(b);
+  }
   t.classList.toggle('ok',!!ok);
   t.classList.add('show');
   clearTimeout(utilToastT);
@@ -3502,30 +3790,79 @@ function restoreAll(){
     : '복구할 적용 내역이 없습니다 · 지금은 기본값 상태', had>0);
 }
 
-/* 17. 엔비디아 적용 변경 내역 모달 */
+/* 17. 엔비디아 적용 변경 내역 모달 (v1.3.1 — 실제로 바뀐 값 + 프로필 전체 + 파일 증거) */
+function changeRowsHtml(rows, emptyText){
+  if(!rows || !rows.length) return emptyText?`<div class="empty" style="padding:14px">${emptyText}</div>`:'';
+  return rows.map(r=>`<div class="change-row ${r.key?'key':''}">
+      <div class="nm">${r.name||r.id}<small>${r.en!=null?r.en:r.id}${r.scope?' · '+r.scope:''}</small></div>
+      <div class="v">${r.label_before&&r.label_before!=='없음'?r.label_before:''} <span style="color:#6E7F95">${r.before||'—'}</span></div>
+      <div class="ar">→</div>
+      <div class="v after">${r.label_after&&r.label_after!=='없음'?r.label_after:''} <span style="color:#9AE6C9">${r.after||'—'}</span></div>
+    </div>`).join('');
+}
+function sectionHtml(title, note, body){
+  if(!body) return '';
+  return `<div style="font-size:10px;font-weight:800;color:#FBD48F;letter-spacing:.03em;margin:10px 2px 4px">${title}`
+    + (note?` <span style="color:#6E7F95;font-weight:600;letter-spacing:0">${note}</span>`:'')+`</div>${body}`;
+}
 function renderChanges(data){
   const list=$('#change-list'); if(!list) return;
-  const rows=(data&&data.rows)||[];
-  const mode=(data&&data.mode)||'';
-  const packName = mode==='rifle'?'라플 프로필':mode==='sniper'?'스나 프로필':mode==='stairfix'?'계단현상 끄기':'엔비디아 설정';
-  const head=`<div class="change-row"><div class="nm">서든어택 3D 프로필<small>NVIDIA Drs DB · ${packName}</small></div>
-      <div class="v">이전</div><div class="ar">→</div><div class="v after">적용</div></div>`;
-  const body=rows.map(r=>`<div class="change-row ${r.key?'key':''}">
-      <div class="nm">${r.name||r.id}<small>${r.en!=null?r.en:r.id}</small></div>
-      <div class="v">${r.before||'—'}</div><div class="ar">→</div><div class="v after">${r.after||'—'}</div>
-    </div>`).join('');
-  list.innerHTML = head + (body || `<div class="empty" style="padding:18px">값이 바뀐 세부 항목은 없습니다 · 프로필 교체만 적용됐습니다</div>`);
+  const d=(data && (data.rows||data.base_rows||data.profile_items))?data:(LAST_CHANGES||{});
+  const rows=d.rows||[];
+  const baseRows=d.base_rows||[];
+  const files=d.files||[];
+  const profile=d.profile_items||[];
+  const checklist=d.checklist||[];
+  const mode=d.mode||'';
+  const packName = mode==='rifle'?'라플 프로필':mode==='sniper'?'스나 프로필':mode==='stairfix'?'계단현상 끄기':(d.label||'엔비디아 설정');
+  let html='';
+  if(d.reason){
+    html+=`<div class="digest-advice" style="margin:0 0 6px"><span class="ic">ℹ️</span><span>${d.reason}</span></div>`;
+  }
+  html+=sectionHtml('서든어택 프로필 · 바뀐 값', rows.length?`${rows.length}개 항목`:'',
+    changeRowsHtml(rows, rows.length?'':'이 프로필에서 값이 바뀐 항목은 없습니다'));
+  if(baseRows.length){
+    html+=sectionHtml('전역(Base Profile) · 바뀐 값','저지연·전원 관리·수직 동기 등 전역 설정',
+      changeRowsHtml(baseRows));
+  }
+  if(files.length){
+    html+=sectionHtml('Drs 파일','실제로 교체된 파일 증거','<div class="change-list" style="max-height:none">'
+      + files.map(f=>`<div class="change-row ${f.changed?'key':''}">
+          <div class="nm">${f.name}<small>${f.changed?'교체됨':'변경 없음'}</small></div>
+          <div class="v">${Number(f.before_size||0).toLocaleString()} B</div>
+          <div class="ar">→</div>
+          <div class="v after">${Number(f.after_size||0).toLocaleString()} B</div>
+        </div>`).join('')+'</div>');
+  }
+  if(profile.length){
+    html+=sectionHtml('이 프로필이 설정하는 항목','지금 Drs DB에 들어 있는 실제 값','<div class="change-list" style="max-height:210px">'
+      + profile.map(r=>`<div class="change-row ${r.id==='0x00D55F7D'?'key':''}">
+          <div class="nm">${r.name}<small>${r.en||''} · ${r.id}</small></div>
+          <div class="v" style="grid-column:span 3;text-align:right"><span style="color:#EAF1FB">${r.label||''}</span> <span style="color:#6E7F95">${r.value||''}</span></div>
+        </div>`).join('')+'</div>');
+  }
+  if(checklist.length){
+    html+=sectionHtml('고성능 게이밍 체크리스트','프로필에 있으면 적용값 · 없으면 전역 설정 상속','<div class="change-list" style="max-height:none">'
+      + checklist.map(r=>`<div class="change-row ${r.status==='ok'?'key':''}">
+          <div class="nm">${r.name}<small>권장 ${r.want}</small></div>
+          <div class="v" style="grid-column:span 3;text-align:right"><span style="color:${r.status==='global'?'#8496AE':'#9AE6C9'}">${r.label_value||'—'}</span></div>
+        </div>`).join('')+'</div>');
+  }
+  if(!html) html='<div class="empty" style="padding:18px">아직 적용한 내역이 없습니다</div>';
+  list.innerHTML=html;
   const sub=$('#changes-sub');
-  if(sub) sub.textContent = `${(data&&data.at)?String(data.at).replace('T',' ').slice(5,16)+' · ':''}${packName}${(data&&data.count)?' · '+data.count+'개 항목':''}`;
+  if(sub) sub.textContent = `${d.at?String(d.at).replace('T',' ').slice(5,16)+' · ':''}${packName}`
+    + (d.count?` · ${d.count}개 항목 변경`:' · 서든어택 프로필 전체 값');
   const note=$('#changes-note');
   if(note) note.innerHTML='적용 전 설정은 복구 지점으로 백업되어 <b>원래 설정으로 복구</b> 한 번이면 되돌아갑니다.';
 }
 function openChanges(data){
-  if(!data || !data.rows) data = LAST_CHANGES;
-  if(!data){ appToast('아직 적용한 내역이 없습니다', false); return; }
+  if(!data || !(data.rows||data.base_rows||data.profile_items)) data = LAST_CHANGES || (window.AL && AL.utils && AL.utils.last_changes) || null;
+  if(!data || !(data.rows||data.base_rows||data.profile_items)){ appToast('아직 적용한 내역이 없습니다', false); return; }
   renderChanges(data);
   const mask=$('#changes-mask'); if(mask) mask.classList.add('show');
 }
+window.openChanges=openChanges;
 
 $('#s-utils').addEventListener('click', e=>{
   if(window.AL && window.AL.real){ window.AL.utilClick(e); return; }
@@ -3620,7 +3957,7 @@ function drawRecords(){
       <th>종합 점수</th><th>정밀</th><th>와이드</th><th>마이크로</th><th>트래킹</th><th>스위칭</th></tr></thead>
     <tbody>${rows.map(r=>{
       const s=r.scores||{};
-      return `<tr>
+      return `<tr data-day="${String(r.date||'')}" title="${String(r.date||'')} 훈련 상세 보기">
         <td class="l" style="font-family:Chakra;font-size:10.5px;color:#9AAABF">${String(r.date||'').slice(5)}</td>
         <td class="l map">${r.game==='aimlab'?'Aim Lab':"KovaaK's"} · ${r.weapon==='rifle'?'라플':'스나'}</td>
         <td>${(r.scenarios||[]).length}</td>
@@ -3701,12 +4038,6 @@ function openSettings(){
     });
   });
 })();
-document.querySelectorAll('#profile-card,#settings-gear').forEach(el=>{
-  el.addEventListener('click',openSettings);
-});
-document.querySelector('#profile-card') && document.querySelector('#profile-card').addEventListener('keydown',e=>{
-  if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openSettings(); }
-});
 
 /* ---- 닫기 확인 / 점수 초기화 (미리보기 동작) ---- */
 function closeToTray(){ appToast('트레이로 숨겼습니다 · Ctrl+Shift+A 로 다시 엽니다', true); }
@@ -3796,7 +4127,7 @@ function drawHeatmap(heat){
     col.forEach(cell=>{
       const cls=cell.future?'future':(cell.lvl>0?'l'+cell.lvl:'');
       const iso=cell.d===heat.end?' today':'';
-      html+=`<i class="heat-cell ${cls}${iso}" title="${cell.d} · ${cell.n}종 훈련"></i>`;
+      html+=`<i class="heat-cell ${cls}${iso}" data-day="${cell.d}" role="button" title="${cell.d} · ${cell.n}종 훈련 · 클릭하면 그날 상세"></i>`;
     });
     html+='</div>';
   });
@@ -3926,6 +4257,342 @@ function drawScenarioHistory(rec){
 window.drawScenarioHistory=drawScenarioHistory;
 window.renderScenarioHistory=drawScenarioHistory;
 
+/* =====================================================================
+   v1.3.1 · 그래프 툴팁 · KPI 그래프 · 5영역 상세 · 날짜 상세 · 맵 전적 · 친구 메모
+   ===================================================================== */
+const CHART_GEOM = {};
+const BIG_CHART = {};          /* kind → {labels, values, ...} 최신 데이터 */
+
+function chartTipEl(){
+  let el=document.getElementById('chart-tip');
+  if(!el){
+    el=document.createElement('div');
+    el.id='chart-tip'; el.className='chart-tip';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+function showChartTip(ev, html){
+  const el=chartTipEl();
+  el.innerHTML=html;
+  el.classList.add('show');
+  const box=el.getBoundingClientRect();
+  let x=ev.clientX+14, y=ev.clientY-42;
+  if(x+box.width>window.innerWidth-8) x=ev.clientX-box.width-14;
+  if(y<8) y=ev.clientY+18;
+  el.style.left=Math.max(6,x)+'px';
+  el.style.top=Math.max(6,y)+'px';
+}
+function hideChartTip(){
+  const el=document.getElementById('chart-tip');
+  if(el) el.classList.remove('show');
+}
+window.hideChartTip=hideChartTip;
+
+const fmtNum = (v)=>(v===null||v===undefined)?'—':Number(v).toLocaleString('ko-KR',{maximumFractionDigits:1});
+
+function bindChartHover(svg, key){
+  if(!svg || svg.__tipBound) return;
+  svg.__tipBound=true;
+  svg.addEventListener('mousemove',(ev)=>{
+    const g=CHART_GEOM[key]; if(!g||!g.points||!g.points.length) return;
+    const box=svg.getBoundingClientRect();
+    if(!box.width) return;
+    const px=(ev.clientX-box.left)*(g.vw/box.width);
+    let best=null,bestD=Infinity;
+    g.points.forEach((p)=>{ if(!p||p.x===null||p.x===undefined) return;
+      const d=Math.abs(p.x-px); if(d<bestD){bestD=d;best=p;} });
+    const gap=(g.vw||300)/Math.max(2,g.points.length);
+    if(!best||bestD>Math.max(26,gap*0.62)) return hideChartTip();
+    if(key==='game'){
+      showChartTip(ev, `${String(best.label||'')}<span class="d">K/D <b>${fmtNum(best.k)}%</b> · 딜량 <b>${fmtNum(best.damage)}</b></span>`);
+    }else{
+      showChartTip(ev, `${String(best.label||'')}<span class="d">종합 <b>${fmtNum(best.value)}점</b></span>`);
+    }
+  });
+  svg.addEventListener('mouseleave', hideChartTip);
+}
+
+function registerBigChart(kind, data){
+  BIG_CHART[kind]=data;
+}
+
+/* ---- KPI 클릭 → 큰 그래프 모달 ---- */
+const TIER_CUTS = (typeof TIERS!=='undefined')?TIERS.map(t=>t.cut):[];
+function tierOfScore(v){
+  if(!TIER_CUTS.length) return {n:'—',i:0};
+  let i=0; TIER_CUTS.forEach((c,k)=>{ if(Number(v)>=c) i=k; });
+  return {n:TIERS[i].n, i};
+}
+
+function drawBigChart(kind){
+  const svg=$('#chart-big'); if(!svg) return;
+  const W=720,H=260,padL=52,padR=18,padT=18,padB=28;
+  let labels=[], series=[], tips=[], yLabel=(v)=>fmtNum(v), baseline=null, legend='';
+
+  if(kind==='tier'||kind==='score'){
+    const st=(window.AL&&AL.state)||{};
+    const daily=((st.profile||{}).daily)||[];
+    labels=daily.map(d=>String(d.date||'').slice(5).replace('-','.'));
+    if(kind==='tier'){
+      series=daily.map(d=>d.score===null||d.score===undefined?null:tierOfScore(d.score).i);
+      tips=daily.map(d=>{
+        if(d.score===null||d.score===undefined) return `${String(d.date||'').slice(5)} · 기록 없음`;
+        const t=tierOfScore(d.score);
+        return `${String(d.date||'').slice(5)}<span class="d">${t.n} · <b>${fmtNum(d.score)}점</b> (${t.i+1}/18)</span>`;
+      });
+      yLabel=(v)=>{
+        const i=Math.round(Number(v));
+        return (TIERS[i]&&TIERS[i].n)||String(i);
+      };
+    }else{
+      series=daily.map(d=>d.score===null||d.score===undefined?null:Number(d.score));
+      tips=daily.map(d=>`${String(d.date||'').slice(5)}<span class="d">종합 <b>${fmtNum(d.score)}점</b></span>`);
+      baseline=3600;
+    }
+    if(!daily.length){
+      labels=(TREND.labels||[]).slice();
+      series=(TREND.values||[]).map(v=>v===null?null:Number(v));
+      tips=labels.map((l,i)=>`${l}<span class="d">종합 <b>${fmtNum(series[i])}점</b></span>`);
+    }
+  }else{ /* kd */
+    const g=GAME_TREND||{};
+    labels=(g.labels||[]).slice();
+    series=(g.kd||[]).map(v=>v===null?null:Number(v));
+    tips=labels.map((l,i)=>`${l}<span class="d">K/D <b>${fmtNum((g.kd||[])[i])}%</b> · 딜량 <b>${fmtNum((g.dmg||[])[i])}</b></span>`);
+    yLabel=(v)=>Number(v).toFixed(1)+'%';
+    legend='<span><i style="background:#38BDF8"></i>K/D</span><span><i style="background:#F59E0B"></i>딜량</span>';
+  }
+
+  const known=series.filter(v=>v!==null&&v!==undefined&&isFinite(v));
+  if(!known.length){
+    svg.innerHTML=`<text x="${W/2}" y="${H/2}" text-anchor="middle" font-family="Pretendard" font-size="12" fill="#6E7F95">아직 그래프로 그릴 기록이 없습니다</text>`;
+    const facts=$('#chart-facts'); if(facts) facts.innerHTML='';
+    return;
+  }
+  let mn=Math.min(...known), mx=Math.max(...known);
+  if(mn===mx){ mn=mn-1; mx=mx+1; }
+  const pad=Math.max(1,(mx-mn)*0.2);
+  mn=Math.max(0,mn-pad); mx=mx+pad;
+  const X=i=>padL+i*(W-padL-padR)/Math.max(1,series.length-1);
+  const Y=v=>padT+(1-(v-mn)/((mx-mn)||1))*(H-padT-padB);
+  let s=`<defs><linearGradient id="bigG" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F59E0B" stop-opacity=".38"/><stop offset="1" stop-color="#F59E0B" stop-opacity="0"/></linearGradient></defs>`;
+  [0,0.25,0.5,0.75,1].forEach(k=>{
+    const v=mn+(mx-mn)*k;
+    s+=`<line x1="${padL}" y1="${Y(v).toFixed(1)}" x2="${W-padR}" y2="${Y(v).toFixed(1)}" stroke="rgba(148,163,184,.12)" stroke-dasharray="${k===0?'':'3 5'}"/>`;
+    s+=`<text x="${padL-7}" y="${(Y(v)+3.5).toFixed(1)}" text-anchor="end" font-family="Chakra" font-size="9" fill="#6E7F95">${yLabel(v)}</text>`;
+  });
+  const pts=series.map((v,i)=>v===null||v===undefined?null:[X(i),Y(v)]);
+  const seq=pts.filter(Boolean);
+  if(seq.length>1){
+    const line=seq.map((q,i)=>(i?'L':'M')+q[0].toFixed(1)+' '+q[1].toFixed(1)).join(' ');
+    s+=`<path d="${line} L ${seq[seq.length-1][0].toFixed(1)} ${H-padB} L ${seq[0][0].toFixed(1)} ${H-padB} Z" fill="url(#bigG)"/>`;
+    s+=`<path d="${line}" fill="none" stroke="#F59E0B" stroke-width="2" stroke-linejoin="round"/>`;
+  }
+  pts.forEach((q,i)=>{
+    if(!q) return;
+    s+=`<circle cx="${q[0].toFixed(1)}" cy="${q[1].toFixed(1)}" r="3" fill="#0B111D" stroke="#F59E0B" stroke-width="1.6"/>`;
+    s+=`<text x="${q[0].toFixed(1)}" y="${H-8}" text-anchor="middle" font-family="Chakra" font-size="8.5" fill="#5E6E85">${String(labels[i]||'').slice(-5)}</text>`;
+  });
+  svg.innerHTML=s;
+  /* 툴팁용 좌표 */
+  CHART_GEOM.big={vw:W,points:pts.map((q,i)=>q?{x:q[0],y:q[1],tip:tips[i]}:null)};
+  svg.__tipBound=false;
+  if(svg.__bigHandler){ svg.removeEventListener('mousemove',svg.__bigHandler); svg.removeEventListener('mouseleave',svg.__leaveHandler); }
+  svg.__bigHandler=(ev)=>{
+    const g=CHART_GEOM.big; if(!g) return;
+    const box=svg.getBoundingClientRect(); if(!box.width) return;
+    const px=(ev.clientX-box.left)*(W/box.width);
+    let best=null,bestD=Infinity;
+    g.points.forEach(p=>{ if(!p) return; const d=Math.abs(p.x-px); if(d<bestD){bestD=d;best=p;} });
+    const gap=(W)/Math.max(2,g.points.length);
+    if(!best||bestD>Math.max(30,gap*0.62)) return hideChartTip();
+    showChartTip(ev, best.tip);
+  };
+  svg.__leaveHandler=hideChartTip;
+  svg.addEventListener('mousemove',svg.__bigHandler);
+  svg.addEventListener('mouseleave',svg.__leaveHandler);
+
+  /* 요약 숫자 */
+  const facts=$('#chart-facts');
+  if(facts){
+    const first=known[0], last=known[known.length-1];
+    const diff=last-first;
+    const rows=[
+      {k:'첫 기록', v:kind==='tier'?((TIERS[Math.round(first)]||{}).n||'—'):fmtNum(first)},
+      {k:'마지막', v:kind==='tier'?((TIERS[Math.round(last)]||{}).n||'—'):fmtNum(last)},
+      {k:'변화', v:(diff>0?'+':'')+(kind==='kd'?diff.toFixed(1):Math.round(diff))
+        + (kind==='tier'?'단계':kind==='kd'?'%p':'점')},
+      {k:'기록', v:`${known.length}일`}
+    ];
+    facts.innerHTML=rows.map(r=>`<div class="chart-fact"><span>${r.k}</span><b>${r.v}</b></div>`).join('');
+  }
+  const lg=$('#chart-legend'); if(lg) lg.innerHTML=legend;
+}
+
+function openChart(kind){
+  const cfg={
+    tier:{title:'티어 변화', sub:'일별 종합 점수를 18단계 티어로 환산했습니다 · 점에 마우스를 올리면 날짜·티어·점수'},
+    score:{title:'최근 종합 점수 추이', sub:'그날까지 쌓인 기록으로 계산한 통합 점수 · 마우스를 올리면 정확한 숫자'},
+    kd:{title:'인게임 K/D · 딜량 추이', sub:'최근 경기를 날짜별로 묶은 값 · 마우스를 올리면 K/D와 딜량'}
+  }[kind]||{title:'그래프',sub:''};
+  const t=$('#chart-title'); if(t) t.textContent=cfg.title;
+  const sub=$('#chart-sub'); if(sub) sub.textContent=cfg.sub;
+  drawBigChart(kind);
+  const mask=$('#chart-mask'); if(mask) mask.classList.add('show');
+  if(kind==='tier') registerBigChart('tier',BIG_CHART['score']||{});
+}
+window.openChart=openChart;
+
+/* ---- 5영역 에임 밸런스 상세 ---- */
+function openAimDetail(){
+  const rows=$('#aim-rows');
+  const st=(window.AL&&AL.state)||{};
+  const key=`${game}-${weapon}`;
+  const summary=(st.summaries||{})[key]||null;
+  const libScen=(st.scenarios||{})[key]||[];
+  const recs=((summary||{}).recs)||[];
+  const more=((summary||{}).more)||[];
+  const pbs=(window.AL&&AL.pbs)||(st.pbs||{});
+  const total=AREAS.reduce((a,ar)=>a+Number(VALUES[ar.key]||0),0);
+  const vals=AREAS.map(a=>Number(VALUES[a.key]||0));
+  const weakest=Math.min(...vals);
+  if(rows){
+    rows.innerHTML=AREAS.map((a,i)=>{
+      const v=Number(VALUES[a.key]||0);
+      const scenNames=libScen.filter(x=>(x.area||x.area_key)===a.key).map(x=>x.name);
+      const todayRecs=recs.concat(more).filter(r=>r.area===i);
+      const used=todayRecs.length?todayRecs.map(r=>r.name).slice(0,2).join(' · '):scenNames.slice(0,2).join(' · ');
+      const pbv=todayRecs.map(r=>pbs[r.name]).filter(Boolean).sort((x,y)=>(y.best||0)-(x.best||0))[0];
+      const weak=v<=Math.max(50,weakest+3);
+      return `<div class="aim-row ${weak?'weak':''}">
+        <div class="nm">${a.name}</div>
+        <div class="sc">${v}</div>
+        <div><div class="bar"><i style="width:${Math.max(2,Math.min(100,v))}%;background:${a.color}"></i></div>
+          <div style="font-size:8.5px;color:#6E7F95;font-weight:600;margin-top:4px">전체의 ${total?(v/total*100).toFixed(0):0}% · ${used||'시나리오 데이터 없음'}</div></div>
+        <div class="scen">${pbv?'PB <b style="color:#FCD9A0">'+Number(pbv.best).toLocaleString('ko-KR')+'</b><br>':'<br>'}${weak?'약점 영역':'유지 영역'}</div>
+      </div>`;
+    }).join('');
+  }
+  const weakestArea=AREAS[vals.indexOf(weakest)];
+  const adv=$('#aim-advice');
+  if(adv){
+    adv.innerHTML=`지금 가장 약한 영역은 <b>${weakestArea.name} ${weakest}</b>입니다. `
+      + `이 영역 시나리오 2종만 오늘 5종에 넣으면 종합 점수가 가장 빨리 오릅니다. `
+      + `(${game==='kovak'?"KovaaK's":'Aim Lab'} · ${weapon==='sniper'?'스나':'라플'} 기준)`;
+  }
+  const sub=$('#aim-sub');
+  if(sub) sub.textContent=`${game==='kovak'?"KovaaK's":'Aim Lab'} · ${weapon==='sniper'?'스나':'라플'} · 최신 기록 평균`;
+  const mask=$('#aim-mask'); if(mask) mask.classList.add('show');
+}
+window.openAimDetail=openAimDetail;
+
+/* ---- 날짜별 훈련 상세 (잔디 셀 · 기록 행) ---- */
+function openDay(day){
+  const target=String(day||'').trim();
+  const st=(window.AL&&AL.state)||{};
+  const rows=((st.records||[]).length?st.records:(RECORDS_ROWS||[])).filter(r=>String(r.date||'')===target);
+  const list=$('#day-list');
+  const title=$('#day-title'), sub=$('#day-sub'), note=$('#day-note');
+  const nice=target?target.replace(/-/g,'.'):'—';
+  if(title) title.textContent=`${nice} 훈련 기록`;
+  if(!rows.length){
+    if(list) list.innerHTML='<div class="empty">이 날은 저장된 훈련 기록이 없습니다</div>';
+    if(sub) sub.textContent='기록 없음';
+    if(note) note.textContent='점수를 입력하면 그날 상세가 여기에 쌓입니다.';
+    const mask=$('#day-mask'); if(mask) mask.classList.add('show');
+    return;
+  }
+  const items=[];
+  rows.forEach(r=>{
+    (r.scenarios||[]).forEach(s=>items.push({...s, game:r.game, weapon:r.weapon, date:r.date}));
+  });
+  if(list){
+    if(!items.length){
+      list.innerHTML=`<div class="empty">이 날은 시나리오 점수 없이 기록만 있습니다 (${rows.length}건)</div>`;
+    }else{
+      list.innerHTML=`<div class="day-head"><span>시나리오</span><span>훈련</span><span>점수</span></div>`
+        + items.map(it=>{
+          const area=AREAS.find(a=>a.key===(it.area||it.area_key))||AREAS[0];
+          return `<div class="day-row"><div class="nm" title="${it.name}">${it.name}<span style="color:#6E7F95;font-weight:600"> · ${area.name}</span></div>
+            <div class="tag">${it.game==='aimlab'?'Aim Lab':"KovaaK's"} ${it.weapon==='rifle'?'라플':'스나'}</div>
+            <div class="sc">${Number(it.score).toLocaleString('ko-KR')}</div></div>`;
+        }).join('');
+    }
+  }
+  const totalScore=items.reduce((a,b)=>a+Number(b.score||0),0);
+  if(sub) sub.textContent=`${items.length}종 · 합계 ${totalScore.toLocaleString('ko-KR')}점 · 기록 ${rows.length}건`;
+  if(note) note.textContent='같은 날짜로 점수를 다시 저장하면 그 시나리오 기록이 갱신됩니다.';
+  const go=$('#day-go');
+  if(go) go.dataset.day=target;
+  const mask=$('#day-mask'); if(mask) mask.classList.add('show');
+}
+window.openDay=openDay;
+
+/* ---- 맵별 매치 전적 (표 행 클릭) ---- */
+function openMapMatches(mapName){
+  const name=String(mapName||'');
+  const st=(window.AL&&AL.state)||{};
+  const barracks=(window.AL&&AL.peek)||st.barracks||{};
+  const all=(barracks.matches||[]);
+  const rows=all.filter(m=>String(m.map||'')===name);
+  const title=$('#mm-title'), sub=$('#mm-sub'), list=$('#mm-list');
+  if(title) title.textContent=`${name} 전적`;
+  if(!rows.length){
+    if(sub) sub.textContent='최근 100판 기준';
+    if(list) list.innerHTML=`<div class="empty">최근 ${all.length?all.length:0}판 중 <b>${name}</b> 경기가 없습니다<br>`
+      + `전적을 한 번 더 최신화하면 그 맵 경기가 쌓입니다.</div>`;
+    const mask=$('#mapmatch-mask'); if(mask) mask.classList.add('show');
+    return;
+  }
+  const wins=rows.filter(m=>m.result==='승').length;
+  if(sub) sub.textContent=`${rows.length}판 · ${wins}승 ${rows.length-wins}패 · 승률 ${(wins/rows.length*100).toFixed(1)}% · 최근 ${all.length}판 중`;
+  const fmt=(v)=>(v===null||v===undefined)?'—':Number(v).toLocaleString('ko-KR');
+  if(list){
+    list.innerHTML=rows.map(m=>{
+      const players=m.players||[];
+      const mine=players.filter(p=>p[1]==='팀'), foes=players.filter(p=>p[1]==='적');
+      const side=(label,arr)=>`<div class="mm-side"><div class="mm-side-hd">${label}<b>${arr.length}</b></div>`
+        + (arr.length?arr.map(p=>`<div class="mm-p${p[0]===((barracks.nickname)||'')?' me':''}"><span class="nm">${p[0]}</span><span class="k">${p[2]}/${p[3]}</span><span class="dm">${fmt(p[4])}</span></div>`).join('')
+            :'<div class="mm-p" style="color:#5E6E85">상세 캐시 없음</div>')+`</div>`;
+      return `<div class="mm-match">
+        <div class="mm-top">
+          <span class="res ${m.result==='승'?'win':'lose'}">${m.result}</span>
+          <span>${String(m.date||'').slice(5)} ${m.time||''}</span>
+          <span style="color:#7E8FA6;font-weight:700">${m.type||''}</span>
+          <span class="st">K ${fmt(m.k)} / D ${fmt(m.d)} · K/D ${fmt(m.kd)}% · 딜량 ${fmt(m.damage)}</span>
+        </div>
+        ${players.length?`<div class="mm-players">${side('내 팀',mine)}${side('상대',foes)}</div>`:'<div class="mm-p" style="color:#5E6E85;margin-top:5px">이 경기는 상세 캐시가 없어 킬/데스·딜량만 표시합니다</div>'}
+      </div>`;
+    }).join('');
+  }
+  const mask=$('#mapmatch-mask'); if(mask) mask.classList.add('show');
+}
+window.openMapMatches=openMapMatches;
+
+/* ---- 친구 메모 ---- */
+let MEMO_TARGET=null;
+function openMemo(name, readOnly){
+  const target=String(name||'').trim();
+  if(!target) return;
+  MEMO_TARGET=target;
+  const st=(window.AL&&AL.state)||{};
+  const memos=(window.AL&&AL.memos)||st.memos||MEMOS||{};
+  const body=memos[target]||'';
+  const title=$('#memo-title'); if(title) title.textContent=`${target} 메모`;
+  const sub=$('#memo-sub');
+  if(sub) sub.textContent=readOnly?'저장된 메모 · 우클릭으로 수정할 수 있습니다':'순위표에서 우클릭하면 언제든 고칠 수 있습니다';
+  const ta=$('#memo-text'); if(ta){ ta.value=body; ta.readOnly=!!readOnly; setTimeout(()=>{ if(!readOnly) ta.focus(); },80); }
+  const hint=$('#memo-hint');
+  if(hint) hint.textContent=readOnly?'닫기만 하면 됩니다':'비우고 저장하면 메모가 지워집니다';
+  const save=$('#memo-save');
+  if(save) save.hidden=!!readOnly;
+  const mask=$('#memo-mask'); if(mask) mask.classList.add('show');
+}
+window.openMemo=openMemo;
+
+
 /* ---- 새 화면 상호작용 ---- */
 (function(){
   const mapTable=$('#map-table');
@@ -4024,6 +4691,122 @@ window.renderScenarioHistory=drawScenarioHistory;
   const mapsRefresh=$('#maps-refresh');
   if(mapsRefresh) mapsRefresh.addEventListener('click',()=>{
     const b=$('#br-refresh'); if(b) b.click();
+  });
+})();
+
+/* ---- v1.3.1 이벤트 연결 ---- */
+(function(){
+  /* 설정 기어 버튼 */
+  document.querySelectorAll('#settings-btn,#profile-card,#settings-gear').forEach(el=>{
+    el.addEventListener('click',openSettings);
+    el.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openSettings(); } });
+  });
+
+  /* KPI 카드 · 레이더 카드 클릭 → 그래프/상세 팝업 */
+  const openFrom=(el)=>{
+    const kind=el.dataset.chart;
+    if(kind==='balance') return openAimDetail();
+    return openChart(kind);
+  };
+  $$('.card.pop[data-chart]').forEach(el=>{
+    el.addEventListener('click',()=>openFrom(el));
+    el.addEventListener('keydown',e=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); openFrom(el); } });
+  });
+
+  /* 훈련 잔디 셀 클릭 → 그날 상세 */
+  const heat=$('#heatmap');
+  if(heat) heat.addEventListener('click',(e)=>{
+    const cell=e.target.closest('.heat-cell[data-day]');
+    if(!cell) return;
+    if(cell.classList.contains('future')) return;
+    openDay(cell.dataset.day);
+  });
+
+  /* 최근 훈련 기록 행 클릭 → 그날 상세 */
+  const recTable=$('#records-table');
+  if(recTable) recTable.addEventListener('click',(e)=>{
+    const tr=e.target.closest('tr[data-day]');
+    if(tr && tr.dataset.day) openDay(tr.dataset.day);
+  });
+
+  /* 맵별 분석 행 클릭 → 그 맵 매치 전적 (헤더 정렬 클릭은 제외) */
+  const mapTable=$('#map-table');
+  if(mapTable) mapTable.addEventListener('click',(e)=>{
+    if(e.target.closest('th.sortable')) return;
+    const tr=e.target.closest('tr[data-map]');
+    if(tr && tr.dataset.map) openMapMatches(tr.dataset.map);
+  });
+
+  /* 친구 순위표: 우클릭 → 메모, 메모 아이콘 → 보기, 병영 버튼 → 홈페이지 */
+  const lbRows=$('#lb-rows');
+  if(lbRows){
+    lbRows.addEventListener('contextmenu',(e)=>{
+      const row=e.target.closest('[data-lbname]');
+      if(!row) return;
+      e.preventDefault();
+      openMemo(row.dataset.lbname);
+    });
+    lbRows.addEventListener('click',(e)=>{
+      const memo=closestFrom(e.target,'[data-memo]');
+      if(memo){ e.stopPropagation(); openMemo(memo.dataset.memo,true); return; }
+      const site=closestFrom(e.target,'[data-site]');
+      if(site){
+        e.stopPropagation();
+        if(window.AL && AL.openBarracks) AL.openBarracks(site.dataset.site, site.dataset.siteName);
+        else appToast('앱(.exe)에서 병영수첩 홈페이지를 엽니다', false);
+        return;
+      }
+    },true);
+  }
+  function closestFrom(el,sel){ return (el&&el.closest)?el.closest(sel):null; }
+
+  /* 메모 저장 */
+  const memoSave=$('#memo-save');
+  if(memoSave) memoSave.addEventListener('click',()=>{
+    if(!MEMO_TARGET) return;
+    const ta=$('#memo-text');
+    const text=ta?ta.value:'';
+    if(window.AL && AL.saveMemo) AL.saveMemo(MEMO_TARGET,text);
+    else appToast('앱(.exe)에서 메모를 저장합니다', false);
+  });
+
+  /* 팝업에서 오늘 훈련으로 */
+  ['#chart-go','#aim-go'].forEach(sel=>{
+    const b=$(sel);
+    if(b) b.addEventListener('click',()=>{
+      const id=sel.replace('#','');
+      const mask=$(id==='chart-go'?'#chart-mask':'#aim-mask');
+      if(mask) mask.classList.remove('show');
+      showScreen('recs');
+      if(window.AL&&window.AL.onScreen) window.AL.onScreen('recs');
+    });
+  });
+  const dayGo=$('#day-go');
+  if(dayGo) dayGo.addEventListener('click',()=>{
+    const mask=$('#day-mask'); if(mask) mask.classList.remove('show');
+    const b=$('#score-input-btn'); if(b) b.click();
+  });
+
+  /* 클랜명 클릭 → 병영수첩 페이지 (외부 브라우저) */
+  const brBanner=$('#br-banner');
+  if(brBanner){
+    const openClan=(e)=>{
+      const link=e.target.closest('.bn-clan');
+      if(!link) return;
+      e.preventDefault();
+      const ouid=link.dataset.ouid||null;
+      if(window.AL && AL.openBarracks) AL.openBarracks(ouid, link.dataset.clan||null);
+      else appToast('앱(.exe)에서 병영수첩 페이지를 엽니다', false);
+    };
+    brBanner.addEventListener('click',openClan);
+    brBanner.addEventListener('keydown',(e)=>{ if(e.key==='Enter'||e.key===' '){ openClan(e); } });
+  }
+
+  /* 병영수첩 홈페이지(내 계정) */
+  const brSite=$('#br-site');
+  if(brSite) brSite.addEventListener('click',()=>{
+    if(window.AL && AL.openBarracks) AL.openBarracks(null, null);
+    else appToast('앱(.exe)에서 병영수첩 홈페이지를 엽니다', false);
   });
 })();
 

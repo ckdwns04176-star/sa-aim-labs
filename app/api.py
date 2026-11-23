@@ -127,30 +127,62 @@ class Api:
         return self._ok()
 
     def toggle_maximize(self) -> dict[str, Any]:
-        if not self._win:
-            return self._ok(maximized=False)
-        state = getattr(self._win, "maximized", False)
-        try:
-            if state:
-                self._win.restore()
-                return self._ok(maximized=False)
-            self._win.maximize()
-            return self._ok(maximized=True)
-        except Exception as exc:  # noqa: BLE001
-            return self._err(exc, maximized=bool(state))
+        """v1.3.1 — 최대화는 없앴다 (1200×750 고정). UI 에서도 버튼을 제거했고,
+        혹시 남아 있는 호출이 와도 창을 건드리지 않고 현재 상태만 돌려준다."""
+        return self._ok(maximized=False, fixed=True,
+                        message="이 앱은 1200×750 고정 크기로만 동작합니다")
 
     def close_window(self) -> dict[str, Any]:
         if self._win:
             self._win.destroy()
         return self._ok()
 
-    def drag_window(self) -> dict[str, Any]:
-        """Native, zero-lag window move for the frameless title bar.
+    def lock_window_style(self) -> dict[str, Any]:
+        """Win32 스타일에서 최대화·크기조절 비트를 지운다 (main.py 가 시작 시 1회)."""
+        handle = self._hwnd()
+        if not handle:
+            return self._ok(supported=False)
+        result = winutil.fixed_window_style(handle)
+        log.info("window style locked · %s", result)
+        return self._ok(**result)
 
-        JS mousemove → MoveWindow round trips (pywebview's drag region) lag behind
-        the cursor on Windows; handing the drag to the window manager makes the OS
-        move the window itself, so it tracks the pointer exactly.
+    def start_window_drag(self) -> dict[str, Any]:
+        """타이틀바 드래그 — 커서를 따라가는 이동 루프를 별도 스레드에서 돌린다.
+
+        pywebview 의 JS API 호출은 백그라운드 스레드에서 실행되므로
+        ``ReleaseCapture()+WM_NCLBUTTONDOWN`` 같은 모달 루프 방식은 실패할 수 있다.
+        여기서는 GetCursorPos + GetAsyncKeyState(VK_LBUTTON) 로 마우스를 직접 읽어
+        SetWindowPos(SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE) 로 창만 옮긴다 —
+        DOM 이벤트가 끊겨도, IPC 가 느려도 창이 커서를 놓치지 않는다.
         """
+        if os.name != "nt" or not self._win:
+            return self._ok(supported=False)
+        handle = self._hwnd()
+        if not handle:
+            return self._ok(supported=False)
+        guard = _GUARD_REF
+        if guard is not None and hasattr(guard, "pause"):
+            guard.pause(2.5)
+        started = winutil.start_drag_loop(handle)
+        if not started.get("ok"):
+            return {**started, "supported": False}
+        return self._ok(supported=True, mode="win32-cursor")
+
+    def move_window(self, dx: int = 0, dy: int = 0) -> dict[str, Any]:
+        """JS mousemove 폴백 — 시작 지점 기준 (dx, dy) CSS px 만큼 창을 옮긴다."""
+        if os.name != "nt" or not self._win:
+            return self._ok(supported=False)
+        handle = self._hwnd()
+        if not handle:
+            return self._ok(supported=False)
+        return self._ok(**winutil.move_window_by(handle, int(dx or 0), int(dy or 0)))
+
+    def end_window_drag(self) -> dict[str, Any]:
+        winutil.end_drag_loop()
+        return self._ok()
+
+    def drag_window(self) -> dict[str, Any]:
+        """(예전 경로) WM_NCLBUTTONDOWN 방식 — 네이티브 이동을 쓸 수 있는 환경용 폴백."""
         if os.name != "nt" or not self._win:
             return self._ok(supported=False)
         try:
@@ -159,15 +191,14 @@ class Api:
             handle = self._hwnd()
             if not handle:
                 return self._ok(supported=False)
-            # 드래그 시작 → 감시자가 크기를 건드리지 않게 잠깐 멈춘다 (창이 커서를 놓치지 않게)
             guard = _GUARD_REF
             if guard is not None and hasattr(guard, "pause"):
-                guard.pause(1.2)
+                guard.pause(1.5)
             ctypes.windll.user32.ReleaseCapture()  # type: ignore[attr-defined]
             ctypes.windll.user32.SendMessageW(  # type: ignore[attr-defined]
                 ctypes.c_void_p(handle), 0x00A1, 2, 0   # WM_NCLBUTTONDOWN, HTCAPTION
             )
-            return self._ok(supported=True)
+            return self._ok(supported=True, mode="wm-nclbuttondown")
         except Exception as exc:  # noqa: BLE001 - drag is best effort
             return self._err(exc, supported=False)
 
@@ -425,6 +456,8 @@ class Api:
                 "week_delta": profile["week_delta"], "integrated": True,
             },
             "library": scoring.scenario_library(),
+            "pbs": scoring.pb_rows(records),
+            "memos": dict(store.memos()),
             "today_scores": scoring.today_scores(records, today),
             "philosophy": scoring.WEAPON_PHILOSOPHY,
             "style": style,
@@ -1029,6 +1062,41 @@ class Api:
             members.insert(0, {**member, "me": True})
         self.store.set_leaderboard(members[:10])
 
+    # ------------------------------------------------------------ v1.3.1 · 메모 · 폴더
+    def save_member_memo(self, nickname: str, text: str) -> dict[str, Any]:
+        """친구 순위표 우클릭 메모 저장 — 닉네임 옆 아이콘으로 다시 본다."""
+        try:
+            self.store.set_memo(nickname, text)
+            body = str(text or "").strip()
+            return self._ok(state=self._build_state(), memos=dict(self.store.memos()),
+                            message=(f"메모를 저장했습니다 · {nickname}" if body else f"메모를 지웠습니다 · {nickname}"))
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def open_reports_folder(self) -> dict[str, Any]:
+        """리포트 카드 저장 폴더를 탐색기로 연다."""
+        folder = paths.reports_dir()
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        result = winutil.open_folder(str(folder))
+        result.setdefault("folder", str(folder))
+        return result
+
+    def open_barracks_page(self, ouid: str | None = None) -> dict[str, Any]:
+        """서든 병영수첩 홈페이지를 기본 브라우저로 연다 (본인/친구 ouid)."""
+        target = str(ouid or "").strip()
+        if not target:
+            barracks = self.store.barracks_cache().get(self.store.settings.get("nickname") or "", {})
+            target = str((barracks or {}).get("ouid") or "").strip()
+        if not target:
+            return {"ok": False, "message": "병영수첩을 한 번 최신화하면 홈페이지로 바로 갈 수 있습니다"}
+        url = f"https://barracks.sa.nexon.com/{target}/detail"
+        result = winutil.open_target(url)
+        result.setdefault("url", url)
+        return result
+
     # ------------------------------------------------------------ NVIDIA / Windows utils
     def _drs(self) -> nvidia.DrsManager:
         return nvidia.DrsManager()
@@ -1078,7 +1146,7 @@ class Api:
                     )
                 if elevate:
                     return {"ok": True, **(mgr.elevate_help(mode)), "state": self._build_state()}
-                result = mgr.apply_stairfix()
+                result = mgr.apply_stairfix(force=True)
                 self._remember_drs("stairfix", result, label="계단현상 끄기 적용 전")
                 self._drs_state = None
                 return {"ok": True, **result, "state": self._build_state()}
@@ -1088,7 +1156,7 @@ class Api:
                 )
             if elevate:
                 return {"ok": True, **(mgr.elevate_help(mode)), "state": self._build_state()}
-            result = mgr.apply(mode)
+            result = mgr.apply(mode, force=True)
             self._remember_drs(mode, result, label=f"{nvidia.MODES[mode]} 적용 전")
             self._drs_state = None
             return {"ok": True, **result, "state": self._build_state()}
@@ -1099,6 +1167,26 @@ class Api:
                     "can_elevate": needs_admin, "mode": mode, "state": self._build_state()}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
+
+    def wait_elevated_result(self, timeout: float = 30.0) -> dict[str, Any]:
+        """관리자 권한으로 다시 적용한 결과 파일을 기다린다.
+
+        v1.3.0 은 UAC 창만 띄우고 결과를 읽지 않아, 권한 상승 경로에서는
+        변경 내역이 화면에 전혀 나오지 않았다.  여기서 결과 JSON 을 폴링해
+        적용 내역·프로필·체크리스트를 그대로 돌려준다.
+        """
+        deadline = time.monotonic() + max(5.0, float(timeout or 30.0))
+        while time.monotonic() < deadline:
+            result = nvidia.read_result()
+            if result:
+                self._drs_state = None
+                if result.get("ok"):
+                    self._remember_drs(result.get("mode"), result, label="관리자 권한 적용")
+                payload = {**result, "state": self._build_state()}
+                return payload
+            time.sleep(0.4)
+        return {"ok": False, "timeout": True,
+                "message": "관리자 권한 적용 결과를 기다리다 시간이 지났습니다 · UAC 창을 승인했는지 확인해 주세요"}
 
     def toggle_nvidia_alias(self, enabled: bool) -> dict[str, Any]:
         if enabled:
@@ -1114,18 +1202,23 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             return self._err(exc, needs_admin="관리자 권한" in str(exc))
 
-    def restore_nvidia_profile(self, backup_id: str | None = None) -> dict[str, Any]:
+    def restore_nvidia_profile(self, backup_id: str | None = None, elevate: bool = False) -> dict[str, Any]:
         try:
             mgr = self._drs()
+            if elevate:
+                # UAC 로 다시 실행해 백업을 되돌린다 (결과는 wait_elevated_result 로 받는다)
+                return {"ok": True, **(mgr.elevate_help("restore", restore=True)), "state": self._build_state()}
             if backup_id:
-                result = mgr.restore(str(backup_id))
+                result = mgr.restore(str(backup_id), force=True)
             else:
-                result = mgr.restore_latest()
+                result = mgr.restore_latest(force=True)
             self._remember_drs(None, result, label="원래 설정 복구")
             self._drs_state = None
             return {"ok": True, **result, "state": self._build_state()}
         except Exception as exc:  # noqa: BLE001
-            return self._err(exc, needs_admin="관리자 권한" in str(exc))
+            message = str(exc)
+            needs_admin = "관리자 권한" in message
+            return self._err(exc, needs_admin=needs_admin, can_elevate=needs_admin)
 
     def _remember_drs(self, mode: str | None, result: dict[str, Any], label: str) -> None:
         utils = self.store.utils()
@@ -1137,9 +1230,16 @@ class Api:
             points = [p for p in (nv.get("points") or []) if p.get("backup") != point["backup"]]
             nv["points"] = [point, *points][:3]
             changes = result.get("changes") or []
-            if changes:
+            base_changes = result.get("base_changes") or []
+            if changes or base_changes or result.get("profile_items"):
                 nv["last_changes"] = {"at": now_iso(), "mode": mode, "label": label,
-                                       "rows": changes[:24], "count": len(changes)}
+                                      "rows": changes[:40], "base_rows": base_changes[:40],
+                                      "count": len(changes) + len(base_changes),
+                                      "files": (result.get("files") or [])[:6],
+                                      "profile_items": (result.get("profile_items") or [])[:20],
+                                      "checklist": (result.get("checklist") or [])[:8],
+                                      "reason": result.get("unchanged_reason") or "",
+                                      "message": result.get("message") or ""}
         if mode is None:
             nv["mode"] = None
         nv["alias"] = bool(mode == "stairfix")
@@ -1505,9 +1605,16 @@ class Api:
             state = winutil.perf_state()
         except Exception as exc:  # noqa: BLE001
             state = {"supported": False, "label": str(exc), "power": None, "game_mode": {}}
-        backup = (self.store.utils().get("perf") or {}).get("backup")
+        perf_saved = self.store.utils().get("perf") or {}
+        backup = perf_saved.get("backup")
         state["backup"] = backup
-        state["applied_at"] = (self.store.utils().get("perf") or {}).get("applied_at")
+        state["applied_at"] = perf_saved.get("applied_at")
+        # v1.3.1 — 스위치 ON/OFF 는 GUID 일치가 아니라 '적용해 둔 상태'로 판단한다.
+        # (최고 성능이 없어 powercfg /duplicatescheme 으로 새 GUID 를 만들면
+        #  GUID 비교가 실패해 스위치가 켜지지 않던 버그)
+        state["applied"] = bool(perf_saved.get("applied_at"))
+        state["active"] = bool(perf_saved.get("applied_at"))
+        state["mode_name"] = perf_saved.get("mode")
         self._perf_state, self._perf_state_at = state, now
         return {"ok": True, "perf": dict(state)}
 

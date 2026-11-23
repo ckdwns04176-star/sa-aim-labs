@@ -4,7 +4,7 @@
 
   · `Shell_NotifyIconW` 로 트레이 아이콘 등록 (assets/app.ico)
   · 왼쪽 클릭 → 창 보이기/숨기기 토글
-  · 오른쪽 클릭 → 메뉴(`열기` / `종료`)
+  · 오른쪽 클릭 → 메뉴(`열기` / `설정` / `종료`)
   · `RegisterHotKey(Ctrl+Shift+A)` → 창 보이기/숨기기
 
 메시지 루프는 별도 데몬 스레드에서 돌고, 콜백은 그 스레드에서 불린다.
@@ -51,6 +51,7 @@ MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 
 TPM_RIGHTBUTTON = 0x0002
+TPM_NONOTIFY = 0x0080
 TPM_RETURNCMD = 0x0100
 MF_STRING = 0x0000
 MF_SEPARATOR = 0x0800
@@ -108,12 +109,16 @@ class TrayIcon:
     def __init__(self, title: str = "SA AIM LABS", icon_path: str | None = None,
                  on_toggle: Callable[[], None] | None = None,
                  on_quit: Callable[[], None] | None = None,
+                 on_settings: Callable[[], None] | None = None,
+                 on_open: Callable[[], None] | None = None,
                  hotkey: str = "Ctrl+Shift+A",
                  tooltip: str = "SA AIM LABS · 클릭하면 창이 나타납니다") -> None:
         self.title = title
         self.icon_path = icon_path
         self.on_toggle = on_toggle
         self.on_quit = on_quit
+        self.on_settings = on_settings or on_toggle
+        self.on_open = on_open or on_toggle
         self.hotkey = hotkey
         self.tooltip = tooltip[:120]
 
@@ -250,28 +255,64 @@ class TrayIcon:
             log.exception("tray quit callback failed")
 
     def _menu(self) -> None:
+        """우클릭 컨텍스트 메뉴 — 열기 / 설정 / 종료.
+
+        트레이 메뉴가 안 뜨던 원인: 팝업 메뉴를 띄우기 전에 우리 창을 포그라운드로
+        올리지 않으면 Windows 가 메뉴를 바로 닫아 버린다(다른 창을 클릭한 것처럼
+        처리됨).  SetForegroundWindow + BringWindowToTop 뒤에 TrackPopupMenu 를
+        호출하고, 끝나면 PostMessage(WM_NULL) 로 메뉴 잔상을 정리한다.
+        """
         from ctypes import wintypes
 
+        user32 = ctypes.windll.user32
+        hwnd = int(self._hwnd or 0)
+        menu = 0
         try:
-            user32 = ctypes.windll.user32
             menu = user32.CreatePopupMenu()
-            user32.AppendMenuW(menu, MF_STRING, 1, "열기 / 숨기기")
+            if not menu:
+                return
+            user32.AppendMenuW(menu, MF_STRING, 1, "열기")
+            user32.AppendMenuW(menu, MF_STRING, 2, "설정")
             user32.AppendMenuW(menu, MF_SEPARATOR, 0, None)
-            user32.AppendMenuW(menu, MF_STRING, 2, "종료")
+            user32.AppendMenuW(menu, MF_STRING, 3, "종료")
             point = wintypes.POINT()
             user32.GetCursorPos(ctypes.byref(point))
-            user32.SetForegroundWindow(ctypes.c_void_p(self._hwnd))
-            cmd = user32.TrackPopupMenu(menu, TPM_RIGHTBUTTON | TPM_RETURNCMD,
-                                        int(point.x), int(point.y), 0,
-                                        ctypes.c_void_p(self._hwnd), None)
-            user32.PostMessageW(ctypes.c_void_p(self._hwnd), WM_NULL, 0, 0)
-            user32.DestroyMenu(menu)
+            if hwnd:
+                user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
+                user32.BringWindowToTop(ctypes.c_void_p(hwnd))
+            flags = TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY
+            cmd = user32.TrackPopupMenu(menu, flags, int(point.x), int(point.y), 0,
+                                        ctypes.c_void_p(hwnd), None)
+            if hwnd:
+                user32.PostMessageW(ctypes.c_void_p(hwnd), WM_NULL, 0, 0)
             if cmd == 1:
-                self._toggle()
+                self._open()
             elif cmd == 2:
+                self._settings()
+            elif cmd == 3:
                 self._quit()
         except Exception:  # noqa: BLE001
             log.exception("tray menu failed")
+        finally:
+            if menu:
+                try:
+                    user32.DestroyMenu(ctypes.c_void_p(menu))
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _open(self) -> None:
+        try:
+            if self.on_open:
+                self.on_open()
+        except Exception:  # noqa: BLE001
+            log.exception("tray open callback failed")
+
+    def _settings(self) -> None:
+        try:
+            if self.on_settings:
+                self.on_settings()
+        except Exception:  # noqa: BLE001
+            log.exception("tray settings callback failed")
 
     def _wndproc(self, hwnd, msg, wparam, lparam):
         from ctypes import wintypes

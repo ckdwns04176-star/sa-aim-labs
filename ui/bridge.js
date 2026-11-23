@@ -85,10 +85,19 @@
 
   /* ------------------------------------------------------------------ 토스트 */
   let toastTimer = null;
-  function toast(message, ok, ms) {
+  function toast(message, ok, ms, action) {
     const t = $('#app-toast');
     if (!t) return;
-    t.textContent = message;
+    t.textContent = '';
+    t.appendChild(document.createTextNode(String(message || '')));
+    if (action && action.label) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tt-act';
+      btn.textContent = action.label;
+      btn.addEventListener('click', (e) => { e.stopPropagation(); if (typeof action.onClick === 'function') action.onClick(); });
+      t.appendChild(btn);
+    }
     t.classList.toggle('ok', !!ok);
     t.classList.add('show');
     clearTimeout(toastTimer);
@@ -436,6 +445,8 @@
 
     /* ---------- v1.3.0 · 티어 분포 · 병영수첩 변화 · 맵 가이드 · 기록 표 ---------- */
     if (st.tier_distribution) TIER_DIST = st.tier_distribution;
+    if (st.pbs) AL.pbs = st.pbs;
+    if (st.memos) { MEMOS = st.memos; AL.memos = st.memos; }
     if (Array.isArray(st.tier_details)) TIER_DETAILS = st.tier_details;
     if (Array.isArray(st.map_guides)) {
       MAP_GUIDES = {};
@@ -652,8 +663,31 @@
     const tier = barracks.tier || { solo: { rp: 0, name: '언랭크' }, party: { rp: 0, name: '언랭크' } };
     const stats = barracks.stats || {};
     const band = bandOf(Number(tier.solo.rp || 0));
-    const weaponLabel = (barracks.recent || {}).sniper >= (barracks.recent || {}).assault ? '주무기 스나' : '주무기 라플';
+    /* v1.3.1 — 무기 표기는 '스나' / '라플' 만 (앞의 '주무기 ' 제거) */
+    const weaponLabel = Number((barracks.recent || {}).sniper || 0) >= Number((barracks.recent || {}).assault || 0)
+      ? '스나' : '라플';
     const initial = (barracks.nickname || '?').charAt(0);
+    const clanRaw = String(basic.clan || '').trim();
+    const clan = (!clanRaw || clanRaw === '-') ? '클랜 없음' : clanRaw;
+    /* v1.3.1 — 어제(직전 최신화) 대비 변화량: ▲/▼ + 상승 초록·하락 빨강 그라데이션 */
+    const digest = (st && st.digest) || null;
+    const deltaOf = (key) => {
+      if (!digest || !digest.available) return null;
+      const row = (digest.metrics || []).find((m) => m.key === key);
+      if (!row || row.diff === null || row.diff === undefined) return null;
+      return row.diff;
+    };
+    const deltaHtml = (key) => {
+      const diff = deltaOf(key);
+      if (diff === null) return '';
+      const up = diff > 0;
+      const txt = Math.abs(diff).toLocaleString('ko-KR', { maximumFractionDigits: 1 });
+      return `<i class="bn-delta ${up ? 'up' : diff < 0 ? 'down' : 'same'}">${diff === 0 ? '—' : (up ? '▲' : '▼') + ' ' + txt}</i>`;
+    };
+    const deltaCls = (key) => {
+      const diff = deltaOf(key);
+      return diff === null ? '' : diff > 0 ? ' up' : diff < 0 ? ' down' : '';
+    };
 
     if (banner) {
       banner.innerHTML = `
@@ -662,19 +696,17 @@
           <div class="bn-ava">${initial}<i></i></div>
           <div>
             <div class="bn-name"><h2>${barracks.nickname}</h2>
-              <span class="tag ${weaponLabel === '주무기 스나' ? 'amber' : 'cyan'}" id="bn-user">${weaponLabel}</span>
-              <span class="tag dim">${tier.solo.name}</span></div>
-            <div class="bn-sub"><span>${basic.clan && basic.clan !== '-' ? basic.clan + ' 클랜' : '클랜 없음'}</span>
-              <span class="sep">·</span><span>OUID ${String(barracks.ouid || '').slice(0, 10)}…</span>
-              <span class="sep">·</span><span>가입 <b>${basic.created || '—'}</b></span>
-              <span class="sep">·</span><span>예의 <b>${basic.manner || '—'}</b></span></div>
+              <span class="tag ${weaponLabel === '스나' ? 'amber' : 'cyan'}" id="bn-user">${weaponLabel}</span></div>
+            <div class="bn-sub"><a class="bn-clan" role="button" tabindex="0" data-clan="${esc(clan)}" data-ouid="${esc(barracks.ouid || '')}"
+                title="${esc(clan)} · 병영수첩 페이지 열기">${esc(clan)}</a>
+              <span class="sep">·</span><span>가입 <b>${basic.created || '—'}</b></span></div>
           </div>
         </div>
         <div class="bn-stats">
           <div class="bn-stat"><span>최근 100판</span><b>${n0(stats.games)}<i>판</i></b></div>
-          <div class="bn-stat"><span>승률</span><b>${n0(stats.win, 1)}<i>%</i></b></div>
-          <div class="bn-stat"><span>K/D</span><b>${n0(stats.kd, 1)}<i>%</i></b></div>
-          <div class="bn-stat"><span>평균 딜량</span><b>${n0(stats.dmg)}</b></div>
+          <div class="bn-stat${deltaCls('win')}"><span>승률</span><b>${n0(stats.win, 1)}<i>%</i></b>${deltaHtml('win')}</div>
+          <div class="bn-stat${deltaCls('kd')}"><span>K/D</span><b>${n0(stats.kd, 1)}<i>%</i></b>${deltaHtml('kd')}</div>
+          <div class="bn-stat${deltaCls('dmg')}"><span>평균 딜량</span><b>${n0(stats.dmg)}</b>${deltaHtml('dmg')}</div>
         </div>`;
     }
     if (ranks) ranks.innerHTML = rankCard('solo', tier.solo) + rankCard('party', tier.party);
@@ -686,7 +718,9 @@
   function renderMatches(barracks) {
     const table = $('#map-table');
     if (!table) return;
-    const rows = barracks.matches || [];
+    /* v1.3.1 — 저장은 최근 100판이지만 이 화면은 '최근 20판'만 보여 준다
+       (맵별 전체 전적은 맵 행을 클릭하면 팝업으로 본다) */
+    const rows = (barracks.matches || []).slice(0, 20);
     if (!rows.length) {
       table.innerHTML = '<tbody><tr><td class="l" style="color:#6E7F95">최근 경기가 없습니다</td></tr></tbody>';
       return;
@@ -793,7 +827,7 @@
           <span class="ustate ${cloud.signed_in ? 'on' : cloud.configured ? 'warn' : ''}">${cloud.signed_in ? '로그인됨' : cloud.configured ? '로그인 전' : '설정 준비됨'}</span>
         </div>
         <div class="set-note" style="margin:0">
-          집 · PC방 어디서나 <b>내 에임 기록과 순위표</b>를 이어서 쓰는 저장소입니다.
+          어디서나 <b>내 에임 기록과 순위표</b>를 이어서 쓰는 저장소입니다.
           ${cloud.signed_in ? `☁️ ${cloud.email || ''} · 마지막 동기화 ${fmtLabel(cloud.last_sync)}` : '로그인 전 · 이 PC 에는 기록이 자동 저장되고 있습니다'}
         </div>
         <div class="set-actions">
@@ -822,12 +856,12 @@
         <div class="card-hd" style="padding:0">
           <div><div class="card-title"><span class="bar"></span>앱 · 트레이 · 업데이트</div>
             <div class="card-sub">단축키 · 새 버전</div></div>
-          <span class="chip" style="height:20px;font-size:9.5px">v${meta.version || '1.3.0'}</span>
+          <span class="chip" style="height:20px;font-size:9.5px">v${meta.version || '1.3.1'}</span>
         </div>
         ${switchRow('hotkey_enabled', 'Ctrl+Shift+A 창 부르기', '어디서든 단축키로 창을 숨기기/보이기', set.hotkey_enabled !== false)}
         <div class="set-note">창 닫기(<b>X</b>)는 항상 <b>트레이로 숨기기 / 프로그램 종료</b> 확인창을 띄웁니다.</div>
         <div class="set-status" id="set-tray-state" style="font-size:9.5px">트레이 상태 확인 중…</div>
-        <div class="set-status" id="set-update-info" style="font-size:9.5px">현재 v${meta.version || '1.3.0'} · 업데이트를 확인해 보세요</div>
+        <div class="set-status" id="set-update-info" style="font-size:9.5px">현재 v${meta.version || '1.3.1'} · 업데이트를 확인해 보세요</div>
         <div class="set-actions">
           <button class="btn btn-primary" id="set-update-check">업데이트 확인</button>
           <button class="btn btn-ghost" id="set-tray-hide">트레이로 숨기기</button>
@@ -852,7 +886,7 @@
 
     const metaLine = $('#set-meta-line');
     if (metaLine) {
-      metaLine.textContent = `v${meta.version || '1.3.0'} · 훈련 기록 ${n0(count)}회 · ${meta.frozen ? '배포 빌드' : '소스 실행'}`;
+      metaLine.textContent = `v${meta.version || '1.3.1'} · 훈련 기록 ${n0(count)}회 · ${meta.frozen ? '배포 빌드' : '소스 실행'}`;
     }
   }
 
@@ -1122,6 +1156,16 @@
     if (result.state) applyState(result.state);
     AL.peek = null;
     renderPeek();
+    /* v1.3.1 — '전적 불러오기' 뒤에 어제(직전 최신화) 대비 변화를 자연스럽게 이어서 보여 준다 */
+    try {
+      const d = (AL.state && AL.state.digest) || (result.state && result.state.digest);
+      if (d && d.available) {
+        digestShown = true;
+        if (typeof renderDigest === 'function') renderDigest(d);
+        const mask = $('#digest-mask');
+        if (mask) mask.classList.add('show');
+      }
+    } catch (err) { /* 변화 팝업은 보조 */ }
     const b = result.barracks || {};
     const calls = typeof result.calls === 'number' ? result.calls : null;
     toast(
@@ -1243,8 +1287,27 @@
   /* ==================================================================
      최적화 유틸
      ================================================================== */
+  function changeBundle(result, mode) {
+    const rows = (result && result.changes) || [];
+    const baseRows = (result && result.base_changes) || [];
+    const count = rows.length + baseRows.length;
+    return {
+      rows,
+      base_rows: baseRows,
+      files: (result && result.files) || [],
+      profile_items: (result && result.profile_items) || [],
+      checklist: (result && result.checklist) || [],
+      reason: (result && result.unchanged_reason) || '',
+      message: (result && result.message) || '',
+      mode: (result && result.mode) || mode,
+      at: (AL.state && AL.state.meta && AL.state.meta.now) || '',
+      count
+    };
+  }
+
   async function applyNvidia(mode) {
-    busy(true, `${mode === 'rifle' ? '라플' : '스나'} 프로필 적용 중…`);
+    const label = mode === 'rifle' ? '라플' : '스나';
+    busy(true, `${label} 프로필 적용 중… (Drs DB 백업 후 교체)`);
     let result = await call('apply_nvidia_profile', mode, false);
     busy(false);
     if (result && !result.ok && (result.can_elevate || result.needs_admin)) {
@@ -1252,23 +1315,26 @@
       const go = window.confirm(`${result.message}\n\n지금 관리자 권한으로 다시 적용할까요?`);
       if (!go) return;
       busy(true, '관리자 권한 요청 중… (UAC 창 확인)');
-      result = await call('apply_nvidia_profile', mode, true);
+      const help = await call('apply_nvidia_profile', mode, true);
+      if (!help || !help.ok) { busy(false); return fail(help, '관리자 권한 요청을 보내지 못했습니다'); }
+      busy(true, '관리자 권한으로 적용하는 중… (UAC 승인 후 최대 30초)');
+      result = await call('wait_elevated_result', 30);
       busy(false);
-      if (result && result.message) toast(result.message, !!result.ok);
-      if (result && result.state) applyState(result.state);
-      return;
+      if (!result || !result.ok) return fail(result, result && result.timeout
+        ? 'UAC 창을 승인했는지 확인해 주세요' : '관리자 권한 적용에 실패했습니다');
     }
     if (!result || !result.ok) return fail(result, '프로필을 적용하지 못했습니다');
     if (result.state) applyState(result.state);
-    const changes = {
-      rows: result.changes || (result.stairfix && result.stairfix.changes) || [],
-      mode: result.mode || mode,
-      at: (AL.state && AL.state.meta && AL.state.meta.now) || '',
-      count: (result.changes || []).length
-    };
-    LAST_CHANGES = changes;
-    toast(result.message || `${mode === 'rifle' ? '🔫 라플' : '🎯 스나'} 프로필 적용 완료`, true);
-    if (typeof openChanges === 'function') setTimeout(() => openChanges(changes), 180);
+    const bundle = changeBundle(result, mode);
+    LAST_CHANGES = bundle;
+    AL.lastChanges = bundle;
+    toast(result.message || (result.game_running
+      ? '✅ 적용 완료! 서든어택을 재실행해야 적용됩니다'
+      : `${mode === 'rifle' ? '🔫 라플' : '🎯 스나'} 프로필 적용 완료`), true, 5200);
+    /* 항상 변경 내역 창을 연다 — 바뀐 값이 없으면 이유와 현재 프로필 값을 보여 준다 */
+    setTimeout(() => {
+      if (typeof window.openChanges === 'function') window.openChanges(bundle);
+    }, 180);
   }
 
   async function toggleAlias() {
@@ -1289,7 +1355,15 @@
       return;
     }
     busy(true, '원래 설정으로 복구 중…');
-    const result = await call('restore_nvidia_profile');
+    let result = await call('restore_nvidia_profile');
+    if (result && !result.ok && (result.can_elevate || result.needs_admin)) {
+      const go = window.confirm(`${result.message}\n\n지금 관리자 권한으로 복구할까요?`);
+      if (!go) { busy(false); return; }
+      const help = await call('restore_nvidia_profile', null, true);
+      if (!help || !help.ok) { busy(false); return fail(help, '관리자 권한 요청을 보내지 못했습니다'); }
+      busy(true, '관리자 권한으로 복구하는 중… (UAC 승인 후 최대 30초)');
+      result = await call('wait_elevated_result', 30);
+    }
     busy(false);
     if (!result || !result.ok) return fail(result, '복구하지 못했습니다 · 관리자 권한이 필요할 수 있습니다');
     if (result.state) applyState(result.state);
@@ -1688,7 +1762,10 @@
     if (!perf) return;
     AL.perf = perf;
     const gmOn = !!(perf.game_mode && perf.game_mode.enabled === true);
-    const optimal = !!perf.optimal;
+    /* v1.3.1 — 스위치는 '지금 적용해 둔 상태'로 판단한다.
+       powercfg /duplicatescheme 으로 새 GUID 가 생기면 perf.optimal 이 false 로
+       남아, 적용했는데도 스위치가 왼쪽에 머무르던 버그를 없앤다. */
+    const optimal = !!(perf.active || perf.applied || perf.optimal);
     UTIL_PERF.on = optimal;
     const sw = $('#perf-switch');
     if (sw) {
@@ -1734,7 +1811,7 @@
       if (typeof renderPerfSwitch === 'function') renderPerfSwitch();
       return toast(UTIL_PERF.on ? '⚡ 고성능 전원 + 게임 모드 적용' : '↩️ 원래 전원 옵션으로 복구', true);
     }
-    const on = !(AL.perf && AL.perf.optimal);
+    const on = !(AL.perf && (AL.perf.active || AL.perf.applied || AL.perf.optimal));
     if (on) return perfApply();
     return perfRestore();
   }
@@ -1943,7 +2020,15 @@
     const result = await call('save_report_card', dataUrl, (AL.state && AL.state.meta && AL.state.meta.today) || '');
     busy(false);
     if (!result || !result.ok) return fail(result, '리포트 카드를 저장하지 못했습니다');
-    toast(result.message || '📸 리포트 카드 저장 완료', true, 5600);
+    /* v1.3.1 — 저장 토스트에 '폴더 열기' 버튼 (자동 사라짐 시간은 그대로) */
+    toast(result.message || '📸 리포트 카드 저장 완료', true, 5600, {
+      label: '폴더 열기',
+      onClick: async () => {
+        const opened = await call('open_reports_folder');
+        if (opened && opened.ok) toast('📂 리포트 폴더를 열었습니다', true);
+        else toast((opened && opened.message) || (result.folder ? '폴더: ' + result.folder : '폴더를 열지 못했습니다'), false, 6000);
+      }
+    });
   }
 
   /* ------------------------------------------------------------ 트레이로 숨기기 */
@@ -1975,33 +2060,52 @@
     if (bound) return;
     bound = true;
 
-    /* ---------- 창 이동 (OS 네이티브 · 지연 없음) ---------- */
+    /* ---------- 창 이동 (v1.3.1 · Win32 커서 추적 + JS 폴백) ----------
+       frameless 창에서 pywebview JS API 는 백그라운드 스레드에서 돌기 때문에
+       ReleaseCapture()+WM_NCLBUTTONDOWN 방식이 실패할 수 있다. 그래서
+       ① 타이틀바에 pywebview-drag-region 클래스를 항상 붙여 두고(공식 경로),
+       ② mousedown 시 start_window_drag() 로 Win32 커서 추적 이동을 시작한다.
+          (SetWindowPos SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE — 크기·Z순서 불변)
+       ③ Win32 이동을 못 쓰는 환경에서는 move_window(dx,dy) 로 직접 따라간다.
+       최대화는 없앴다 — 더블클릭해도 아무 일도 하지 않는다 (1200×750 고정). */
     const titlebar = $('#titlebar');
     if (titlebar) {
-      let dragMode = 'native';
+      titlebar.classList.add('pywebview-drag-region');
+      let dragMode = 'both';
+      let jsDrag = null;
       titlebar.addEventListener('mousedown', async (e) => {
         if (!AL.real || e.button !== 0) return;
-        if (e.target.closest('.winbtns')) return;
-        if (dragMode === 'js') return;      // pywebview 기본 드래그가 처리
-        const result = await call('drag_window');
-        if (result && result.supported === false) {
-          /* 네이티브 이동을 못 쓰는 환경: pywebview 공식 드래그 영역으로 폴백 */
-          dragMode = 'js';
-          titlebar.classList.add('pywebview-drag-region');
-          if (window.AL && AL.toast) AL.toast('창 이동: 기본 모드로 전환했습니다', true);
+        if (e.target.closest('.winbtns, button, input, a')) return;
+        e.preventDefault();
+        if (dragMode === 'js') {
+          jsDrag = { x: e.screenX, y: e.screenY };
+          document.body.classList.add('is-dragging');
+          return;
         }
+        /* 두 경로를 함께 켠다 — 둘 다 '시작 지점 + 커서 이동량'으로 같은 위치를
+           계산하므로 서로 부딪히지 않고, 한쪽이 막혀도 창은 반드시 따라온다.
+             ① Win32 커서 추적 루프 (start_window_drag)
+             ② JS mousemove → move_window(dx, dy) */
+        jsDrag = { x: e.screenX, y: e.screenY };
+        document.body.classList.add('is-dragging');
+        const result = await call('start_window_drag');
+        if (result && result.supported === false) dragMode = 'js';
       });
-      titlebar.addEventListener('dblclick', (e) => {
-        if (!AL.real || e.target.closest('.winbtns')) return;
-        call('toggle_maximize');
+      window.addEventListener('mousemove', (e) => {
+        if (!jsDrag) return;
+        call('move_window', e.screenX - jsDrag.x, e.screenY - jsDrag.y);
+      });
+      window.addEventListener('mouseup', () => {
+        if (!jsDrag) return;
+        jsDrag = null;
+        document.body.classList.remove('is-dragging');
+        call('end_window_drag');
       });
     }
 
     /* ---------- 창 제어 ---------- */
     const winMin = $('#win-min');
     if (winMin) winMin.addEventListener('click', (e) => { e.stopPropagation(); if (AL.real) call('minimize_window'); });
-    const winMax = $('#win-max');
-    if (winMax) winMax.addEventListener('click', (e) => { e.stopPropagation(); if (AL.real) call('toggle_maximize'); });
     const winClose = $('#win-close');
     if (winClose) winClose.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -2016,7 +2120,7 @@
       const b = $(sel);
       if (b) b.addEventListener('click', (e) => { e.preventDefault(); openWarmup(); });
     });
-    ['#kovak-import-btn', '#kovak-import-2', '#score-kovak'].forEach((sel) => {
+    ['#kovak-import-btn', '#kovak-import-2', '#kovak-import-head', '#score-kovak'].forEach((sel) => {
       const b = $(sel);
       if (b) b.addEventListener('click', (e) => { e.preventDefault(); importKovak(false); });
     });
@@ -2143,7 +2247,9 @@
     if (runAll) {
       runAll.addEventListener('click', () => {
         if (!AL.real) return toast('앱(.exe)에서 실행하면 Steam 이 열립니다', false);
+        /* v1.3.1 — 5종을 순서대로 실행하면서, 바로 점수를 적을 수 있게 5칸 입력창도 함께 연다 */
         launchAll();
+        setTimeout(() => { try { openScoreModal(); } catch (err) { /* 점수 창은 보조 */ } }, 700);
       });
     }
 
@@ -2356,6 +2462,28 @@
       if (!result || !result.ok) return fail(result, `'${name}' 등록 실패`);
       if (result.state) applyState(result.state);
       toast(result.message || `'${name}' 등록 완료 · 전적 동기화됨`, true);
+    };
+    AL.openBarracks = async function (ouid, name) {
+      const target = ouid || ((AL.state && AL.state.barracks) || {}).ouid || '';
+      if (!AL.real) {
+        toast('앱(.exe)에서 병영수첩 홈페이지를 엽니다', true);
+        return;
+      }
+      const result = await call('open_barracks_page', target || null);
+      toast(result && result.ok
+        ? `🪖 ${name || '내'} 병영수첩을 브라우저에서 엽니다`
+        : ((result && result.message) || '병영수첩을 열지 못했습니다'), !!(result && result.ok), 5200);
+    };
+    AL.saveMemo = async function (name, text) {
+      if (!AL.real) return toast('앱(.exe)에서 메모를 저장합니다', false);
+      const result = await call('save_member_memo', name, text);
+      if (!result || !result.ok) return fail(result, '메모를 저장하지 못했습니다');
+      if (result.state) applyState(result.state);
+      if (result.memos) { MEMOS = result.memos; AL.memos = result.memos; }
+      if (typeof drawLeaderboard === 'function') drawLeaderboard();
+      const mask = $('#memo-mask');
+      if (mask) mask.classList.remove('show');
+      toast(result.message || '메모를 저장했습니다', true);
     };
     AL.removeMember = async function (name) {
       if (!AL.real) return;

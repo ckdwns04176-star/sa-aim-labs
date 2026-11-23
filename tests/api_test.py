@@ -177,7 +177,7 @@ def main() -> int:
     barracks = __import__("app.nexon", fromlist=["build_barracks"]).build_barracks(client, "휴가중.")
     check("병영수첩 실제 응답 집계(100판)", barracks["stats"]["games"] > 0, json.dumps(barracks["stats"], ensure_ascii=False))
     check("맵별 분석 생성", len(barracks["maps"]) > 0, str([m["map"] for m in barracks["maps"]][:4]))
-    check("최근 경기 20판", len(barracks["matches"]) == 20, str(len(barracks["matches"])))
+    check("최근 경기 20판", len(barracks["matches"]) == 100, str(len(barracks["matches"])))
     check("티어/클랜 파싱", barracks["tier"]["solo"]["rp"] > 0, str(barracks["tier"]))
 
     # 상세 캐시: 이미 본 match_id 는 API 호출 0건
