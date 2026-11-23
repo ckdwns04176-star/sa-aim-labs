@@ -299,6 +299,22 @@ class Api:
             log.exception("state · barracks/leaderboard failed")
             barracks, members = None, []
         if isinstance(barracks, dict):
+            # v1.3.0 — 첫 설치 직후에도 '직전 연습일' 비교가 가능하도록, 저장된 병영수첩
+            # 캐시의 최신화 시각을 첫 스냅샷으로 남긴다 (이미 스냅샷이 있으면 건드리지 않음).
+            try:
+                if not self.store.barracks_history():
+                    stamp = str(barracks.get("updated_at") or "")[:10]
+                    if stamp:
+                        self.store.barracks_history().append({
+                            "date": stamp, "at": str(barracks.get("updated_at") or ""),
+                            "nickname": barracks.get("nickname"),
+                            "stats": barracks.get("stats") or {},
+                            "tier": barracks.get("tier") or {},
+                            "basic": {"clan": (barracks.get("basic") or {}).get("clan")},
+                        })
+                        self.store.save()
+            except Exception:  # noqa: BLE001 - 스냅샷 시드는 실패해도 화면은 그린다
+                log.debug("state · barracks snapshot seed failed", exc_info=True)
             # 🧭 최근 100판 플레이 코칭 — 이미 받아 둔 지표만으로 매번 새로 계산
             try:
                 barracks["play_coaching"] = scoring.play_coaching(barracks)
