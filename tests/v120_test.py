@@ -180,8 +180,28 @@ def backend_checks() -> None:
         offline = updates.check(paths.APP_VERSION, force=True)
         check("오프라인은 조용히 실패", offline.get("ok") is False and offline.get("newer") is False,
               str(offline.get("message")))
+
+        # 이 저장소는 tag 가 `latest-build` (버전 없음) → 빌드 시각으로 '새 빌드' 판단
+        updates.clear()
+        updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "latest-build", "name": "Latest build",
+                                                    "url": "https://x", "download": "https://x/y.exe",
+                                                    "published_at": "2026-11-22T00:00:00Z",
+                                                    "build_at": "2026-11-23T12:03:15Z", "notes": ""}
+        real_build_time = updates.build_time
+        updates.build_time = lambda: 1_700_000_000.0        # 오래된 exe
+        by_build = updates.check(paths.APP_VERSION, force=True)
+        check("버전 없는 릴리스도 새 빌드 감지", by_build.get("ok") and by_build.get("newer") is True
+              and by_build.get("reason") == "build", str(by_build.get("message")))
+        updates.clear()
+        updates.build_time = lambda: 1_800_000_000.0        # 방금 받은 exe
+        same_build = updates.check(paths.APP_VERSION, force=True)
+        check("방금 받은 빌드는 최신 처리", same_build.get("ok") and same_build.get("newer") is False,
+              str(same_build.get("message")))
+        check("릴리스 태그에서 버전 추출", updates._version_in("latest-build v1.3.0") == "1.3.0"
+              and updates._version_in("latest-build") is None)
     finally:
         updates.fetch_latest = real_fetch
+        updates.build_time = real_build_time
         updates.clear()
 
     # ---- 4. 잔디 · 주간 목표 · 전후 비교

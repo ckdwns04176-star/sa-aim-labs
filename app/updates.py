@@ -11,14 +11,18 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import logging
+import os
 import re
+import sys
 import threading
 import urllib.error
 import urllib.request
 from typing import Any
 
 REPO = "ckdwns04176-star/sa-aim-labs"
-API_URL = f"https://api.github.com/repos/{REPO}/releases/latest"
+# `releases/latest` 는 prerelease 를 돌려주지 않는다. 이 저장소의 빌드 릴리스는
+# tag `latest-build` · prerelease 로 올라가므로 목록에서 직접 고른다.
+API_URL = f"https://api.github.com/repos/{REPO}/releases?per_page=10"
 RELEASES_URL = f"https://github.com/{REPO}/releases/latest"
 EXE_NAME = "SA_Aim_Labs.exe"
 
@@ -45,6 +49,39 @@ def is_newer(latest: str, current: str) -> bool:
     return a + (0,) * (width - len(a)) > b + (0,) * (width - len(b))
 
 
+_SEMVER_RE = re.compile(r"v?(\d+\.\d+\.\d+)")
+
+
+def _version_in(text: str) -> str | None:
+    """릴리스 태그·이름·본문에서 첫 `x.y.z` 를 찾는다."""
+    match = _SEMVER_RE.search(str(text or ""))
+    return match.group(1) if match else None
+
+
+def build_time() -> float | None:
+    """이 실행 파일(.exe)이 만들어진 시각 — 소스 실행이면 None."""
+    if not getattr(sys, "frozen", False):
+        return None
+    try:
+        return os.path.getmtime(sys.executable)
+    except OSError:
+        return None
+
+
+def build_is_newer(build_at: str, margin_seconds: float = 3600) -> bool:
+    """태그에 버전이 없을 때: 릴리스 빌드가 내 .exe 보다 '나중'이면 새 빌드."""
+    if not build_at:
+        return False
+    try:
+        stamp = _dt.datetime.fromisoformat(build_at.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return False
+    local = build_time()
+    if local is None:
+        return False
+    return stamp > local + margin_seconds
+
+
 def _download_url(release: dict[str, Any]) -> str:
     for asset in release.get("assets") or []:
         name = str(asset.get("name") or "")
@@ -53,8 +90,17 @@ def _download_url(release: dict[str, Any]) -> str:
     return str(release.get("html_url") or RELEASES_URL)
 
 
+def _pick_release(items: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """초안이 아닌 릴리스 중 .exe 가 붙은 최신 것 (없으면 첫 항목)."""
+    live = [r for r in items if isinstance(r, dict) and not r.get("draft")]
+    if not live:
+        return None
+    with_exe = [r for r in live if (r.get("assets") or [])]
+    return (with_exe or live)[0]
+
+
 def fetch_latest(timeout: float = 4.0) -> dict[str, Any]:
-    """GitHub Releases `latest` 1건.  실패하면 `{ok: False, message: ...}`."""
+    """GitHub Releases 목록에서 최신 빌드 1건.  실패하면 `{ok: False, message: ...}`."""
     request = urllib.request.Request(
         API_URL,
         headers={
@@ -65,8 +111,8 @@ def fetch_latest(timeout: float = 4.0) -> dict[str, Any]:
     )
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - https 고정
-            raw = response.read(200_000).decode("utf-8", "ignore")
-        release = json.loads(raw)
+            raw = response.read(400_000).decode("utf-8", "ignore")
+        items = json.loads(raw)
     except urllib.error.HTTPError as exc:
         return {"ok": False, "status": int(getattr(exc, "code", 0) or 0),
                 "message": f"릴리스 정보를 읽지 못했습니다 (HTTP {getattr(exc, 'code', '?')})"}
@@ -74,8 +120,17 @@ def fetch_latest(timeout: float = 4.0) -> dict[str, Any]:
         return {"ok": False, "offline": True, "message": f"네트워크 확인 실패 · {exc}"}
     except ValueError:
         return {"ok": False, "message": "릴리스 응답을 해석하지 못했습니다"}
-    if not isinstance(release, dict):
-        return {"ok": False, "message": "릴리스 응답 형식이 다릅니다"}
+    if isinstance(items, dict):          # 예전 /releases/latest 형태도 받아 준다
+        items = [items]
+    release = _pick_release(items if isinstance(items, list) else [])
+    if not release:
+        return {"ok": False, "message": "아직 빌드 릴리스가 없습니다"}
+    assets = [a for a in (release.get("assets") or []) if isinstance(a, dict)]
+    build_at = ""
+    for asset in assets:
+        stamp = str(asset.get("updated_at") or "") or str(asset.get("created_at") or "")
+        if stamp > build_at:
+            build_at = stamp
     return {
         "ok": True,
         "tag": str(release.get("tag_name") or ""),
@@ -83,6 +138,7 @@ def fetch_latest(timeout: float = 4.0) -> dict[str, Any]:
         "url": str(release.get("html_url") or RELEASES_URL),
         "download": _download_url(release),
         "published_at": str(release.get("published_at") or ""),
+        "build_at": build_at or str(release.get("published_at") or ""),
         "notes": str(release.get("body") or "")[:2000],
     }
 
@@ -119,20 +175,36 @@ def check(current: str, *, force: bool = False, timeout: float = 4.0) -> dict[st
                   "message": latest.get("message") or "업데이트를 확인하지 못했습니다",
                   "offline": bool(latest.get("offline"))}
     else:
-        tag = latest.get("tag") or latest.get("name") or ""
-        newer = is_newer(tag, current)
+        tag = str(latest.get("tag") or "")
+        name = str(latest.get("name") or tag)
+        version = _version_in(f"{tag} {name} {latest.get('notes') or ''}")
+        build_at = str(latest.get("build_at") or "")
+        if version:
+            newer = is_newer(version, current)
+            reason = "version"
+            message = (f"새 버전 v{version} 이 있습니다" if newer else f"최신 버전입니다 (v{current})")
+        else:
+            # 태그가 `latest-build` 처럼 버전이 없는 저장소 — 빌드 시각으로 '새 빌드' 판단
+            newer = build_is_newer(build_at)
+            reason = "build"
+            label = build_at[:16].replace("T", " ") if build_at else name
+            message = (f"새 빌드가 있습니다 · {name} ({label})" if newer
+                       else f"최신 빌드입니다 (v{current})")
         result = {
             "ok": True,
             "current": str(current),
-            "latest": tag.lstrip("v") or tag,
+            "latest": version or None,
             "tag": tag,
+            "name": name,
             "newer": bool(newer),
+            "reason": reason,
+            "build_at": build_at,
             "url": latest.get("url"),
             "download": latest.get("download"),
             "published_at": latest.get("published_at"),
             "notes": latest.get("notes"),
             "checked_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
-            "message": (f"새 버전 {tag} 이 있습니다" if newer else f"최신 버전입니다 (v{current})"),
+            "message": message,
         }
     with _lock:
         _cache, _cache_at = dict(result), time.monotonic()

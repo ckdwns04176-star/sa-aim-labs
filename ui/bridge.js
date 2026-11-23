@@ -1365,14 +1365,15 @@
       bar.hidden = !show;
       if (show) {
         bar.title = `${data.message || '새 버전이 있습니다'} · 클릭하면 릴리스 페이지가 열립니다`;
-        if (ver) ver.textContent = 'v' + String(data.latest || data.tag || '').replace(/^v/, '');
+        if (ver) ver.textContent = data.latest ? ('v' + String(data.latest).replace(/^v/, '')) : (data.name || '새 빌드');
       }
     }
     const info = $('#set-update-info');
     if (info) {
       if (!data) info.textContent = `현재 v${(AL.state && AL.state.meta && AL.state.meta.version) || '1.2.0'} · 업데이트를 확인해 보세요`;
-      else if (data.ok && data.newer) info.textContent = `새 버전 v${data.latest} 있음 · ${fmtLabel(data.published_at)} 공개`;
-      else if (data.ok) info.textContent = `최신 버전입니다 · v${data.current}`;
+      else if (data.ok && data.newer && data.latest) info.textContent = `새 버전 v${data.latest} 있음 · ${fmtLabel(data.published_at)} 공개`;
+      else if (data.ok && data.newer) info.textContent = `새 빌드 있음 · ${data.name || 'Latest build'} (${String(data.build_at || '').slice(0, 16).replace('T', ' ')})`;
+      else if (data.ok) info.textContent = `최신입니다 · v${data.current}`;
       else info.textContent = data.message || '업데이트를 확인하지 못했습니다';
       info.classList.toggle('on', !!(data && data.ok && !data.newer));
     }
