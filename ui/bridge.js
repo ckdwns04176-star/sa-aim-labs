@@ -1484,9 +1484,18 @@
           보여 주지 않고 오류·재시도 화면을 띄운다.
      브라우저 미리보기(--serve)에서만 샘플 데이터를 허용한다.
      ================================================================== */
-  const DESKTOP = window.__AL_DESKTOP__ === true;
-  const LOG_PATH = window.__AL_LOG__ || '';
-  const NO_WEBVIEW2 = window.__AL_NO_WEBVIEW2__ === true;
+  const DESKTOP = window.__AL_DESKTOP__ === true
+    || (location.protocol === 'file:' && !new URLSearchParams(location.search).has('preview'))
+    || new URLSearchParams(location.search).get('desktop') === '1';
+  /* 로그 경로: 브리지가 살아 있으면 bootstrap 응답의 meta.log_file 로 갱신되고,
+     브리지가 죽어 있으면(그때가 바로 오류 화면이 필요한 순간) 기본 안내 문구를 쓴다. */
+  const DEFAULT_LOG_HINT = '%APPDATA%\\SA_Aim_Labs\\logs\\app.log';
+  let LOG_HINT = window.__AL_LOG__ || DEFAULT_LOG_HINT;
+  function setLogHint(path) {
+    if (!path) return;
+    LOG_HINT = String(path);
+    window.__AL_LOG__ = LOG_HINT;
+  }
   const bootQuery = new URLSearchParams(location.search);
   const BOOT_TIMEOUT = Math.max(1000, Number(bootQuery.get('boottimeout')) || 15000);
   const BOOTSTRAP_TIMEOUT = Math.max(1500, Number(bootQuery.get('boottimeout')) || 20000);
@@ -1525,13 +1534,10 @@
     if (DESKTOP) {
       splashFinish('앱 연결 실패');
       showBridgeError(
-        NO_WEBVIEW2
-          ? 'Microsoft Edge WebView2 Runtime 이 설치되어 있지 않습니다. 이 런타임이 없으면 앱 화면은 뜨지만 데이터 연결(브리지)이 동작하지 않습니다.'
-          : `앱 내부 연결(pywebview 브리지)이 ${Math.round(BOOT_TIMEOUT / 1000)}초 안에 준비되지 않았습니다.`,
-        NO_WEBVIEW2
-          ? ['https://developer.microsoft.com/microsoft-edge/webview2/ 에서 "Evergreen Bootstrapper"를 설치한 뒤 앱을 다시 실행해 주세요.',
-             '설치 없이 진행하려면 [다시 시도]를 눌러 보세요.']
-          : ['잠시 뒤 [다시 시도]를 눌러 주세요.', '계속 안 되면 아래 로그 파일을 확인해 주세요.']
+        `앱 내부 연결(pywebview 브리지)이 ${Math.round(BOOT_TIMEOUT / 1000)}초 안에 준비되지 않았습니다.`,
+        ['Microsoft Edge WebView2 Runtime 이 없다면 아래 주소에서 "Evergreen Bootstrapper"를 설치한 뒤 앱을 다시 실행해 주세요. ' +
+         '(https://developer.microsoft.com/microsoft-edge/webview2/)',
+         '잠시 뒤 [다시 시도]를 눌러 주세요.', '계속 안 되면 아래 로그 파일을 확인해 주세요.']
       );
     } else {
       splashFinish('미리보기 모드');   /* 브라우저 미리보기에서만 */
@@ -1562,6 +1568,7 @@
     if (!result || !result.ok) {
       phase = 'failed';
       AL.real = false;
+      if (result && result.log_file) setLogHint(result.log_file);
       const message = (result && result.message) || '앱 데이터를 불러오지 못했습니다';
       if (DESKTOP) {
         splashFinish('앱 데이터를 불러오지 못했습니다');
@@ -1574,6 +1581,7 @@
     }
     try {
       if (result.state) {
+        if (result.state.meta && result.state.meta.log_file) setLogHint(result.state.meta.log_file);
         splashSet(58, '훈련 기록 · 티어 계산 중…');
         applyState(result.state);
         AL.ready = true;
@@ -1611,7 +1619,6 @@
   }
 
   /* ------------------------------------------------------------ 시작 오류 화면 */
-  const LOG_HINT = LOG_PATH || '%APPDATA%\\SA_Aim_Labs\\logs\\app.log';
 
   function showBridgeError(message, hints) {
     let el = document.getElementById('al-bridge-error');

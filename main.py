@@ -12,7 +12,6 @@ import logging
 import logging.handlers
 import os
 import sys
-import urllib.parse
 from pathlib import Path
 
 # Allow "python main.py" from any cwd and PyInstaller onefile builds alike.
@@ -245,14 +244,14 @@ def main(argv: list[str] | None = None) -> int:
     if missing:
         log.error("js_api is missing %s · the UI would boot without a bridge", missing)
 
-    # ?desktop=1 tells ui/ it runs inside the .exe (stricter boot: no sample data,
-    # explicit error screen).  log= is only for that error screen's guidance.
-    base_url = paths.index_url()
+    # .exe 는 순수 file:// URI 만으로 띄운다.  v1.0.1 은 여기에
+    # "?desktop=1&log=...&wv2=0" 쿼리스트링을 붙였는데, WebView2 가
+    # "file:///.../_MEI.../ui/index.html?desktop=1..." 을 파일 경로로 해석해
+    # "파일을 찾을 수 없음" 오류를 냈다 (사용자 제보).
+    # ui/ 는 location.protocol === 'file:' 로 데스크톱 실행을 스스로 판별하고,
+    # 로그 경로는 bootstrap 응답의 meta.log_file 을 쓴다 — URL 로 넘길 것이 없다.
+    url = paths.index_url()
     log_file = paths.log_dir() / "app.log"
-    sep = "&" if "?" in base_url else "?"
-    url = f"{base_url}{sep}desktop=1&log={urllib.parse.quote(str(log_file))}"
-    if os.name == "nt" and not webview2:
-        url += "&wv2=0"   # 오류 화면에 WebView2 설치 안내를 띄운다
     win_w, win_h = 1200, 750
     x, y = _center_position(win_w, win_h)
     log.info("window %sx%s at %s,%s", win_w, win_h, x, y)
