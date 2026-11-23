@@ -1157,10 +1157,18 @@
     /* ---------- 창 이동 (OS 네이티브 · 지연 없음) ---------- */
     const titlebar = $('#titlebar');
     if (titlebar) {
-      titlebar.addEventListener('mousedown', (e) => {
+      let dragMode = 'native';
+      titlebar.addEventListener('mousedown', async (e) => {
         if (!AL.real || e.button !== 0) return;
         if (e.target.closest('.winbtns')) return;
-        call('drag_window');
+        if (dragMode === 'js') return;      // pywebview 기본 드래그가 처리
+        const result = await call('drag_window');
+        if (result && result.supported === false) {
+          /* 네이티브 이동을 못 쓰는 환경: pywebview 공식 드래그 영역으로 폴백 */
+          dragMode = 'js';
+          titlebar.classList.add('pywebview-drag-region');
+          if (window.AL && AL.toast) AL.toast('창 이동: 기본 모드로 전환했습니다', true);
+        }
       });
       titlebar.addEventListener('dblclick', (e) => {
         if (!AL.real || e.target.closest('.winbtns')) return;

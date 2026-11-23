@@ -106,17 +106,25 @@ class Api:
 
     def _hwnd(self) -> int | None:
         native = getattr(self.window, "native", None)
-        if native is None:
-            return None
-        try:
-            handle = getattr(native, "Handle", None)
-            if handle is not None:
-                return int(handle.ToInt64() if hasattr(handle, "ToInt64") else handle)
-            handle = getattr(native, "_hwnd", None)
-            if handle:
-                return int(handle)
-        except Exception:  # noqa: BLE001
-            return None
+        if native is not None:
+            try:
+                handle = getattr(native, "Handle", None)
+                if handle is not None:
+                    return int(handle.ToInt64() if hasattr(handle, "ToInt64") else handle)
+                handle = getattr(native, "_hwnd", None)
+                if handle:
+                    return int(handle)
+            except Exception:  # noqa: BLE001
+                pass
+        # 백엔드가 달라도 우리 창을 제목으로 찾아낸다 (pywebview 내부 구조 의존 제거)
+        if os.name == "nt":
+            try:
+                import ctypes
+
+                found = ctypes.windll.user32.FindWindowW(None, paths.APP_TITLE)  # type: ignore[attr-defined]
+                return int(found) or None
+            except Exception:  # noqa: BLE001
+                return None
         return None
 
     def window_bounds(self) -> dict[str, Any]:
