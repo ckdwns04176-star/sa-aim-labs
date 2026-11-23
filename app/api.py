@@ -1299,9 +1299,10 @@ class Api:
                 raise ValueError("플레이리스트에 담을 시나리오가 없습니다 · 먼저 추천을 불러와 주세요")
             folder = kovak.find_playlists_dir(target_dir or None)
             target = folder or paths.playlists_dir()
+            trainer_label = "KovaaK's" if game == "kovak" else "Aim Lab"
             result = kovak.write_playlist(
                 (name or default_name).strip(), names, target=target,
-                description=f"SA AIM LABS · {'KovaaK\'s' if game == 'kovak' else 'Aim Lab'} · {weapon} · {today.isoformat()}",
+                description="SA AIM LABS · {} · {} · {}".format(trainer_label, weapon, today.isoformat()),
             )
             note = ""
             if game != "kovak":
