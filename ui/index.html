@@ -2115,7 +2115,10 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
    v1.5.0 · 설정 팝업 고정 크기 (#27) + 테마·배율 픽커
    ============================================================ */
 #settings-mask .modal{width:820px;height:648px;max-width:96%;display:flex;flex-direction:column}
-#settings-mask .modal-bd{flex:1;min-height:0;overflow:hidden;padding:12px 14px 10px}
+#settings-mask .modal-bd{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:12px 14px 10px}
+#settings-mask #set-panes{flex:1;min-height:0;display:flex;flex-direction:column}
+#settings-mask #set-panes>.set-pane.on{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:2px}
+#settings-mask #set-data{flex:0 0 auto;margin-top:2px}
 #settings-mask .settings-grid{height:100%;overflow-y:auto;padding-right:2px}
 #settings-mask .set-pane[data-pane="data"]{grid-column:1 / -1}
 .set-sub{font-size:9.5px;font-weight:700;letter-spacing:.10em;color:#5E6879;margin:2px 0 0}
