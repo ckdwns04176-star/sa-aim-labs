@@ -697,6 +697,14 @@
     /* v1.3.1 — 무기 표기는 '스나' / '라플' 만 (앞의 '주무기 ' 제거) */
     const weaponLabel = Number((barracks.recent || {}).sniper || 0) >= Number((barracks.recent || {}).assault || 0)
       ? '스나' : '라플';
+    /* v1.5.0 (#2) — 병영수첩 프로필 사진이 있으면 그대로, 없으면 전술 엠블럼 */
+    const _links = (st && st.barracks_links) || {};
+    const photo = String(_links.photo || '').trim();
+    const hasPhoto = !!photo && !/user_img\.(jpg|png)/i.test(photo);
+    const EMBLEM = '<span class="bn-emb"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><use href="#i-shield"/></svg></span>';
+    const avaInner = hasPhoto
+      ? `${EMBLEM}<img src="${esc(photo)}" alt="" loading="lazy" onerror="this.remove()">`
+      : EMBLEM;
     const initial = (barracks.nickname || '?').charAt(0);
     const clanRaw = String(basic.clan || '').trim();
     const clan = (!clanRaw || clanRaw === '-') ? '클랜 없음' : clanRaw;
@@ -727,7 +735,7 @@
       banner.innerHTML = `
         <div class="emb-bg"><img src="assets/${band.img}.png" alt=""></div>
         <div class="bn-left">
-          <div class="bn-ava">${initial}<i></i></div>
+          <div class="bn-ava${hasPhoto ? ' photo' : ''}">${avaInner}<i></i></div>
           <div>
             <div class="bn-name"><h2 class="bn-self" role="button" tabindex="0" data-ouid="${esc(barracks.ouid || '')}"
                 title="내 병영수첩 상세 페이지 열기">${barracks.nickname}</h2>

@@ -541,8 +541,8 @@ svg{display:block}
 .bn-left{position:relative;z-index:2;display:flex;align-items:center;gap:13px}
 .bn-ava{
   width:58px;height:58px;border-radius:50%;display:grid;place-items:center;position:relative;
-  background:linear-gradient(150deg,#3A4A68,#1A2334);border:1px solid var(--ac60);
-  font-size:23px;font-weight:900;color:var(--txt);box-shadow:0 0 0 4px var(--ac06),0 0 26px var(--ac22);
+  background:#171B26;border:1px solid var(--line2);
+  font-size:23px;font-weight:900;color:var(--txt);box-shadow:none;
 }
 .bn-ava i{position:absolute;right:1px;bottom:1px;width:11px;height:11px;border-radius:50%;background:var(--green);border:2.5px solid #0E1626}
 .bn-name{display:flex;align-items:center;gap:7px}
@@ -2284,6 +2284,17 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
 #s-leaderboard .lb-row{flex:1 1 0;min-height:38px}
 #s-leaderboard .lb-row.hd{flex:0 0 auto;min-height:24px}
 #s-leaderboard .lb-foot{flex:0 0 auto}
+
+/* v1.5.0 (#2) — 병영수첩 아바타: 프로필 사진 또는 전술 엠블럼 */
+.bn-ava.photo img{width:100%;height:100%;object-fit:cover;border-radius:inherit;display:block}
+.bn-ava svg{width:26px;height:26px;color:var(--txt2)}
+
+/* v1.5.0 (#2) — 사진이 없거나 실패하면 엠블럼이 그대로 보인다 */
+.bn-ava{overflow:hidden}
+.bn-ava .bn-emb{display:grid;place-items:center}
+.bn-ava .bn-emb svg{width:26px;height:26px;color:var(--txt2)}
+.bn-ava img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;border-radius:50%}
+.bn-ava i{z-index:2}
 </style>
 </head>
 <body>
