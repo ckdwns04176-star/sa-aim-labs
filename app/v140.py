@@ -11,13 +11,19 @@ from typing import Any, Iterable, Sequence
 
 from . import nexon, scoring
 
-# 서든 병영수첩 URL · ouid 는 32자리 hex 다.
+# 서든 병영수첩 URL · ouid 는 32자리 hex, 병영수첩 프로필 ID 는 16자리 hex + SA.
 OUID_RE = re.compile(r"[0-9a-fA-F]{32}")
+SN_RE = re.compile(r"[0-9A-Fa-f]{16}SA")
 _SPLIT_RE = re.compile(r"[,，\n\t ]+")
 
 
 def is_ouid(text: str) -> bool:
     return bool(re.fullmatch(r"[0-9a-fA-F]{32}", str(text or "").strip()))
+
+
+def is_sn(text: str) -> bool:
+    """병영수첩 프로필 ID (`96E8A3306F1061D2SA`)."""
+    return bool(re.fullmatch(r"[0-9A-Fa-f]{16}SA", str(text or "").strip()))
 
 
 def normalize_target(text: Any) -> str:
@@ -32,6 +38,10 @@ def normalize_target(text: Any) -> str:
     match = OUID_RE.search(raw)
     if match:
         return match.group(0)
+    # v1.5.0 — 병영수첩 프로필 URL/{…SA}/detail 을 붙여넣어도 ID 를 꺼내 쓴다 (#13)
+    sn = SN_RE.search(raw)
+    if sn:
+        return sn.group(0).upper()
     return raw[:12]
 
 

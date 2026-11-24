@@ -146,6 +146,39 @@ def open_target(url: str) -> dict[str, Any]:
                 "message": f"실행 앱을 찾지 못했습니다 · Steam 설치를 확인해 주세요 ({exc})"}
 
 
+def copy_text(text: str) -> dict[str, Any]:
+    """클립보드 복사 (v1.5.0 · 내전 팀 결과).  Windows API 만 쓴다."""
+    value = str(text or "")
+    if not value:
+        return {"ok": False, "message": "복사할 내용이 없습니다"}
+    if os.name != "nt":
+        return {"ok": False, "message": "클립보드는 Windows 전용 기능입니다"}
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        CF_UNICODETEXT = 13
+        GMEM_MOVEABLE = 0x0002
+        if not user32.OpenClipboard(None):
+            return {"ok": False, "message": "클립보드를 열지 못했습니다"}
+        try:
+            user32.EmptyClipboard()
+            size = (len(value) + 1) * ctypes.sizeof(ctypes.c_wchar)
+            handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, size)
+            if not handle:
+                return {"ok": False, "message": "클립보드 메모리를 잡지 못했습니다"}
+            locked = kernel32.GlobalLock(handle)
+            ctypes.memmove(locked, ctypes.create_unicode_buffer(value), size)
+            kernel32.GlobalUnlock(handle)
+            user32.SetClipboardData(CF_UNICODETEXT, handle)
+            return {"ok": True, "length": len(value)}
+        finally:
+            user32.CloseClipboard()
+    except Exception as exc:  # noqa: BLE001 - 복사 실패는 치명적이지 않다
+        return {"ok": False, "message": f"복사 실패 · {exc}"}
+
+
 def steam_installed() -> bool:
     if os.name != "nt":
         return False

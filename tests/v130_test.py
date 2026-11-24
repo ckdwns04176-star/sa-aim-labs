@@ -104,7 +104,7 @@ def backend() -> None:
     from app import drs, nvidia, paths, scoring, winutil
     import shutil
 
-    check("APP_VERSION 1.4.0", paths.APP_VERSION == "1.4.0", paths.APP_VERSION)
+    check("APP_VERSION 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
 
     # ---- 1. 창: 크기만 고정, 위치는 자유 + 드래그 중 감시 pause
     plan = winutil.window_fix_plan((300, 900, 1600, 900), work=(0, 0, 1920, 1040))
@@ -523,7 +523,8 @@ def ui_checks() -> None:
         })""")
         page.screenshot(path=str(SHOTS / "v130-tiers.png"))
         check("티어표 18행 + 분포 막대", tiers["rows"] == 18 and tiers["dist"] == 18, str(tiers))
-        check("내 티어 강조(me-row)", tiers["now"] == 1 and "내 위치" in tiers["nowText"], tiers["nowText"][:40])
+        # v1.5.0 — 내 줄은 '내 자리' 배지 + '◀ 내 티어' 로 표시
+        check("내 티어 강조(me-row)", tiers["now"] == 1 and "내 자리" in tiers["nowText"], tiers["nowText"][:40])
         check("분포 출처 안내", "분포" in (tiers["note"] or ""), (tiers["note"] or "")[:40])
         page.click('#tier-table .tier-row[data-tier="6"]')
         page.wait_for_timeout(400)
@@ -614,17 +615,12 @@ def ui_checks() -> None:
         }""")
         check("화면 전환 애니메이션 0.3~0.4초", anim["cls"] and anim["name"] == "screenIn"
               and 0.25 <= float(str(anim["dur"]).replace("s", "") or 0) <= 0.45, str(anim))
-        page.mouse.move(640, 420)
-        page.wait_for_timeout(200)
-        page.mouse.move(30, 600)
-        page.wait_for_timeout(400)
-        tip_box = page.evaluate("""() => { const t = document.querySelector('.micro .tip'); const r = t.getBoundingClientRect(); return {x: r.left + r.width/2, y: r.top + r.height/2}; }""")
-        page.mouse.move(tip_box["x"], tip_box["y"])
-        page.wait_for_timeout(400)
-        tip = page.evaluate("""() => { const l = document.getElementById('tip-layer');
-            return {exists: !!l, show: l ? l.classList.contains('show') : false,
-                    text: l ? l.textContent.slice(0, 40) : ''}; }""")
-        check("? 아이콘 호버 툴팁", tip["exists"] and tip["show"] and len(tip["text"]) > 2, str(tip))
+        # v1.5.0 (#7) — ? 도움말 아이콘은 전부 삭제됐다
+        gone = page.evaluate("""() => {
+            const live = [...document.querySelectorAll('.tip')].filter(el => getComputedStyle(el).display !== 'none');
+            return {count: live.length, shown: document.querySelectorAll('.tip').length};
+        }""")
+        check("? 아이콘 전부 삭제", gone["count"] == 0, str(gone))
         fonts = page.evaluate("""() => {
             const fs = (sel) => { const el = document.querySelector(sel); return el ? parseFloat(getComputedStyle(el).fontSize) : 0; };
             return {rec: fs('.rec-name'), sub: fs('.card-sub'), nav: fs('.nav-item'),

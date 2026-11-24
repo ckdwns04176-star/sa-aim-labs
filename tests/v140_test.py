@@ -276,7 +276,7 @@ def mock_js(state: dict) -> str:
 def backend_checks() -> None:
     from app import paths, scoring, tilt, updates, v140
 
-    check("APP_VERSION 1.4.0", paths.APP_VERSION == "1.4.0", paths.APP_VERSION)
+    check("APP_VERSION 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
 
     # 위협도: 티어가 압도적이어야 한다 (실버 60% < 불레전드 50%)
     silver = v140.threat_score(1300, 60, 1200, win=55, streak=3)
@@ -456,7 +456,7 @@ def ui() -> None:
             score: (document.getElementById('home-score')||{}).textContent,
             kpi: (document.getElementById('kpi-score')||{}).textContent,
             buttons: ['home-start','home-barracks','home-utils'].filter(id => !!document.getElementById(id)).length,
-            bar: (document.querySelector('.home-bar')||{}).innerText || ''})""")
+            bar: (document.getElementById('home-bar')||{}).innerText || ''})""")
         check("앱 시작 = 홈 화면", home["shown"] and home["dashHidden"], str(home["shown"]))
         num = lambda v: str(v or "").replace(",", "").replace(" ", "")
         check("홈 히어로 — 닉네임·통합 점수 일치(반올림 통일)", home["name"] == "휴가중." and num(home["score"]) == num(home["kpi"]),
@@ -465,31 +465,31 @@ def ui() -> None:
         check("홈 하단 1줄 상태", all(k in home["bar"] for k in ("오늘 추천", "연속", "이번 주 목표")), home["bar"][:60].replace("\n", " "))
         page.screenshot(path=str(SHOTS / "v140-home.png"))
 
-        # 2. 접이식 사이드바
+        # 2. 60px 아이콘 레일 (v1.5.0 · #15 세로 일자 정렬)
         rail = page.evaluate("""() => {
             const sb = document.getElementById('sidebar');
             const main = document.querySelector('.main');
+            const cx = (el) => { const r = el.getBoundingClientRect(); return Math.round((r.left + r.width / 2) * 10) / 10; };
+            const logo = document.querySelector('.rail-logo');
+            const gear = document.getElementById('settings-btn');
+            const items = [...document.querySelectorAll('.sidebar .nav-item')].map(cx);
             return {w: Math.round(sb.getBoundingClientRect().width), mainLeft: Math.round(main.getBoundingClientRect().left),
-                    labelOpacity: getComputedStyle(document.querySelector('.nav-item .ni-t')).opacity};
+                    logo: cx(logo), gear: cx(gear), items,
+                    lastTop: items.length ? Math.round(document.querySelectorAll('.sidebar .nav-item')[document.querySelectorAll('.sidebar .nav-item').length-1].getBoundingClientRect().bottom) : 0,
+                    gearTop: Math.round(gear.getBoundingClientRect().top)};
         }""")
+        centers = [rail["logo"]] + rail["items"] + [rail["gear"]]
+        check("사이드바 레일 ≈ 60px", 58 <= rail["w"] <= 62, str(rail["w"]))
+        check("메인 화면이 레일 옆까지 넓게", rail["mainLeft"] <= 61, str(rail["mainLeft"]))
+        check("로고·메뉴·설정 아이콘 x축 일자 정렬", (max(centers) - min(centers)) <= 1.5, str(centers))
+        check("설정 버튼은 레일 맨 아래", rail["gearTop"] > rail["lastTop"], f"{rail['gearTop']} > {rail['lastTop']}")
         page.mouse.move(30, 320)
-        page.wait_for_timeout(460)
+        page.wait_for_timeout(300)
         opened = page.evaluate("""() => {
             const sb = document.getElementById('sidebar');
-            const main = document.querySelector('.main');
-            const veil = document.getElementById('side-veil');
-            return {w: Math.round(sb.getBoundingClientRect().width), mainLeft: Math.round(main.getBoundingClientRect().left),
-                    labelOpacity: getComputedStyle(document.querySelector('.nav-item .ni-t')).opacity,
-                    veil: getComputedStyle(veil).opacity,
-                    blur: getComputedStyle(veil).backdropFilter || getComputedStyle(veil).webkitBackdropFilter,
-                    shadow: getComputedStyle(sb).boxShadow.slice(0, 30)};
+            return {w: Math.round(sb.getBoundingClientRect().width)};
         }""")
-        check("사이드바 레일 ≈ 60px", 58 <= rail["w"] <= 62, str(rail))
-        check("메인 화면이 레일 옆까지 넓게", rail["mainLeft"] <= 61, str(rail["mainLeft"]))
-        check("호버 시 메뉴 글씨 펼쳐짐", float(opened["labelOpacity"]) > 0.9 and opened["w"] > 190, str(opened))
-        check("호버 = 오버레이 (메인을 밀지 않음)", opened["mainLeft"] == rail["mainLeft"], f"{rail['mainLeft']} → {opened['mainLeft']}")
-        check("호버 시 뒤 배경 딤 + 블러", float(opened["veil"]) > 0.5 and "blur" in (opened["blur"] or ""), str(opened["blur"]))
-        page.screenshot(path=str(SHOTS / "v140-sidebar.png"))
+        check("호버해도 레일 폭 그대로(60px)", opened["w"] == rail["w"], str(opened))
         page.mouse.move(700, 400)
         page.wait_for_timeout(400)
 
@@ -518,7 +518,8 @@ def ui() -> None:
         check("차트 2개 넓게", len(dash["charts"]) == 2, str(dash["charts"]))
         check("'오늘 /5 완료' 중복 제거", dash["dupToday"] == 0, str(dash["dupToday"]))
         check("STREAK 표기 정상", "STREAK" in dash["streakLabel"] and "S TREAK" not in dash["streakLabel"], dash["streakLabel"])
-        check("카드 회색 부연설명 제거(? 툴팁)", dash["greySubs"] == 0, str(dash["greySubs"]))
+        # v1.5.0 (#7) — ? 아이콘을 없애고 회색 설명은 화면에 남긴다
+        check("카드 회색 설명 표시 (설명 2개 이상)", dash["greySubs"] >= 2, str(dash["greySubs"]))
         check("KPI 카드 높이 균일", len(set(dash["cards"])) == 1, str(dash["cards"]))
         check("타이틀바 현재 화면명", dash["titlebar"] == "에임 대시보드", dash["titlebar"])
         page.screenshot(path=str(SHOTS / "v140-dashboard.png"))
@@ -578,7 +579,8 @@ def ui() -> None:
         check("닉네임·클랜 링크 분리", br["selfLink"], "")
         check("목표 카드에 현재/목표 명확 표기", all(("현재" in g and "목표" in g) for g in br["goals"]), str(br["goals"]))
         check("목표 카드 빨간 부족 배지 제거", br["goalBadges"] == 0, str(br["goalBadges"]))
-        check("병영수첩에 스카우팅·듀오·리포트 버튼", br["scout"] and br["duo"] and br["report"], "")
+        # v1.5.0 (#11) — 스카우팅·듀오는 전술 도구로만 옮겼다
+        check("병영수첩에 리포트만 (스카우팅·듀오 제거)", br["report"] and not br["scout"] and not br["duo"], str(br))
         page.screenshot(path=str(SHOTS / "v140-barracks.png"))
 
         # 클랜 클릭 → 클랜 홈페이지 URL

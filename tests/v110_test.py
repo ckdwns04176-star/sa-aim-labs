@@ -31,11 +31,9 @@ RESULTS: list[tuple[str, bool, str]] = []
 
 
 def _open_rail(page) -> None:
-    """v1.4.0 — 트레이너/무기 토글은 사이드바를 호버해야 펼쳐진다."""
-    page.mouse.move(640, 420)
-    page.wait_for_timeout(220)
-    page.mouse.move(30, 600)
-    page.wait_for_timeout(360)
+    """v1.5.0 — 트레이너/무기 토글은 에임 대시보드 안으로 옮겼다 (#16)."""
+    page.evaluate("() => { document.querySelectorAll('.screen').forEach(s => { s.hidden = (s.id !== 's-dashboard'); }); }")
+    page.wait_for_timeout(120)
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -180,12 +178,15 @@ def mock_js(state: dict) -> str:
 def backend() -> None:
     from app import scoring, winutil, paths
 
-    check("버전 1.4.0", paths.APP_VERSION == "1.4.0", paths.APP_VERSION)
+    check("버전 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
 
+    import datetime as _dt
+    _d1 = (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
+    _d2 = _dt.date.today().isoformat()
     records = [
-        {"date": "2026-11-22", "created_at": "2026-11-22T21:00:00", "game": "kovak", "weapon": "sniper",
+        {"date": _d1, "created_at": _d1 + "T21:00:00", "game": "kovak", "weapon": "sniper",
          "scores": {"precision": 200, "wide": 200, "micro": 200, "track": 200, "switch": 200}},
-        {"date": "2026-11-23", "created_at": "2026-11-23T19:00:00", "game": "aimlab", "weapon": "rifle",
+        {"date": _d2, "created_at": _d2 + "T19:00:00", "game": "aimlab", "weapon": "rifle",
          "scores": {"precision": 100000, "wide": 100000, "micro": 100000, "track": 100000, "switch": 100000}},
     ]
     values = scoring.profile_values(records)
@@ -393,7 +394,9 @@ def ui() -> None:
             return item ? item.parentElement.textContent.replace(/\\s+/g, ' ').trim() : '';
         }""")
         # v1.4.0 — PB 글자 대신 숫자만 (미기록은 '-')
-        check("라이브러리 행에 최고 기록 숫자만 표시", "PB" not in lib_row and lib_row.strip().endswith(("182", "-")), lib_row[:70])
+        # v1.5.0 — 행 우측에 추천 제외 토글(⊘)이 붙어 PB 뒤에 온다 (#5)
+        _clean = lib_row.replace("⊘", "").replace("↺", "").strip()
+        check("라이브러리 행에 최고 기록 숫자만 표시", "PB" not in lib_row and _clean.endswith(("182", "-")), lib_row[:70])
         _open_rail(page)
         page.click('.seg-game .seg-btn[data-game="aimlab"]')
         page.wait_for_timeout(450)

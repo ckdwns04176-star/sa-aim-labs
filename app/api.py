@@ -16,7 +16,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from . import kovak, nexon, nvidia, paths, scoring, supabase_sync, tilt, tray, updates, v140, winutil
+from . import barracks as barracks_mod, kovak, nexon, nvidia, paths, scoring, supabase_sync, tilt, tray, updates, v140, v150, winutil
 from .store import Store, now_iso, today_str
 
 GAMES = ("kovak", "aimlab")
@@ -51,6 +51,7 @@ def tray_ref() -> Any:
 
 
 _GUARD_REF: Any = None
+_CLOSE_ALLOWED = False
 
 
 def attach_guard(guard: Any) -> None:
@@ -71,6 +72,32 @@ class Api:
         # v1.4.0 — 연패 브레이크 감시 (설정 ON + 서든 실행 중일 때만 동작)
         self._tilt: tilt.TiltWatcher | None = None
         self._tilt_lock = __import__("threading").Lock()
+        # v1.5.0 — 코박스·에임랩 종료 감지 · 클라우드 자동 백업
+        self._trainer_watch: v150.TrainerWatch | None = None
+        self._trainer_lock = __import__("threading").Lock()
+        self._cloud_stop = __import__("threading").Event()
+        self._cloud_thread: Any = None
+        # v1.5.0 — 모니터 해상도·OS 배율 (main.py 가 창을 만들기 전에 채운다)
+        self._display: dict[str, Any] = {"width": 0, "height": 0, "scale": 1.0, "auto_scale": 100}
+
+    def set_display(self, width: int = 0, height: int = 0, scale: float = 1.0) -> dict[str, Any]:
+        """모니터 작업 영역·OS 배율을 받아 QHD 자동 보정값을 정한다 (#1)."""
+        auto = v150.auto_ui_scale(width, height, scale)
+        self._display = {"width": int(width or 0), "height": int(height or 0),
+                         "scale": float(scale or 1.0), "auto_scale": auto}
+        return dict(self._display)
+
+    set_display._serializable = False  # type: ignore[attr-defined]
+
+    def effective_ui_scale(self) -> int:
+        """화면에 적용할 배율 — 사용자가 직접 고른 값이 우선, 아니면 QHD 자동값."""
+        raw = self.store.settings.get("ui_scale")
+        auto = bool(self.store.settings.get("ui_scale_auto", True))
+        if auto:
+            return int(self._display.get("auto_scale") or v150.DEFAULT_UI_SCALE)
+        return v150.clean_ui_scale(raw)
+
+    effective_ui_scale._serializable = False  # type: ignore[attr-defined]
 
     def start_update_check(self) -> None:
         """앱 시작 시 백그라운드로 새 버전을 조용히 확인한다 (실패해도 무시)."""
@@ -136,9 +163,35 @@ class Api:
                         message="이 앱은 1200×750 고정 크기로만 동작합니다")
 
     def close_window(self) -> dict[str, Any]:
+        """완전 종료 — OS 닫기 이벤트가 이 선택을 막지 않게 허용 플래그를 먼저 세운다."""
+        global _CLOSE_ALLOWED
+        _CLOSE_ALLOWED = True
+        try:
+            self.shutdown("exit")
+        except Exception:  # noqa: BLE001 - 종료를 막지 않는다
+            log.debug("shutdown before close failed", exc_info=True)
         if self._win:
             self._win.destroy()
         return self._ok()
+
+    def allow_close(self) -> bool:
+        """main.py 의 WM_CLOSE / clossing 핸들러가 확인한다 (v1.5.0 · #23)."""
+        return bool(_CLOSE_ALLOWED)
+
+    allow_close._serializable = False  # type: ignore[attr-defined]
+
+    def request_close(self) -> dict[str, Any]:
+        """작업표시줄 ✕·Alt+F4 로 닫힐 때 화면에 같은 확인 팝업을 띄운다."""
+        window = self._win
+        if window is None:
+            return self._err("창이 없습니다")
+        try:
+            window.evaluate_js("window.AL && AL.confirmClose ? AL.confirmClose() : null")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+        return self._ok()
+
+    request_close._serializable = False  # type: ignore[attr-defined]
 
     def lock_window_style(self) -> dict[str, Any]:
         """Win32 스타일에서 최대화·크기조절 비트를 지운다 (main.py 가 시작 시 1회)."""
@@ -286,6 +339,7 @@ class Api:
         records = store.records()
         today = _dt.date.today()
         settings = store.public_settings()
+        excluded_names = [str(n) for n in (settings.get("excluded_scenarios") or []) if str(n).strip()]
         style = scoring.user_style(records, today=today)
         attendance = store.attendance()
         streak = scoring.streak(records, today, attendance)
@@ -298,7 +352,9 @@ class Api:
                 try:
                     summary = scoring.summary(records, game, weapon, today)
                     recs = self._today_recs(summary["values"], records, game, weapon, today)
-                    summary["recs"] = recs
+                    # v1.5.0 — '추천에서 제외' 한 시나리오는 오늘의 추천에서만 뺀다
+                    summary["recs"] = v150.apply_exclusions(recs, excluded_names)
+                    summary["excluded_count"] = len(recs) - len(summary["recs"])
                     # 오늘 `+ 더 연습하기` 로 연 시나리오 (아직 화면에 남아 있어야 한다)
                     entry = next((m for m in reversed(more_rows)
                                   if m.get("date") == today.isoformat()
@@ -444,6 +500,39 @@ class Api:
         except Exception:  # noqa: BLE001
             gate_state = {"blocked": False, "reason": "unknown"}
 
+        # ── v1.5.0 · 테마·배율·맵 이미지·등락 뱃지·사용자 시나리오·병영수첩 링크 ──
+        theme_key = v150.clean_theme(settings.get("theme"))
+        ui_scale = self.effective_ui_scale()
+        excluded = [str(n) for n in (settings.get("excluded_scenarios") or []) if str(n).strip()]
+        try:
+            deltas = v150.delta_badges(self.store.barracks_history())
+        except Exception:  # noqa: BLE001
+            log.exception("state · delta badges failed")
+            deltas = []
+        custom_rows = [r for r in self.store.custom_scenarios() if isinstance(r, dict) and r.get("name")]
+        library_counts = scoring.scenario_library()
+        for row in custom_rows:
+            game = row.get("game") if row.get("game") in GAMES else "kovak"
+            for weapon in WEAPONS:
+                library_counts[f"{game}-{weapon}"] = library_counts.get(f"{game}-{weapon}", 0) + 1
+        scenario_rows = {f"{g}-{w}": scoring.scenarios_for(g, w) for g in GAMES for w in WEAPONS}
+        for row in custom_rows:
+            game = row.get("game") if row.get("game") in GAMES else "kovak"
+            area = str(row.get("area") or "precision")
+            entry = {"name": row["name"], "area": area, "area_key": area,
+                     "area_idx": scoring.AREA_INDEX.get(area, 0), "priority": 99,
+                     "custom": True, "diff": row.get("diff"), "play_url": row.get("play_url"),
+                     "stats_url": row.get("stats_url"), "memo": row.get("memo"),
+                     "excluded": v150.is_excluded(row["name"], excluded)}
+            for weapon in WEAPONS:
+                scenario_rows[f"{game}-{weapon}"].append(dict(entry))
+        links = self._barracks_links(barracks)
+        try:
+            watch_state = self._trainer_state()
+        except Exception:  # noqa: BLE001
+            watch_state = {"enabled": bool(settings.get("watch_trainers", True)), "supported": os.name == "nt",
+                           "running": [], "last": None}
+
         return {
             "meta": {
                 "version": paths.APP_VERSION,
@@ -478,7 +567,11 @@ class Api:
                 "trainers": profile["trainers"], "daily": profile["daily"],
                 "week_delta": profile["week_delta"], "integrated": True,
             },
-            "library": scoring.scenario_library(),
+            "library": library_counts,
+            "scenarios": scenario_rows,
+            "excluded_scenarios": excluded,
+            "custom_scenarios": custom_rows,
+            "map_index": v150.map_index_payload(),
             "pbs": scoring.pb_rows(records),
             "memos": dict(store.memos()),
             "today_scores": scoring.today_scores(records, today),
@@ -487,7 +580,6 @@ class Api:
             "streak": streak,
             "records": records[-200:],
             "record_count": len(records),
-            "scenarios": {f"{g}-{w}": scoring.scenarios_for(g, w) for g in GAMES for w in WEAPONS},
             "areas": scoring.AREAS,
             "tiers": scoring.TIERS,
             "utils": utils_state,
@@ -525,6 +617,18 @@ class Api:
             "v120": True,
             "v130": True,
             "v140": True,
+            "v150": True,
+            "theme": theme_key,
+            "themes": [dict(t) for t in v150.THEMES.values()],
+            "ui_scale": ui_scale,
+            "ui_scale_setting": v150.clean_ui_scale(settings.get("ui_scale")),
+            "ui_scale_auto": bool(settings.get("ui_scale_auto", True)),
+            "display": dict(self._display),
+            "ui_scales": list(v150.UI_SCALES),
+            "delta": deltas,
+            "barracks_links": links,
+            "trainer_watch": watch_state,
+            "cloud_auto": {**self.store.cloud_auto(), "enabled": bool(settings.get("auto_cloud", True))},
         }
 
     # ------------------------------------------------------------ v1.3.0 helpers
@@ -666,7 +770,8 @@ class Api:
         allowed = {"nickname", "api_key", "kovak_path", "aimlab_path", "auto_sync", "auto_launch",
                    "tray_background", "notify", "autosave", "goals", "cloud_email",
                    "hotkey_enabled", "kovak_stats_path", "kovak_autofill", "week_goals",
-                   "tilt_watch", "tilt_interval", "weapon", "game", "onboarded"}
+                   "tilt_watch", "tilt_interval", "weapon", "game", "onboarded",
+                   "theme", "ui_scale", "ui_scale_auto", "excluded_scenarios", "watch_trainers", "auto_cloud"}
         clean: dict[str, Any] = {}
         for key, value in (patch or {}).items():
             if key not in allowed:
@@ -690,6 +795,22 @@ class Api:
                 value = clean_goals
             elif key in ("kovak_stats_path", "kovak_path", "aimlab_path"):
                 value = str(value or "").strip()[:400]
+            elif key == "theme":
+                value = v150.clean_theme(value)
+            elif key == "ui_scale":
+                value = v150.clean_ui_scale(value)
+                clean["ui_scale_auto"] = False
+            elif key == "ui_scale_auto":
+                value = bool(value)
+            elif key == "excluded_scenarios":
+                if not isinstance(value, (list, tuple)):
+                    continue
+                seen: list[str] = []
+                for name in value:
+                    text = str(name or "").strip()[:80]
+                    if text and text.lower() not in {s.lower() for s in seen}:
+                        seen.append(text)
+                value = seen[:200]
             elif isinstance(value, bool):
                 value = bool(value)
             clean[key] = value
@@ -705,6 +826,13 @@ class Api:
         self.store.update_settings(clean)
         if "hotkey_enabled" in clean:
             self._apply_hotkey(bool(clean["hotkey_enabled"]))
+        if "watch_trainers" in clean:
+            try:
+                watcher = self._trainer_watch_obj()
+                watcher.enabled = bool(clean["watch_trainers"])
+                watcher.start() if clean["watch_trainers"] else watcher.stop()
+            except Exception:  # noqa: BLE001
+                log.debug("trainer watch toggle failed", exc_info=True)
         return self.get_state()
 
     def save_cloud_config(self, url: str, anon_key: str) -> dict[str, Any]:
@@ -967,6 +1095,13 @@ class Api:
             self.store.save()
             member = self._member_from_barracks(barracks)
             self._upsert_member(member)
+            # v1.5.0 — 병영수첩 실제 주소(user_nexon_sn·클랜 ID·프로필 사진)도 함께 연결.
+            # 사이트가 막혀 있으면 조용히 넘어간다 (최신화 자체는 성공).
+            try:
+                if not (self.store.barracks_ids().get(str(barracks["nickname"]).lower()) or {}).get("sn"):
+                    self._barracks_resolver().lookup(barracks["nickname"])
+            except Exception:  # noqa: BLE001
+                log.debug("barracks link resolve skipped", exc_info=True)
             return {"ok": True, "barracks": barracks, "state": self._build_state(),
                     "calls": client.calls, "cache": client.cache_stats(),
                     "message": f"{barracks['nickname']} 최신화 완료"}
@@ -1153,31 +1288,336 @@ class Api:
         result.setdefault("folder", str(folder))
         return result
 
-    def open_barracks_page(self, ouid: str | None = None) -> dict[str, Any]:
-        """서든 병영수첩 홈페이지를 기본 브라우저로 연다 (본인/친구 ouid)."""
+    def open_playlists_folder(self) -> dict[str, Any]:
+        """코박스 Playlists 폴더를 연다 (v1.5.0 #6 · 없으면 앱 데이터 폴더)."""
+        folder = kovak.find_playlists_dir(None) or paths.playlists_dir()
+        try:
+            Path(folder).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            pass
+        result = winutil.open_folder(str(folder))
+        result.setdefault("folder", str(folder))
+        result.setdefault("message", f"플레이리스트 폴더를 열었습니다 · {folder}")
+        return result
+
+    def open_barracks_page(self, ouid: str | None = None, nickname: str | None = None) -> dict[str, Any]:
+        """서든 병영수첩 홈페이지를 기본 브라우저로 연다 (v1.5.0 · user_nexon_sn 사용)."""
+        nick = str(nickname or "").strip() or (self.store.settings.get("nickname") or "").strip()
         target = str(ouid or "").strip()
-        if not target:
-            barracks = self.store.barracks_cache().get(self.store.settings.get("nickname") or "", {})
-            target = str((barracks or {}).get("ouid") or "").strip()
-        if not target:
-            return {"ok": False, "message": "병영수첩을 한 번 최신화하면 홈페이지로 바로 갈 수 있습니다"}
-        url = f"https://barracks.sa.nexon.com/{target}/detail"
+        sn = barracks_mod.parse_sn(target) or barracks_mod.parse_sn(nick)
+        if not sn and nick:
+            sn = str((self.store.barracks_ids().get(nick.lower()) or {}).get("sn") or "")
+        if not sn and target and not barracks_mod.parse_sn(target):
+            # ouid(32자 hex)로는 병영수첩 주소를 만들 수 없다 — 저장된 링크만 쓴다
+            cached = self.store.barracks_cache().get(nick, {})
+            real = str((cached or {}).get("nickname") or nick)
+            sn = str((self.store.barracks_ids().get(real.lower()) or {}).get("sn") or "")
+        if not sn:
+            lookup = self._barracks_resolver().lookup(nick) if nick else {}
+            sn = str((lookup or {}).get("sn") or "")
+        if not sn:
+            # 마지막 수단 — 병영수첩 검색 페이지 (엉뚱한 주소보다 낫다)
+            url = barracks_mod.search_page()
+            result = winutil.open_target(url)
+            result.setdefault("url", url)
+            result.setdefault("message", "병영수첩 주소를 찾지 못해 검색 페이지를 열었습니다")
+            return result
+        url = barracks_mod.profile_url(sn)
         result = winutil.open_target(url)
         result.setdefault("url", url)
         return result
 
-    def open_clan_page(self, ouid: str | None = None) -> dict[str, Any]:
-        """클랜명 클릭 → 클랜 홈페이지 (v1.4.0 · 같은 ouid 사용)."""
-        target = str(ouid or "").strip()
-        if not target:
-            barracks = self.store.barracks_cache().get(self.store.settings.get("nickname") or "", {})
-            target = str((barracks or {}).get("ouid") or "").strip()
-        if not target:
-            return {"ok": False, "message": "병영수첩을 한 번 최신화하면 클랜 페이지로 바로 갈 수 있습니다"}
-        url = f"https://barracks.sa.nexon.com/clan/{target}/home"
+    def open_clan_page(self, ouid: str | None = None, nickname: str | None = None) -> dict[str, Any]:
+        """클랜명 클릭 → 클랜 홈페이지 (v1.5.0 · 실제 clan_id 사용)."""
+        nick = str(nickname or "").strip() or (self.store.settings.get("nickname") or "").strip()
+        row = self.store.barracks_ids().get(nick.lower()) or {}
+        clan_id = str(row.get("clan_id") or "")
+        if not clan_id and nick:
+            lookup = self._barracks_resolver().lookup(nick)
+            clan_id = str((lookup or {}).get("clan_id") or "")
+        if not clan_id:
+            return {"ok": False, "message": "클랜 주소를 찾지 못했습니다 · 병영수첩을 한 번 최신화해 주세요"}
+        url = barracks_mod.clan_url(clan_id)
         result = winutil.open_target(url)
         result.setdefault("url", url)
         return result
+
+    # ============================================================ v1.5.0
+    def _barracks_resolver(self) -> barracks_mod.Resolver:
+        return barracks_mod.Resolver(self.store.barracks_ids(), save=self.store.save)
+
+    def _barracks_links(self, barracks: dict[str, Any] | None = None) -> dict[str, Any]:
+        nick = ((barracks or {}).get("nickname") or self.store.settings.get("nickname") or "").strip()
+        row = self.store.barracks_ids().get(nick.lower()) or {}
+        sn = str(row.get("sn") or "")
+        return {
+            "nickname": nick, "sn": sn,
+            "profile": barracks_mod.profile_url(sn) if sn else "",
+            "match": barracks_mod.profile_url(sn, "match") if sn else "",
+            "clan_id": str(row.get("clan_id") or ""),
+            "clan_url": barracks_mod.clan_url(row.get("clan_id") or ""),
+            "photo": str(row.get("photo") or ""),
+            "known": bool(sn), "source": str(row.get("source") or ""),
+        }
+
+    def resolve_barracks(self, nickname: str = "", refresh: bool = False) -> dict[str, Any]:
+        """닉네임 → user_nexon_sn·클랜 ID·프로필 사진 (#8 · #10)."""
+        try:
+            nick = str(nickname or "").strip() or (self.store.settings.get("nickname") or "").strip()
+            if not nick:
+                raise ValueError("닉네임을 먼저 저장해 주세요")
+            row = self._barracks_resolver().lookup(nick, refresh=bool(refresh))
+            return {"ok": bool(row.get("ok")), **row, "links": self._barracks_links(),
+                    "state": self._build_state(),
+                    "message": (f"병영수첩 연결 · {row.get('sn')}" if row.get("ok")
+                                else row.get("reason") or "병영수첩 주소를 찾지 못했서요")}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def link_barracks_url(self, text: str = "") -> dict[str, Any]:
+        """사용자가 붙여넣은 `/{id}/detail` URL → 닉네임 역조회 후 연결 (#13)."""
+        try:
+            sn = barracks_mod.parse_sn(text)
+            if not sn:
+                raise ValueError("병영수첩 주소에서 ID(…SA)를 찾지 못했습니다")
+            row = self._barracks_resolver().lookup_sn(sn)
+            if row.get("ok"):
+                return {"ok": True, **row, "links": self._barracks_links(), "state": self._build_state(),
+                        "message": f"병영수첩 연결 · {row.get('nickname')} ({row.get('sn')})"}
+            # 역조회가 막혔어도 ID 는 저장해 둔다 — 버튼은 실제 주소를 연다
+            self._barracks_resolver().remember_url(text)
+            return {"ok": False, "sn": sn, "profile": barracks_mod.profile_url(sn),
+                    "message": row.get("reason") or "ID 는 저장했지만 닉네임을 읽지 못했서요",
+                    "state": self._build_state()}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def party_map_plan(self, names: Any = None, refresh: bool = False) -> dict[str, Any]:
+        """파티랭크 5인 맵 밴·픽 추천 — 파티원 맵별 전적 합산 (v1.5.0)."""
+        try:
+            cache = self.store.barracks_cache()
+            my_nick = (self.store.settings.get("nickname") or "").strip()
+            wanted = v140.split_targets(names, limit=5) if names else []
+            if wanted:
+                selected = wanted
+            else:
+                selected = [my_nick] + [str(m.get("name") or "") for m in self.store.leaderboard()
+                                       if not m.get("me")]
+                selected = [n for n in dict.fromkeys(n.strip() for n in selected if n.strip())][:5]
+            if not selected:
+                raise ValueError("파티원 닉네임을 입력하거나 순위표에 멤버를 먼저 등록해 주세요")
+            stored = self.store.data.setdefault("party_maps", {})
+            entries: list[dict[str, Any]] = []
+            fetched: list[str] = []
+            client = None
+            for name in selected[:5]:
+                key = name.lower()
+                barracks = cache.get(name) or next(
+                    (b for b in cache.values() if str((b or {}).get("nickname") or "").lower() == key), None)
+                maps = (barracks or {}).get("maps") or []
+                source = "cache"
+                if not maps:
+                    hit = stored.get(key) or {}
+                    maps = hit.get("maps") or []
+                    source = "saved" if maps else "none"
+                if (not maps or refresh) and v140.normalize_target(name):
+                    try:
+                        client = client or self._client()
+                        nick = name if not (v140.is_ouid(name) or v140.is_sn(name)) else client.user_name_of(name)
+                        ouid = name if v140.is_ouid(name) else None
+                        target = nick or name
+                        if not ouid:
+                            ouid = client.resolve_ouid(target)
+                        rows = client.recent_matches(ouid, 20)
+                        details = [client.match_detail(m.get("match_id")) for m in rows[:20]]
+                        agg = nexon.aggregate(rows, details, target)
+                        maps = agg.get("maps") or []
+                        if maps:
+                            source = "live"
+                            stored[key] = {"at": now_iso(), "name": target, "maps": maps}
+                            fetched.append(target if target not in fetched else target)
+                    except Exception as exc:  # noqa: BLE001 - 한 명 실패가 나머지를 막지 않는다
+                        log.debug("party maps · %s failed: %s", name, exc)
+                        source = source if maps else "error"
+                entries.append({"name": name, "maps": maps, "source": source})
+            if fetched:
+                self.store.save()
+            plan = v150.party_map_plan(entries)
+            plan["members_detail"] = [{"name": e["name"], "maps": len(e["maps"]), "source": e["source"]}
+                                       for e in entries]
+            plan["calls"] = int(getattr(client, "calls", 0)) if client else 0
+            plan["refreshed"] = fetched
+            return {"ok": bool(plan.get("available")), **plan,
+                    "message": plan.get("headline") or plan.get("reason") or ""}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, picks=[], bans=[], maps=[], members=[])
+
+    def copy_text(self, text: str = "") -> dict[str, Any]:
+        """클립보드 복사 — 내전 팀 결과 등."""
+        return winutil.copy_text(text)
+
+    # ---------------------------------------------------------- 사용자 시나리오
+    def add_custom_scenario(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        try:
+            row = v150.clean_custom_scenario(payload or {}, scoring.AREA_KEYS)
+            rows = self.store.custom_scenarios()
+            existing = next((r for r in rows if str(r.get("name")).strip().lower() == row["name"].lower()), None)
+            if existing:
+                existing.update(row)
+                message = f"'{row['name']}' 시나리오를 수정했습니다"
+            else:
+                row["id"] = f"custom-{len(rows) + 1}-{int(time.time())}"
+                rows.append(row)
+                message = f"'{row['name']}' 시나리오를 추가했습니다"
+            self.store.save()
+            return {"ok": True, "message": message, "scenario": row, "state": self._build_state()}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def delete_custom_scenario(self, name: str = "") -> dict[str, Any]:
+        try:
+            target = str(name or "").strip().lower()
+            if not target:
+                raise ValueError("삭제할 시나리오 이름이 없습니다")
+            rows = self.store.custom_scenarios()
+            remain = [r for r in rows if str(r.get("name")).strip().lower() != target]
+            if len(remain) == len(rows):
+                raise ValueError("'내 시나리오'에서 추가한 것만 삭제할 수 있습니다")
+            self.store.data["custom_scenarios"] = remain
+            self.store.save()
+            return {"ok": True, "message": "시나리오를 삭제했습니다", "state": self._build_state()}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def set_scenario_excluded(self, name: str = "", excluded: bool = True) -> dict[str, Any]:
+        """추천 5종에서 제외 / 제외 해제 (라이브러리에는 흐리게 남는다)."""
+        try:
+            target = str(name or "").strip()
+            if not target:
+                raise ValueError("시나리오 이름이 없습니다")
+            current = [str(n) for n in (self.store.settings.get("excluded_scenarios") or [])]
+            low = target.lower()
+            if excluded and low not in {n.lower() for n in current}:
+                current.append(target)
+            elif not excluded:
+                current = [n for n in current if n.lower() != low]
+            self.store.update_settings({"excluded_scenarios": current})
+            # 오늘 추천 로테이션에서도 바로 뺀다
+            try:
+                self.store.set_rotation([r for r in self.store.rotation()
+                                         if not v150.is_excluded(r.get("name"), [target])])
+            except Exception:  # noqa: BLE001
+                pass
+            return {"ok": True, "excluded": current, "state": self._build_state(),
+                    "message": ("추천에서 제외했습니다" if excluded else "추천에 다시 넣었습니다")}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    # ---------------------------------------------------------- 트레이너 종료 감시
+    def _trainer_watch_obj(self) -> v150.TrainerWatch:
+        with self._trainer_lock:
+            if self._trainer_watch is None:
+                self._trainer_watch = v150.TrainerWatch(on_finished=self._trainer_finished)
+            return self._trainer_watch
+
+    def _trainer_state(self) -> dict[str, Any]:
+        watcher = self._trainer_watch_obj()
+        return {"enabled": bool(self.store.settings.get("watch_trainers", True)),
+                "supported": watcher.supported, "running": watcher.running,
+                "last": watcher.last_event}
+
+    def _trainer_finished(self, event: dict[str, Any]) -> None:
+        """감시 스레드 → 화면 토스트 (스레드 경계는 pywebview evaluate_js 가 처리)."""
+        try:
+            self.store.ui()["trainer_event"] = event
+            self.store.save()
+        except Exception:  # noqa: BLE001
+            pass
+        window = self._win
+        if window is None:
+            return
+        try:
+            payload = json.dumps(event, ensure_ascii=False)
+            window.evaluate_js(
+                "window.AL && AL.trainerFinished ? AL.trainerFinished(" + payload + ") : null")
+        except Exception:  # noqa: BLE001
+            log.debug("trainer toast failed", exc_info=True)
+
+    def start_trainer_watch(self) -> None:
+        if not self.store.settings.get("watch_trainers", True):
+            return
+        self._trainer_watch_obj().start()
+
+    start_trainer_watch._serializable = False  # type: ignore[attr-defined]
+
+    def set_trainer_watch(self, enabled: bool = True) -> dict[str, Any]:
+        self.store.update_settings({"watch_trainers": bool(enabled)})
+        watcher = self._trainer_watch_obj()
+        watcher.enabled = bool(enabled)
+        if enabled:
+            watcher.start()
+        else:
+            watcher.stop()
+        return {"ok": True, "watch": self._trainer_state(),
+                "message": ("트레이너 종료 감지를 켰습니다" if enabled else "트레이너 종료 감지를 껐습니다")}
+
+    def trainer_watch_state(self) -> dict[str, Any]:
+        return {"ok": True, **self._trainer_state()}
+
+    # ---------------------------------------------------------- 클라우드 자동 백업
+    def cloud_auto_sync(self, reason: str = "periodic") -> dict[str, Any]:
+        """30분 주기 · 앱 시작/종료 자동 백업 (#17)."""
+        try:
+            if not self.store.settings.get("auto_cloud", True):
+                return {"ok": False, "skipped": "자동 백업이 꺼져 있습니다"}
+            if not self._cloud_state().get("signed_in"):
+                return {"ok": False, "skipped": "클라우드 로그인이 필요합니다"}
+            result = self.cloud_push()
+            state = self.store.cloud_auto()
+            state["last_at"] = now_iso()
+            state["last_reason"] = reason
+            self.store.save()
+            return {"ok": bool(result.get("ok")), "reason": reason,
+                    "message": result.get("message") or result.get("message", ""),
+                    "at": state["last_at"]}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def start_cloud_auto(self) -> None:
+        """앱 시작 시 1회 + 30분 주기 자동 동기화 스레드."""
+        import threading
+
+        if self._cloud_thread and self._cloud_thread.is_alive():
+            return
+        self._cloud_stop.clear()
+
+        def loop() -> None:
+            self.cloud_auto_sync("start")
+            while not self._cloud_stop.wait(30 * 60):
+                self.cloud_auto_sync("periodic")
+
+        self._cloud_thread = threading.Thread(target=loop, name="sa-cloud-auto", daemon=True)
+        self._cloud_thread.start()
+
+    start_cloud_auto._serializable = False  # type: ignore[attr-defined]
+
+    def shutdown(self, reason: str = "exit") -> dict[str, Any]:
+        """앱 종료 직전 — 자동 백업 1회 + 감시 정지."""
+        out: dict[str, Any] = {}
+        try:
+            self._cloud_stop.set()
+            out["cloud"] = self.cloud_auto_sync(reason)
+        except Exception:  # noqa: BLE001
+            out["cloud"] = {"ok": False}
+        try:
+            if self._trainer_watch is not None:
+                self._trainer_watch.stop()
+        except Exception:  # noqa: BLE001
+            pass
+        return out
+
+    shutdown._serializable = False  # type: ignore[attr-defined]
+
 
     # ------------------------------------------------------------ NVIDIA / Windows utils
     def _drs(self) -> nvidia.DrsManager:
@@ -1840,8 +2280,21 @@ class Api:
                         except Exception:  # noqa: BLE001 - 한 명 실패는 건너뛴다
                             continue
                     else:
-                        pool.append({"name": name, "solo": 0, "party": 0, "weapon": "sniper",
-                                     "kd": None, "dmg": None, "win": None})
+                        # v1.5.0 (#21) — 순위표에 없는 닉네임을 solo:0 으로 넣지 않는다.
+                        # 넥슨 API 로 바로 조회해 RP·K/D 를 채운다.
+                        try:
+                            client = client or self._client()
+                            fetched = nexon.fetch_member(client, name)
+                            if fetched.get("ok"):
+                                pool.append(fetched)
+                            else:
+                                pool.append({"name": name, "solo": 0, "party": 0, "weapon": "sniper",
+                                             "kd": None, "dmg": None, "win": None,
+                                             "error": fetched.get("error")})
+                        except Exception as exc:  # noqa: BLE001
+                            pool.append({"name": name, "solo": 0, "party": 0, "weapon": "sniper",
+                                         "kd": None, "dmg": None, "win": None,
+                                         "error": str(exc)})
             role_map: dict[str, str] = {}
             if isinstance(roles, dict):
                 role_map = {str(k): str(v) for k, v in roles.items() if str(v) in ("sniper", "rifle")}

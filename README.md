@@ -4,6 +4,10 @@
 코박스(KovaaK's)·에임랩(Aim Lab) 훈련 기록, 5영역 레이더, 18단계 티어,
 NEXON Open API 병영수첩·친구 순위표, NVIDIA Drs 최적화 유틸을 한 화면에 모았습니다.
 
+**v1.5.0 — 딥 차콜 무광 디자인 + 3색 테마(코랄·아이스·골드), QHD 화면 배율,
+피드백 27건 반영, 신규 3종(파티랭크 5인 맵 밴·픽, 직전 대비 RP·스탯 등락 뱃지,
+코박스·에임랩 종료 감지 알림).**
+
 ```
 main.py                 엔트리 (창 생성 · 정중앙 배치 · --serve 미리보기 · --drs-apply 상승 헬퍼)
 app/api.py              JS ↔ Python 브리지 (window.pywebview.api)
@@ -16,6 +20,8 @@ app/winutil.py          마우스 가속 · 전원 옵션/게임 모드 · steam
 app/kovak.py            코박스 stats/*.csv 점수 인식 · 플레이리스트(.json/.plo) 생성
 app/updates.py          GitHub Releases 새 버전 확인 (표준 라이브러리만)
 app/tray.py             시스템 트레이 아이콘 + Ctrl+Shift+A 전역 단축키 (Win32 ctypes)
+app/barracks.py         병영수첩 user_nexon_sn 해석 (ouid 와 다른 ID · 프로필/클랜 주소)
+app/v150.py             테마·화면 배율·공식 맵 이미지·파티 맵 밴픽·등락 뱃지·트레이너 감시
 ui/index.html           화면 (정적 디자인 + 샘플 데이터 + 첫 로딩 스플래시)
 ui/bridge.js            화면 ↔ pywebview.api 연결 (실데이터 반영)
 tests/api_test.py       백엔드 테스트 (실응답 캐시 재생 · Drs 패치 · 평점 정규화)
@@ -23,6 +29,7 @@ tests/ui_test.py        Playwright UI 테스트 (목 브리지 · 스크린샷)
 tests/v110_test.py      v1.1.0 검증 (통합 점수 · 추천 UX · 모달 · 스크롤 · 순위표 · 창 고정)
 tests/v120_test.py      v1.2.0 검증 (코박스 인식 · 1:1 비교 · 전후 비교 · 리포트 카드 · 코칭 등 13종)
 tests/v130_test.py      v1.3.0 검증 (23가지 UI·기능 + PB 유지)
+tests/v150_test.py      v1.5.0 검증 (테마·배율·홈·레일 정렬·파티 맵·내 시나리오·병영 링크 등 120건)
 supabase/schema.sql     user_profiles 테이블 + RLS (SQL Editor 에 1회 실행)
 .github/workflows/      windows-latest 에서 .exe 빌드
 ```

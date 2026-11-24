@@ -1114,12 +1114,11 @@ def warmup_recs(*, game: str = "kovak", weapon: str = "sniper",
 
 # ================================================================ v1.2.0 · 플레이 코칭
 def play_coaching(barracks: dict[str, Any] | None, limit: int = 4) -> list[dict[str, Any]]:
-    """최근 100판(병영수첩 캐시)만 보고 '지금 무엇을 유지하고 무엇 하나만 바꿀지' 3~4줄 코칭.
+    """최근 100판(병영수첩 캐시)의 **실제 수치**만으로 쓰는 실전 피드백 3~4줄.
 
-    v1.3.1 — 미사여구를 걷어내고 **실제 숫자 + 서든어택 콜아웃(A롱·B롱·숏·중통·홀·
-    설대·컨·2층·개구)** 으로 쓴다.  잘한 지표는 그대로 칭찬하고, 억지로 단점을
-    만들어 내지 않는다 — 고칠 점이 분명할 때만 한 가지를 단호하게 짚는다.
-    "복도 / 초동 교전 라인 / 각이 애매하면" 같은 번역투·타게임 용어는 쓰지 않는다.
+    v1.5.0 — 엉터리 위치 추천을 전부 걷어냈다.  "A롱 2층·골목·중통"처럼
+    확인되지 않은 지형 이름은 쓰지 않고, 딜량 대비 승률 · 솔로/파티 RP 차 ·
+    최근 폼·연패 · 약점 맵 지표처럼 병영수첩에 실제로 찍히는 숫자만 근거로 쓴다.
 
     각 항목은 {icon, title, text, tone} 이고 tone 은 ``warn``(고칠 점) ·
     ``good``(강점/유지) · ``info``(참고).
@@ -1154,156 +1153,138 @@ def play_coaching(barracks: dict[str, Any] | None, limit: int = 4) -> list[dict[
 
     strong = ((win is not None and win >= 52) or (kd is not None and kd >= 55)
               or (dmg is not None and dmg >= 1100) or (win is not None and win >= 48))
-    weak = (kd is not None and kd < 48) or (win is not None and win < 45)
+    # 딜량은 나오는데 승률이 낮은 유형 — v1.5.0 의 핵심 지표
+    damage_without_wins = (dmg is not None and dmg >= 1000 and win is not None and win < 47)
 
-    # ── 1) 잘한 것부터 — 숫자를 그대로 붙여 칭찬한다
-    if kd is not None and kd >= 55:
+    # ── 1) 가장 먼저 짚을 것: 딜량 대비 승률
+    if damage_without_wins:
+        tips.append({
+            "icon": "🎯", "tone": "warn",
+            "title": f"딜량 {dmg:,.0f} · 승률 {win:.1f}%",
+            "text": (f"평균 딜량 {dmg:,.0f}인데 승률이 {win:.1f}%입니다. 딜은 넣고 있으니 에임 문제가 아니라 "
+                     f"라운드 마무리 문제입니다 — 킬을 잡은 직후 자리를 바꿔 다음 각을 미리 잡고, "
+                     f"설치·해체 라운드는 킬보다 목표에 시간을 쓰세요."),
+        })
+    elif kd is not None and kd >= 55 and win is not None:
         tips.append({
             "icon": "🏅", "tone": "good",
             "title": f"K/D {kd:.1f}% · {kills:,}킬 / {deaths:,}데스",
-            "text": (f"K/D {kd:.1f}%는 충분히 좋습니다. 지금처럼 1:1을 확신할 때만 들어가고, "
-                     f"빗나가면 바로 엄폐로 돌아오는 루틴을 그대로 유지하세요. 세팅은 건드리지 마세요."),
+            "text": (f"K/D {kd:.1f}%면 교전 자체는 이기고 있습니다. 지금처럼 확실한 각에서만 먼저 쏘고, "
+                     f"빗나가면 바로 물러나는 리듬을 유지하세요. 감도는 건드리지 마세요."),
         })
     elif win is not None and win >= 52:
         tips.append({
             "icon": "🔥", "tone": "good",
             "title": f"승률 {win:.1f}% · {wins}승 {games - wins}패",
-            "text": (f"승률 {win:.1f}%면 상위권입니다. 지금 쓰는 시작 위치·첫 교전 타이밍이 맞다는 뜻이니 "
-                     f"감도나 무기를 바꾸지 말고 같은 루틴을 반복하세요."),
-        })
-    elif dmg is not None and dmg >= 1100:
-        tips.append({
-            "icon": "💥", "tone": "good",
-            "title": f"평균 딜량 {dmg:,.0f} · K/D {num(kd, '%')}",
-            "text": (f"평균 딜량 {dmg:,.0f}은 교전에서 계속 맞히고 있다는 뜻입니다. "
-                     f"지금 딜량을 유지하면서 킬 마무리만 조금 더 붙이면 승률이 따라옵니다."),
-        })
-    elif win is not None and win >= 48:
-        tips.append({
-            "icon": "✅", "tone": "good",
-            "title": f"승률 {win:.1f}% · K/D {num(kd, '%')} · 딜량 {num(dmg)}",
-            "text": ("지표가 안정적입니다. 지금 루틴에서 크게 바꿀 것은 없고, "
-                     "아래 한 가지만 보완하면 다음 티어가 가까워집니다."),
+            "text": (f"{games}판 승률 {win:.1f}%는 유지할 가치가 있는 수치입니다. "
+                     f"첫 교전 타이밍과 시작 위치를 그대로 두고, 같은 루틴을 반복하세요."),
         })
     elif kd is not None and kd < 48:
         tips.append({
             "icon": "🛡️", "tone": "warn",
-            "title": f"K/D {kd:.1f}% · 데스 {deaths:,} · 딜량 {num(dmg)}",
-            "text": (f"K/D {kd:.1f}%는 데스가 먼저 나오고 있다는 뜻입니다. 숏·중통에서 혼자 선진입하지 말고, "
-                     f"섬광·연막 뒤 2선에서 각을 받으세요. 이 하나만 바꿔도 K/D가 바로 올라갑니다."),
+            "title": f"K/D {kd:.1f}% · 데스 {deaths:,}",
+            "text": (f"K/D {kd:.1f}%는 데스가 먼저 나오는 흐름입니다. 킬 욕심보다 생존을 먼저 잡으세요 — "
+                     f"첫 교전은 아군이 만든 뒤에 붙고, 한 번 쏘고 맞으면 바로 물러나는 것만 지켜도 수치가 올라갑니다."),
         })
-    else:
-        lead = ""
-        if kills and deaths and kills > deaths:
-            lead = f"킬 {kills:,} / 데스 {deaths:,}로 킬이 더 많습니다. "
+    elif dmg is not None:
         tips.append({
-            "icon": "🧭", "tone": "info",
-            "title": f"승률 {num(win, '%')} · K/D {num(kd, '%')} · {wins}승 {games - wins}패",
-            "text": (lead + "라운드 마무리만 붙이면 됩니다. A롱·B롱을 동시에 열지 말고 한 곳만 열고 나머지는 견제로 두세요. "
-                     "설치 후에는 자리를 바꿔 해체 각을 끊는 쪽이 승률에 직접 붙습니다."),
+            "icon": "💥", "tone": "info",
+            "title": f"평균 딜량 {dmg:,.0f} · K/D {num(kd, '%')} · 승률 {num(win, '%')}",
+            "text": (f"딜량 {dmg:,.0f}과 승률 {num(win, '%')}를 같이 보면, 지금은 딜을 넣는 구간과 "
+                     f"라운드를 끝내는 구간이 따로 놀고 있습니다. 킬 직후 3초만 자리를 바꿔 보세요."),
         })
 
-    # ── 2) 가장 아쉬운 맵 — 잘하는 유저에겐 '한 가지만 보완'으로 부드럽게
+    # ── 2) 약점 맵 — 5판 이상 표본에서만, 수치 그대로
     pool = [m for m in maps if int(_num(m.get("games")) or 0) >= 5]
     worst = None
     if pool:
         worst = min(pool, key=lambda m: (_num(m.get("kd")) if _num(m.get("kd")) is not None else 999,
                                          -(_num(m.get("weak")) or 0)))
-    w_kd_num = _num(worst.get("kd")) if worst else None
-    w_win_num = _num(worst.get("win")) if worst else None
-    if worst and strong and (w_win_num or 0) >= 50 and (w_kd_num or 0) >= 48:
-        # 잘하는 유저인데 모든 맵이 고르게 좋다 → 억지 단점 대신 칭찬
+    w_kd = _num(worst.get("kd")) if worst else None
+    w_win = _num(worst.get("win")) if worst else None
+    if worst and strong and (w_win or 0) >= 50 and (w_kd or 0) >= 48:
         tips.append({
             "icon": "🧱", "tone": "good",
-            "title": f"5판 이상 표본 {len(pool)}맵 모두 승률 {(w_win_num or 0):.0f}% 이상",
-            "text": ("맵별 편차가 작습니다. 특정 맵만 무너지는 유형이 아니니, 지금처럼 시작 위치와 "
-                     "첫 교전 타이밍을 그대로 반복하는 게 가장 이득입니다."),
+            "title": f"5판 이상 {len(pool)}개 맵 모두 승률 {(w_win or 0):.0f}% 이상",
+            "text": ("맵별 편차가 작습니다. 특정 맵만 무너지는 유형이 아니니 지금 루틴을 그대로 반복하는 쪽이 이득입니다."),
         })
         worst = None
     if worst:
         w_name = str(worst.get("map") or "")
-        w_kd = num(_num(worst.get("kd")), "%")
-        w_win = num(_num(worst.get("win")), "%")
-        w_games = int(_num(worst.get("games")) or 0)
-        c = callouts_for(w_name)
-        if strong:
-            tips.append({
-                "icon": "🗺️", "tone": "info",
-                "title": f"{w_name} {w_games}판 · 승률 {w_win} · K/D {w_kd}",
-                "text": (f"전체 지표는 좋은데 이 맵만 조금 아쉽습니다. 시작 10초는 {c[1]} 견제와 {c[-1]} 정보만 가져가고, "
-                         f"{c[0]} 첫 교전은 아군 1픽 뒤에서만 받으세요. 이 맵만 보완하면 승률이 더 올라갑니다."),
-            })
-        else:
-            tips.append({
-                "icon": "🗺️", "tone": "warn",
-                "title": f"{w_name} {w_games}판 · 승률 {w_win} · K/D {w_kd}",
-                "text": (f"가장 손해가 큰 맵입니다. 시작 10초는 {c[1]} 견제와 {c[-1]} 정보만 가져가고, "
-                         f"{c[0]} 첫 교전은 아군 1픽 뒤에서만 받으세요. 2:1이 안 되면 그 라운드는 {c[0]}을 버리세요."),
-            })
+        w_g = int(_num(worst.get("games")) or 0)
+        tips.append({
+            "icon": "🗺️", "tone": "warn" if not strong else "info",
+            "title": f"{w_name} {w_g}판 · 승률 {num(w_win, '%')} · K/D {num(w_kd, '%')}",
+            "text": (f"{len(pool)}개 맵 중 이 맵만 승률 {num(w_win, '%')} · K/D {num(w_kd, '%')}입니다. "
+                     f"이 맵에서는 첫 교전을 아군 뒤로 미루고, 라운드마다 같은 자리에서 시작해 "
+                     f"상대 진입 각을 먼저 받는 쪽으로 바꿔 보세요."),
+        })
 
-    # ── 3) 잘하는 맵 칭찬 — 지표가 좋을 때만 (어려운 구간에서는 고칠 점을 먼저)
+    # ── 3) 잘하는 맵 — 지표가 좋을 때만
     if pool and strong:
         best = max(pool, key=lambda m: (_num(m.get("win")) or 0, _num(m.get("kd")) or 0))
         if worst is None or str(best.get("map")) != str(worst.get("map")):
-            b_name = str(best.get("map") or "")
             b_win = _num(best.get("win")) or 0
             b_kd = _num(best.get("kd")) or 0
             if b_win >= 50 or b_kd >= 52:
                 tips.append({
                     "icon": "✅", "tone": "good",
-                    "title": f"{b_name} 승률 {num(b_win, '%')} · K/D {num(b_kd, '%')}",
+                    "title": f"{best.get('map')} 승률 {num(b_win, '%')} · K/D {num(b_kd, '%')}",
                     "text": ("이 맵은 이깁니다. 여기서는 먼저 각을 만들고 킬을 주도하세요 — "
                              "자신 있는 맵에서 리듬을 타면 다음 맵 첫 라운드까지 살아납니다."),
                 })
 
-    # ── 4) 최근 5판 흐름 / 솔로·파티 격차 / 무기 비중
-    last5 = [m for m in matches[:5]]
-    wins5 = sum(1 for m in last5 if str(m.get("result")) == "승")
+    # ── 4) 솔로·파티 RP 격차
     if len(tips) < 4 and solo > 0 and party > 0 and abs(solo - party) >= 100:
-        low = "솔로" if solo < party else "파티"
         gap = abs(solo - party)
+        low = "솔로" if solo < party else "파티"
         if low == "솔로":
             tips.append({
                 "icon": "👥", "tone": "info",
                 "title": f"솔로 {solo:,.0f} vs 파티 {party:,.0f} · {gap:,.0f}RP 차",
-                "text": (f"솔로 {solo:,.0f} vs 파티 {party:,.0f} — 솔로에서만 {gap:,.0f}RP를 잃고 있습니다. "
-                         f"솔로 랭크전 1라운드는 혼자 A롱·B롱 쪼기로 열지 말고, 아군 스나 1픽 뒤 2선 백업으로 시작하세요. "
-                         f"첫 킬은 아군이 만든 뒤에만."),
+                "text": (f"솔로에서만 {gap:,.0f}RP를 잃고 있습니다. 솔로는 아군과 합을 맞출 수 없으니 "
+                         f"첫 교전을 직접 열지 말고, 아군이 먼저 붙은 뒤 2선에서 마무리하는 쪽이 안전합니다."),
             })
         else:
             tips.append({
                 "icon": "👥", "tone": "info",
                 "title": f"파티 {party:,.0f} vs 솔로 {solo:,.0f} · {gap:,.0f}RP 차",
-                "text": (f"파티 {party:,.0f} vs 솔로 {solo:,.0f} — 파티에서 {gap:,.0f}RP가 더 낮습니다. "
-                         f"파티는 진입 1명·엄호 1명으로 역할을 정하고, 숏·중통에 두 명이 같이 들어가세요."),
+                "text": (f"파티에서 {gap:,.0f}RP가 더 낮습니다. 파티는 인원이 많아 역할이 겹치기 쉽습니다 — "
+                         f"진입 1명·엄호 1명으로 미리 정하고, 같은 곳에 두 명이 같이 들어가지 않게 하세요."),
             })
+
+    # ── 5) 최근 폼 · 연패
+    last5 = [m for m in matches[:5]]
+    wins5 = sum(1 for m in last5 if str(m.get("result")) == "승")
     if len(tips) < 4 and len(last5) >= 5 and wins5 <= 2:
         tips.append({
             "icon": "⚡", "tone": "warn",
             "title": f"최근 5판 {wins5}승 {5 - wins5}패",
-            "text": ("지금은 새 감도·새 무기를 만질 때가 아닙니다. 랭크전 전에 5분 워밍업 3종만 돌리고, "
-                     "1~2판은 익숙한 세팅으로 가볍게 가세요. 연패 중에는 A롱 쪼기를 아예 버리세요."),
+            "text": ("연패 구간입니다. 지금은 감도나 무기를 바꿀 때가 아니라 판 수를 줄일 때입니다 — "
+                     "랭크전 전에 5분 워밍업 2~3종만 돌리고, 2연패면 한 판 쉬는 규칙을 걸어 두세요."),
         })
+    elif len(tips) < 4 and len(last5) >= 5 and wins5 >= 4:
+        tips.append({
+            "icon": "📈", "tone": "good",
+            "title": f"최근 5판 {wins5}승 {5 - wins5}패",
+            "text": ("최근 5판 흐름이 좋습니다. 이 리듬에서는 세팅을 바꾸지 말고 같은 판 수를 유지하세요."),
+        })
+
+    # ── 6) 무기 비중
     if len(tips) < 3:
         sniper = _num(recent.get("sniper")) or 0.0
         assault = _num(recent.get("assault")) or 0.0
         total_w = sniper + assault
         if total_w:
             share = sniper / total_w * 100
-            if share >= 55:
-                tips.append({
-                    "icon": "🎯", "tone": "info",
-                    "title": f"스나 {share:.0f}% · 라플 {100 - share:.0f}%",
-                    "text": ("스나 비중이 높습니다. 오프앵글에서 한 발 먼저 꽂고, 빗나가면 재조준 대신 엄폐 후 "
-                             "각을 다시 잡으세요. 라플 전환은 숏·중통에서만."),
-                })
-            else:
-                tips.append({
-                    "icon": "🔫", "tone": "info",
-                    "title": f"라플 {100 - share:.0f}% · 스나 {share:.0f}%",
-                    "text": ("라플 비중이 높습니다. 연사는 무빙샷보다 짧게 끊어 쏘고 헤드라인 높이를 유지하세요. "
-                             "A롱·설대처럼 긴 각은 아군 스나에게 넘기세요."),
-                })
+            tips.append({
+                "icon": "🎯", "tone": "info",
+                "title": f"스나 {share:.0f}% · 라플 {100 - share:.0f}%",
+                "text": (("스나 비중이 높습니다. 한 발 먼저 꽂고, 빗나가면 재조준 대신 물러나 각을 다시 잡으세요."
+                          if share >= 55 else
+                          "라플 비중이 높습니다. 연사는 짧게 끊어 쏘고 헤드라인 높이를 유지하세요. "
+                          "긴 거리 교전은 아군 스나에게 넘기세요.")),
+            })
     if len(tips) < 3 and games:
         tips.append({
             "icon": "🎮", "tone": "info",
@@ -1520,73 +1501,13 @@ def barracks_digest(snapshots: Sequence[dict[str, Any]], today: _dt.date | None 
     }
 
 
-# 맵별 연습 포인트 — 실제 서든어택 콜아웃(A롱·B롱·숏·중통·홀·설대·컨·2층·개구)으로 쓴다.
-# v1.3.1: "복도 / 초동 교전 라인 / 각이 애매하면" 같은 번역투·타게임 브리핑 용어는 쓰지 않는다.
-MAP_CALLOUTS: dict[str, list[str]] = {
-    "이탈리아": ["A롱", "B롱", "시장", "홀", "2층", "개구"],
-    "프로방스": ["중통", "골목", "A설대", "B설대", "2층"],
-    "보급": ["A롱", "B롱", "숏", "컨", "창고", "홀"],
-    "크로스포트": ["A롱", "B롱", "숏", "컨", "2층"],
-    "드래곤로드": ["A롱", "B롱", "중통", "숏"],
-    "올드타운": ["A롱", "B롱", "시장", "골목", "2층"],
-    "시티캣": ["A롱", "B롱", "중통", "2층"],
-    "지하철": ["A롱", "B롱", "홀", "계단"],
-    "팰리스": ["A롱", "B롱", "중통", "정원"],
-    "듀오 릭": ["A롱", "B롱", "중통", "숏"],
-    "블랙": ["A롱", "B롱", "숏", "중통"],
-}
-MAP_TIPS: dict[str, list[str]] = {
-    "이탈리아": [
-        "A롱은 상대 스나 1픽이 서는 자리입니다. 혼자 A롱을 열지 말고 홀 컨으로 스나 위치를 먼저 확인한 뒤 2층·개구 각을 받으세요.",
-        "B롱은 숏과 붙어 있어 첫 교전이 가장 빨리 열립니다. 시작 10초는 시장 소리만 듣고, 아군 백업이 붙은 뒤에 B롱 쪼기로 들어가세요.",
-        "공격은 2층 → 시장 → A롱 순서로 각을 만들면 수비 스나를 한 번에 끊을 수 있습니다.",
-    ],
-    "프로방스": [
-        "중통은 스나가 가장 먼저 서는 자리입니다. 중통을 혼자 밀지 말고 골목으로 각을 돌려 A설대·B설대를 옆에서 끊으세요.",
-        "A설대·B설대는 한 번 잡히면 도망갈 곳이 없습니다. 섬광이나 연막으로 시야를 끊은 뒤에만 드세요.",
-        "수비에서는 중통 소리를 먼저 확인하고, 골목 쪽 백업을 붙여 두면 설대 손실이 줄어듭니다.",
-    ],
-    "보급": [
-        "A롱·B롱이 길게 뚫려 있어 스나 1픽이 승패를 가릅니다. 라플은 숏으로 붙어 컨 안쪽을 먼저 지우세요.",
-        "숏은 붙는 거리가 짧습니다. 한 발 쏘고 바로 컨 뒤로 돌아오는 리듬으로 끊어 쏘세요.",
-        "창고 안에서는 홀 쪽 소리를 먼저 확인하고, 개구로 나가는 타이밍을 아군과 맞추세요.",
-    ],
-    "크로스포트": [
-        "A롱·B롱 양쪽이 열려 있어 첫 교전이 두 갈래로 갈립니다. 시작 10초는 컨 쪽만 보고, 아군이 A롱을 밀면 B롱 견제로 바꾸세요.",
-        "2층에서 내려오는 각을 먼저 확인하세요. 2층을 비워 두면 A롱을 뚫려도 바로 되돌아올 수 없습니다.",
-        "숏은 붙는 교전이라 라플이 유리합니다. 스나는 숏에 서지 말고 뒤에서 2층·A롱을 보세요.",
-    ],
-    "드래곤로드": [
-        "중통이 가장 짧아 첫 킬이 여기서 나옵니다. 중통에 혼자 서지 말고 아군 스나 뒤에서 백업하세요.",
-        "A롱·B롱은 길어서 스나 각이 잘 나옵니다. 첫 발을 놓치면 바로 엄폐로 돌아오세요.",
-        "숏으로 붙는 상대가 많으면 라플로 바꿔 끊어 쏘는 편이 안전합니다.",
-    ],
-    "올드타운": [
-        "시장과 골목이 붙어 있어 소리가 겹칩니다. 시작 10초는 골목을 비우고 시장 각만 받으세요.",
-        "2층은 한 번 올라가면 내려오는 각이 느립니다. 2층에 올라갈 때는 아군에게 반드시 말하고 올라가세요.",
-        "A롱은 길게 열려 있어 스나 1픽 자리입니다. 라플은 A롱에 서지 말고 골목으로 돌아 들어가세요.",
-    ],
-    "시티캣": [
-        "중통이 짧아 첫 교전이 빨리 열립니다. 중통을 혼자 밀지 말고 2층 각을 먼저 확인하세요.",
-        "A롱·B롱은 엄폐가 많아 쪼기 싸움이 됩니다. 섬광을 던진 뒤 아군과 같이 들어가세요.",
-        "수비에서는 2층에서 A롱을 내려다보는 각을 잡으면 RP 손실이 줄어듭니다.",
-    ],
-    "지하철": [
-        "홀과 계단이 좁아 섬광·연막이 그대로 통합니다. 계단을 오르기 전에 연막부터 까세요.",
-        "A롱·B롱은 길지만 계단에서 끊기기 쉽습니다. 계단을 먼저 지우고 A롱으로 넘어가세요.",
-        "홀에서는 소리가 크게 울립니다. 홀에서 뛰지 말고 걸어서 각을 잡으세요.",
-    ],
-    "팰리스": [
-        "중통과 정원이 붙어 있어 첫 교전이 중통에서 열립니다. 정원 쪽으로 각을 돌리면 A롱이 열립니다.",
-        "A롱은 길게 열려 스나 1픽이 유리합니다. 라플은 정원으로 우회해 붙는 편이 좋습니다.",
-        "B롱은 좁아서 쪼기보다 연막을 깔고 한 번에 들어가는 쪽이 안전합니다.",
-    ],
-    "듀오 릭": [
-        "A롱·B롱이 가까워 첫 교전이 빨리 열립니다. 시작 10초는 중통 소리만 듣고 기다리세요.",
-        "숏에서 붙는 싸움이 잦습니다. 한 발 쏘고 바로 엎드리지 말고 옆으로 빠져 다시 각을 잡으세요.",
-        "아군과 2:1을 만들 수 있는 쪽으로만 들어가세요. 혼자 두 명을 상대하는 각은 버리세요.",
-    ],
-}
+# 맵 연습 포인트 — v1.5.0
+# 서든어택에서 실제로 쓰는 호칭은 폭파지점 A/B 와 롱·숏 정도다.  "크로스포트 2층",
+# "올드타운 골목", "마린베이스 중통" 처럼 확인되지 않은 세부 지형 이름은 지어내지
+# 않는다 (사용자 지적).  그래서 맵별 콜아웃 표는 비워 두고, 맵과 무관하게 통하는
+# 실제 전술만 숫자와 함께 쓴다.
+MAP_CALLOUTS: dict[str, list[str]] = {}
+MAP_TIPS: dict[str, list[str]] = {}
 
 
 def map_family(name: str) -> str:
@@ -1599,12 +1520,11 @@ def map_family(name: str) -> str:
 
 
 def callouts_for(name: str) -> list[str]:
-    """맵 이름 → 실제 서든어택 콜아웃. 모르는 맵은 공통 콜아웃."""
+    """맵 이름 → 확인된 콜아웃.  폭파 계열만 A/B 폭파지점을 쓴다 (v1.5.0)."""
     text = str(name or "")
-    for key, words in MAP_CALLOUTS.items():
-        if key in text:
-            return list(words)
-    return ["A롱", "B롱", "숏", "중통", "홀"]
+    if any(word in text for word in ("폭파", "심플")) or map_family(text) == "폭파":
+        return ["A", "B"]
+    return []
 
 
 def youtube_search(query: str) -> str:
@@ -1614,22 +1534,20 @@ def youtube_search(query: str) -> str:
 
 
 def map_spot_tips(name: str) -> list[str]:
-    text = str(name or "")
-    for key, tips in MAP_TIPS.items():
-        if key in text:
-            return list(tips)
+    """맵과 무관하게 통하는 실제 전술만 (지형 이름을 지어내지 않는다)."""
     return [
-        "A롱·B롱 중 어느 쪽이 먼저 열리는지 시작 10초에 확인하고, 열린 쪽에 아군을 붙이세요.",
-        "숏·중통에서는 혼자 쪼기로 들어가지 말고 섬광·연막 뒤에 붙으세요.",
-        "스나 1픽이 서는 자리를 비워 두면 라플이 먼저 끊깁니다. 라플은 2선 백업부터 하세요.",
+        "라운드 시작 10초는 정보만 모으고, 아군 1픽이 자리를 잡은 뒤에 첫 교전을 받으세요.",
+        "혼자 각을 열지 말고 2:1이 되는 쪽으로만 들어가세요.",
+        "스나 1픽 자리를 비워 두면 라플이 먼저 끊깁니다 — 라플은 2선 백업부터 하세요.",
+        "설치·해체 라운드는 서는 자리를 미리 정해 두고 같은 자리를 반복하세요.",
     ]
 
 
 def map_guide(row: dict[str, Any]) -> dict[str, Any]:
     """약점 TOP3 클릭 → 맵 연습 포인트 + 유튜브 공략 검색 링크.
 
-    검증되지 않은 영상 ID 를 지어내지 않고, 실제로 열리는 유튜브 **검색** 링크와
-    그 맵의 실제 콜아웃(A롱·B롱·숏·중통·홀·설대·컨)으로 쓴 연습 포인트를 준다.
+    검증되지 않은 영상 ID·지형 이름을 지어내지 않고, 병영수첩에 실제로 찍힌
+    승률·K/D·딜량만으로 쓴다.  유튜브 링크는 실제로 열리는 **검색** 링크 하나뿐이다.
     """
     name = str((row or {}).get("map") or "")
     clean = name.split("-")[0].split("(")[0].strip() or name
@@ -1639,34 +1557,45 @@ def map_guide(row: dict[str, Any]) -> dict[str, Any]:
     dmg = _num_or_none((row or {}).get("dmg"))
     games = int(_num_or_none((row or {}).get("games")) or 0)
     spots = map_spot_tips(name)
-    callouts = callouts_for(name)
     tips: list[str] = []
     if kd is not None and kd < 48:
-        tips.append(f"K/D {kd:.1f}% · {games}판 — {callouts[0]}·{callouts[1]} 첫 교전에서 먼저 죽는 비율이 높습니다. "
-                    f"혼자 쪼기로 열지 말고 아군 스나 1픽 뒤에서 2선 백업부터 하세요.")
+        tips.append(f"K/D {kd:.1f}% · {games}판 — 교전에서 먼저 죽는 비율이 높습니다. "
+                    f"첫 교전을 직접 열지 말고 아군 뒤에서 마무리부터 하세요.")
     elif win is not None and win < 45:
-        tips.append(f"승률 {win:.1f}% · {games}판 — 라운드 시작에 바로 {callouts[0]}로 나가지 말고, "
-                    f"10초는 정보만 모은 뒤 아군 백업이 붙으면 {callouts[0]}을 여세요.")
-    else:
+        tips.append(f"승률 {win:.1f}% · {games}판 — 라운드 시작에 바로 나가기보다 "
+                    f"10초는 정보를 모은 뒤 움직이세요.")
+    elif win is not None and kd is not None:
         tips.append(f"{games}판 · 승률 {win:.1f}% · K/D {kd:.1f}% — 지금 페이스는 유지하되, "
-                    f"{callouts[0]} 각을 먼저 만들고 킬을 주도하세요." if win is not None and kd is not None
-                    else f"{callouts[0]}·{callouts[1]} 중 한 곳만 먼저 열고 나머지는 견제로 두세요.")
+                    f"각을 먼저 만들고 킬을 주도하세요.")
+    else:
+        tips.append(f"{games}판 표본입니다. 판 수가 쌓이면 승률·K/D 기준으로 조언이 정확해집니다.")
     if dmg is not None and dmg < 900:
         tips.append(f"평균 딜량 {dmg:,.0f} — 붙어서 쏘는데 마무리가 약합니다. "
-                    f"{callouts[-1]}에서 한 발 쏘고 바로 엄폐로 돌아오는 '끊어 쏘기'로 바꾸세요.")
+                    f"한 발 쏘고 바로 물러나는 끊어 쏘기로 바꾸세요.")
+    elif dmg is not None and win is not None and dmg >= 1000 and win < 47:
+        tips.append(f"딜량 {dmg:,.0f} · 승률 {win:.1f}% — 딜은 나오는데 라운드 마무리가 약합니다. "
+                    f"킬 직후 자리를 바꿔 다음 각을 미리 잡으세요.")
     tips.extend(spots)
     if fam == "폭파":
-        tips.append("폭파전은 설치·해체 각이 승패를 가릅니다. 설치 지점 각 2곳, 해체를 끊는 자리 2곳만 정해 두고 반복하세요.")
+        tips.append("폭파전은 설치·해체 각이 승패를 가릅니다. 설치 지점 2곳, 해체를 끊는 자리 2곳만 정해 두고 반복하세요.")
     query = f"서든어택 {clean} 공략"
     return {
         "map": name, "clean": clean, "family": fam, "games": games,
-        "callouts": callouts,
+        "callouts": callouts_for(name),
         "stats": {"win": win, "kd": kd, "dmg": dmg, "weak": (row or {}).get("weak")},
         "tips": tips[:5],
-        "youtube": {"label": f"유튜브에서 '{query}' 검색", "search": youtube_search(query),
+        "image": "",
+        "youtube": {"label": "영상 보기", "search": youtube_search(query),
                     "url": youtube_search(query)},
     }
 
 
 def map_guides(rows: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [map_guide(r) for r in (rows or [])]
+    from . import v150
+
+    out = []
+    for row in rows or []:
+        guide = map_guide(row)
+        guide["image"] = v150.map_image(guide["map"])
+        out.append(guide)
+    return out

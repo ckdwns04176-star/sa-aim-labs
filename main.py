@@ -159,6 +159,30 @@ def _work_area() -> tuple[int, int, int, int]:
         return 0, 0, 0, 0
 
 
+def _os_scale() -> float:
+    """Windows 표시 배율 (100% → 1.0, 125% → 1.25)."""
+    if os.name != "nt":
+        return 1.0
+    try:
+        import ctypes
+
+        percent = ctypes.windll.shcore.GetScaleFactorForDevice(0)  # type: ignore[attr-defined]
+        if percent:
+            return float(percent) / 100.0
+    except Exception:  # noqa: BLE001 - 구형 윈도우
+        try:
+            import ctypes
+
+            dc = ctypes.windll.user32.GetDC(0)
+            dpi = ctypes.windll.gdi32.GetDeviceCaps(dc, 88)   # LOGPIXELSX
+            ctypes.windll.user32.ReleaseDC(0, dc)
+            if dpi:
+                return float(dpi) / 96.0
+        except Exception:  # noqa: BLE001
+            pass
+    return 1.0
+
+
 def _center_position(width: int, height: int) -> tuple[int | None, int | None]:
     """정중앙 좌표. 모니터를 못 읽으면 None 을 돌려 pywebview 기본값을 쓴다."""
     left, top, screen_w, screen_h = _work_area()
@@ -256,9 +280,17 @@ def main(argv: list[str] | None = None) -> int:
     # 로그 경로는 bootstrap 응답의 meta.log_file 을 쓴다 — URL 로 넘길 것이 없다.
     url = paths.index_url()
     log_file = paths.log_dir() / "app.log"
-    win_w, win_h = winutil.WINDOW_WIDTH, winutil.WINDOW_HEIGHT
+    # ── v1.5.0 (#1) · QHD(2560×1440) 이상 + 낮은 OS 배율이면 창/배율을 자동으로 키운다 ──
+    area = _work_area()
+    display = api.set_display(area[2], area[3], _os_scale())
+    ui_scale = api.effective_ui_scale()
+    zoom = max(0.75, min(1.5, ui_scale / 100.0))
+    win_w = int(round(winutil.WINDOW_WIDTH * zoom))
+    win_h = int(round(winutil.WINDOW_HEIGHT * zoom))
     x, y = _center_position(win_w, win_h)
-    log.info("window %sx%s at %s,%s", win_w, win_h, x, y)
+    log.info("display %sx%s @%s · ui scale %s%% · window %sx%s at %s,%s",
+             display.get("width"), display.get("height"), display.get("scale"),
+             ui_scale, win_w, win_h, x, y)
     window = webview.create_window(
         paths.APP_TITLE,
         url=url,
@@ -267,11 +299,11 @@ def main(argv: list[str] | None = None) -> int:
         height=win_h,
         x=x,
         y=y,
-        min_size=(1000, 640),
+        min_size=(int(1000 * zoom), int(640 * zoom)),
         frameless=True,
         easy_drag=False,
         shadow=True,
-        background_color="#070B13",
+        background_color="#0B0D12",
         confirm_close=False,
         text_select=False,
         zoomable=False,
@@ -305,6 +337,17 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:  # noqa: BLE001 - 스타일 고정은 최선 노력
         log.debug("window style could not be fixed", exc_info=True)
 
+    # ── v1.5.0 · 코박스/에임랩 종료 감지 · 클라우드 30분 자동 백업 ──
+    try:
+        api.start_trainer_watch()
+        log.info("trainer watch armed")
+    except Exception:  # noqa: BLE001
+        log.debug("trainer watch could not start", exc_info=True)
+    try:
+        api.start_cloud_auto()
+    except Exception:  # noqa: BLE001
+        log.debug("cloud auto backup could not start", exc_info=True)
+
     # ── 새 버전 확인 (백그라운드 · 실패해도 조용히) ──
     api.start_update_check()
 
@@ -337,7 +380,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def _quit_app() -> None:
         try:
-            window.destroy()
+            api.close_window()
         except Exception:  # noqa: BLE001
             log.exception("tray quit failed")
 
@@ -401,6 +444,26 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:  # noqa: BLE001
         pass
 
+    # ── v1.5.0 (#23) · 작업표시줄 ✕ · Alt+F4 도 X 버튼과 같은 확인 팝업 ──
+    # pywebview 는 closing 핸들러가 False 를 돌려주면 창을 닫지 않는다.
+    # 그 자리에서 UI 의 '트레이로 이동 / 완전 종료' 팝업을 띄우고, 사용자가
+    # 완전 종료를 고르면 api.close_window() 가 _CLOSE_ALLOWED 를 세워 다시 닫는다.
+    def _on_closing() -> bool:
+        try:
+            if api.allow_close():
+                return True
+            api.request_close()
+            log.info("close requested from OS — confirm popup shown")
+        except Exception:  # noqa: BLE001 - 확인 팝업 실패가 창을 잠그면 안 된다
+            log.exception("close confirm failed")
+            return True
+        return False
+
+    try:
+        window.events.closing += _on_closing
+    except Exception:  # noqa: BLE001 - 구버전 pywebview
+        log.debug("closing event not available", exc_info=True)
+
     log.info("starting %s %s · ui=%s · log=%s · data=%s", paths.APP_TITLE, paths.APP_VERSION,
              url, log_file, paths.data_file())
 
@@ -412,6 +475,10 @@ def main(argv: list[str] | None = None) -> int:
         _fatal(str(exc))
         return 1
     finally:
+        try:
+            api.shutdown("exit")
+        except Exception:  # noqa: BLE001
+            log.debug("final cloud backup failed", exc_info=True)
         try:
             guard.stop()
         except Exception:  # noqa: BLE001

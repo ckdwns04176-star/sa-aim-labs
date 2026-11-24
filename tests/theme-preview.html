@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>SA AIM LABS — 홈 컬러 톤 시안</title>
+<style>
+  @font-face{font-family:'Pretendard';src:url('../ui/assets/Pretendard-Regular.woff2') format('woff2');font-weight:400;font-display:block}
+  @font-face{font-family:'Pretendard';src:url('../ui/assets/Pretendard-Medium.woff2') format('woff2');font-weight:500;font-display:block}
+  @font-face{font-family:'Pretendard';src:url('../ui/assets/Pretendard-SemiBold.woff2') format('woff2');font-weight:600;font-display:block}
+  @font-face{font-family:'Pretendard';src:url('../ui/assets/Pretendard-Bold.woff2') format('woff2');font-weight:700;font-display:block}
+  @font-face{font-family:'Pretendard';src:url('../ui/assets/Pretendard-ExtraBold.woff2') format('woff2');font-weight:800;font-display:block}
+  @font-face{font-family:'Pretendard';src:url('../ui/assets/Pretendard-Black.woff2') format('woff2');font-weight:900;font-display:block}
+  @font-face{font-family:'Chakra Petch';src:url('../ui/assets/ChakraPetch-500.woff2') format('woff2');font-weight:500;font-display:block}
+  @font-face{font-family:'Chakra Petch';src:url('../ui/assets/ChakraPetch-600.woff2') format('woff2');font-weight:600;font-display:block}
+  @font-face{font-family:'Chakra Petch';src:url('../ui/assets/ChakraPetch-700.woff2') format('woff2');font-weight:700;font-display:block}
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#07080B}
+  body{font-family:'Pretendard',system-ui,sans-serif;-webkit-font-smoothing:antialiased;display:flex;flex-direction:column;align-items:center;gap:26px;padding:26px}
+  .num{font-family:'Chakra Petch','Pretendard',sans-serif;font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+  /* ============ 프레임 ============ */
+  .frame{
+    width:1200px;height:750px;position:relative;overflow:hidden;flex:0 0 auto;
+    background:#0B0D12;color:#E9ECF3;
+    --line:rgba(255,255,255,.06);
+    --line-2:rgba(255,255,255,.09);
+    --panel:#13161F;
+    --panel-2:#171A24;
+    --txt:#E9ECF3;
+    --txt-2:#A8B1C2;
+    --muted:#79839A;
+    --dim:#525C6E;
+  }
+  .t1{--ac:#FF4655;--ac06:rgba(255,70,85,.06);--ac10:rgba(255,70,85,.10);--ac14:rgba(255,70,85,.14);--ac22:rgba(255,70,85,.22);--ac40:rgba(255,70,85,.40);--ac60:rgba(255,70,85,.60);--on-ac:#FFFFFF;--aim-glow:rgba(255,70,85,.10)}
+  .t2{--ac:#38BDF8;--ac06:rgba(56,189,248,.06);--ac10:rgba(56,189,248,.10);--ac14:rgba(56,189,248,.14);--ac22:rgba(56,189,248,.22);--ac40:rgba(56,189,248,.40);--ac60:rgba(56,189,248,.60);--on-ac:#04121C;--aim-glow:rgba(56,189,248,.09)}
+  .t3{--ac:#DFC07C;--ac06:rgba(223,192,124,.06);--ac10:rgba(223,192,124,.10);--ac14:rgba(223,192,124,.14);--ac22:rgba(223,192,124,.22);--ac40:rgba(223,192,124,.40);--ac60:rgba(223,192,124,.60);--on-ac:#191307;--aim-glow:rgba(223,192,124,.09)}
+
+  /* ============ 타이틀바 ============ */
+  .tbar{height:36px;display:flex;align-items:center;padding:0 8px 0 14px;border-bottom:1px solid var(--line);background:#0C0E14;position:relative;z-index:5}
+  .tbar .brand{display:flex;align-items:center;gap:9px}
+  .tbar .brand svg{width:17px;height:17px}
+  .tbar .bname{font-family:'Chakra Petch';font-size:10.5px;font-weight:600;letter-spacing:.2em;color:#9AA3B5}
+  .tbar .cur{display:flex;align-items:center;gap:8px;font-size:10.5px;font-weight:600;color:#E9ECF3;letter-spacing:.02em}
+  .tbar .slash{font-family:'Chakra Petch';font-size:10px;color:#39404F;letter-spacing:0}
+  .tbar .mid{margin:0 auto;display:flex;align-items:center;gap:8px;transform:translateX(24px)}
+  .tbar .pill{display:flex;align-items:center;gap:6px;height:20px;padding:0 9px;border-radius:5px;
+    border:1px solid var(--line);background:rgba(255,255,255,.025);font-size:9.5px;font-weight:600;color:#8E98AB}
+  .tbar .pill i{width:5px;height:5px;border-radius:50%;background:var(--ac);display:block;opacity:.9}
+  .tbar .wins{display:flex;align-items:center;gap:2px}
+  .tbar .wbtn{width:34px;height:26px;display:grid;place-items:center;border-radius:5px;color:#6E7787}
+  .tbar .wbtn svg{width:11px;height:11px}
+
+  /* ============ 본문 ============ */
+  .body{height:714px;display:flex;position:relative}
+
+  /* ---- 아이콘 레일 ---- */
+  .rail{width:60px;flex:0 0 60px;border-right:1px solid var(--line);background:#0C0E14;
+    display:flex;flex-direction:column;align-items:center;padding:13px 0 12px;position:relative}
+  .rail .logo{width:30px;height:30px;display:grid;place-items:center;margin-bottom:20px}
+  .rail .logo svg{width:21px;height:21px}
+  .rail .nav{display:flex;flex-direction:column;align-items:center;gap:3px;width:100%}
+  .rail .ni{width:44px;height:38px;display:grid;place-items:center;position:relative;color:#5E6879;border-radius:9px}
+  .rail .ni svg{width:19px;height:19px}
+  .rail .ni.on{color:var(--ac);background:var(--ac10)}
+  .rail .sp{flex:1}
+  .rail .gear{width:44px;height:38px;display:grid;place-items:center;color:#6D7688;position:relative;border-radius:9px}
+  .rail .gear svg{width:19px;height:19px}
+
+  /* ---- 메인 ---- */
+  .main{flex:1;min-width:0;padding:16px 18px 14px;display:flex;flex-direction:column;gap:12px}
+
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:13px;position:relative;overflow:hidden;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.028)}
+
+  /* ============ 히어로 ============ */
+  .hero{height:232px;flex:0 0 232px;display:flex;flex-direction:column;
+    background:linear-gradient(180deg,#151925 0%,#121620 46%,#10131C 100%)}
+  .hero::before{content:'';position:absolute;inset:0;pointer-events:none;
+    background:radial-gradient(560px 280px at 96% -30%,var(--aim-glow),transparent 68%)}
+  .hero::after{content:'';position:absolute;top:0;left:0;right:0;height:1px;
+    background:linear-gradient(90deg,transparent,var(--ac40) 22%,var(--ac40) 62%,transparent);
+    opacity:.35}
+  .hero-top{flex:1;display:flex;align-items:center;gap:26px;padding:0 24px;position:relative;z-index:2}
+
+  .ident{display:flex;align-items:center;gap:17px;min-width:0;flex:1}
+  .ava{width:74px;height:74px;flex:0 0 74px;border-radius:50%;position:relative;display:grid;place-items:center;
+    background:radial-gradient(120% 120% at 30% 15%,#232838 0%,#171B27 55%,#12151E 100%);
+    border:1px solid rgba(255,255,255,.10);
+    font-size:27px;font-weight:800;color:#DCE1EC;letter-spacing:-.02em}
+  .ava::before{content:'';position:absolute;inset:-4px;border-radius:50%;border:1px solid var(--ac22)}
+  .ava .dot{position:absolute;right:1px;bottom:1px;width:9px;height:9px;border-radius:50%;
+    background:rgba(255,255,255,.16);border:2px solid #121620}
+  .who{min-width:0}
+  .who .row{display:flex;align-items:center;gap:8px}
+  .who h1{font-size:26px;font-weight:800;letter-spacing:-.035em;color:#F4F6FB;line-height:1.05}
+  .chip{height:20px;padding:0 7px;border-radius:5px;display:inline-flex;align-items:center;gap:4px;
+    font-size:9.5px;font-weight:700;letter-spacing:.01em;white-space:nowrap;
+    background:rgba(255,255,255,.045);border:1px solid var(--line);color:#A9B3C4}
+  .chip.ac{background:var(--ac10);border-color:var(--ac22);color:var(--ac)}
+  .who .sub{margin-top:9px;font-size:11px;font-weight:500;color:var(--muted);display:flex;align-items:center;gap:8px}
+  .who .sub .s{color:#3A4152}
+  .who .sub b{color:#B9C2D2;font-weight:600}
+
+  .tiers{display:flex;align-items:center;gap:22px;position:relative;z-index:2}
+  .tier{display:flex;align-items:center;gap:10px}
+  .tier .emb{width:44px;height:44px;flex:0 0 44px;display:grid;place-items:center}
+  .tier .emb img{width:44px;height:44px;object-fit:contain;filter:drop-shadow(0 3px 7px rgba(0,0,0,.55))}
+  .tier .tx{display:flex;flex-direction:column;gap:2px}
+  .tier .lb{font-size:9px;font-weight:700;letter-spacing:.10em;color:#6C7688}
+  .tier .nm{font-size:12.5px;font-weight:700;color:#D3DAE7;letter-spacing:-.01em;white-space:nowrap}
+  .tier .rp{font-size:10px;font-weight:600;color:#727C90;font-family:'Chakra Petch';letter-spacing:.02em}
+  .vline{width:1px;height:44px;background:var(--line-2)}
+
+  .aim{width:184px;text-align:right;padding-right:2px}
+  .aim .lb{font-size:8.5px;font-weight:700;letter-spacing:.18em;color:#5E6879}
+  .aim .score{display:flex;align-items:baseline;justify-content:flex-end;gap:6px;margin-top:2px}
+  .aim .score b{font-family:'Chakra Petch';font-size:43px;font-weight:600;line-height:.95;color:#F4F6FB;letter-spacing:-.01em}
+  .aim .score i{font-style:normal;font-family:'Chakra Petch';font-size:12px;color:#4C5568;font-weight:500}
+  .aim .meta{display:flex;align-items:center;justify-content:flex-end;gap:7px;margin-top:5px}
+  .aim .grd{font-size:12px;font-weight:800;color:var(--ac);letter-spacing:-.01em}
+  .aim .next{font-size:9.5px;font-weight:600;color:#667085}
+  .aim .next b{font-family:'Chakra Petch';font-size:10px;font-weight:600;color:#9AA3B5}
+  .aim .bar{height:3px;border-radius:2px;background:rgba(255,255,255,.07);margin-top:8px;overflow:hidden}
+  .aim .bar i{display:block;height:100%;width:57.6%;border-radius:2px;background:linear-gradient(90deg,var(--ac60),var(--ac))}
+
+  .strip{flex:0 0 54px;height:54px;border-top:1px solid var(--line);display:grid;grid-template-columns:1.06fr 1fr 1.1fr;
+    position:relative;z-index:2;background:rgba(255,255,255,.012)}
+  .strip .cell{display:flex;align-items:center;gap:9px;padding:0 24px;position:relative}
+  .strip .cell+.cell::before{content:'';position:absolute;left:0;top:15px;bottom:15px;width:1px;background:var(--line)}
+  .strip .k{font-size:9.5px;font-weight:600;color:#6E7889;letter-spacing:.01em;white-space:nowrap}
+  .strip .v{font-size:12px;font-weight:800;color:#E2E7F0;letter-spacing:-.01em;white-space:nowrap}
+  .strip .v.ac{color:var(--ac)}
+  .strip .d{font-size:9.5px;font-weight:500;color:#565F70;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .strip .mark{width:3px;height:16px;border-radius:2px;background:rgba(255,255,255,.10)}
+  .strip .cell.hot .mark{background:var(--ac)}
+
+  /* ============ 중단 2열 ============ */
+  .mid{flex:1;min-height:0;display:grid;grid-template-columns:1.12fr .88fr;gap:12px}
+  .panel-hd{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+  .panel-hd .tt{display:flex;align-items:center;gap:8px}
+  .panel-hd .tt i{width:3px;height:12px;border-radius:2px;background:var(--ac);display:block}
+  .panel-hd h2{font-size:13px;font-weight:700;color:#E7EBF3;letter-spacing:-.015em}
+  .panel-hd .sc{margin-top:4px;font-size:10px;font-weight:500;color:#6C7688}
+  .panel-hd .rt{font-size:10px;font-weight:700;color:#8C96A8;font-family:'Chakra Petch';letter-spacing:.04em;white-space:nowrap}
+  .panel-hd .rt b{color:#E7EBF3;font-weight:600}
+
+  /* ---- 왼쪽: 추천 5종 ---- */
+  .recs{display:flex;flex-direction:column;padding:15px 18px 14px}
+  .rec-list{margin-top:9px;flex:1;display:flex;flex-direction:column;justify-content:space-between}
+  .rec{display:flex;align-items:center;gap:11px;padding:0 2px 0 0;height:47px;border-bottom:1px solid rgba(255,255,255,.045);position:relative}
+  .rec:last-child{border-bottom:0}
+  .rec .no{width:19px;flex:0 0 19px;font-family:'Chakra Petch';font-size:10px;font-weight:500;color:#454E5F;letter-spacing:.04em}
+  .rec .info{flex:1;min-width:0}
+  .rec .nm{font-size:12px;font-weight:600;color:#DCE2EC;letter-spacing:-.005em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .rec .mt{margin-top:3px;display:flex;align-items:center;gap:7px;font-size:9.5px;font-weight:500;color:#697385;white-space:nowrap}
+  .rec .mt .s{color:#39404E}
+  .rec .mt .pb{font-family:'Chakra Petch';font-size:9px;color:#5A6375;letter-spacing:.02em}
+  .rec .weak{height:16px;padding:0 6px;border-radius:4px;display:inline-flex;align-items:center;
+    font-size:8.5px;font-weight:700;color:var(--ac);background:var(--ac10);border:1px solid var(--ac22)}
+  .rec .score{width:52px;flex:0 0 52px;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:1px}
+  .rec .score b{font-family:'Chakra Petch';font-size:15px;font-weight:600;color:#EDF0F6;letter-spacing:.01em;line-height:1}
+  .rec .score b.no{color:#454E5F;font-weight:500}
+  .rec .score span{font-family:'Chakra Petch';font-size:8.5px;font-weight:500;color:#5E6879;letter-spacing:.02em}
+  .rec .score span.up{color:var(--ac)}
+  .rec .run{width:26px;height:26px;flex:0 0 26px;border-radius:7px;border:1px solid var(--line-2);
+    display:grid;place-items:center;color:#7C8698;background:rgba(255,255,255,.02)}
+  .rec .run svg{width:9px;height:9px;margin-left:1px}
+  .rec.pri .run{border-color:var(--ac22);color:var(--ac);background:var(--ac06)}
+  .rec.pri::before{content:'';position:absolute;left:-11px;top:11px;bottom:11px;width:2px;background:var(--ac);border-radius:2px}
+
+  .rec-foot{flex:0 0 46px;display:flex;align-items:center;justify-content:space-between;gap:10px;
+    margin-top:10px;padding-top:12px;border-top:1px solid var(--line)}
+  .rec-foot .hint{font-size:9.5px;font-weight:500;color:#697385}
+  .rec-foot .hint b{font-weight:700;color:#9FA9BA}
+  .btn-primary{height:32px;padding:0 14px 0 13px;border-radius:8px;background:var(--ac);color:var(--on-ac);
+    display:inline-flex;align-items:center;gap:7px;font-size:11px;font-weight:800;letter-spacing:-.01em;
+    border:0;box-shadow:0 1px 0 rgba(255,255,255,.14) inset}
+  .btn-primary svg{width:9px;height:9px}
+
+  /* ---- 오른쪽: 최근 5판 + 바로가기 ---- */
+  .right{display:flex;flex-direction:column;gap:12px;min-height:0}
+  .matches{flex:1;min-height:0;display:flex;flex-direction:column;padding:15px 18px 12px}
+  .m-list{margin-top:8px;flex:1;display:flex;flex-direction:column;justify-content:space-between}
+  .m{display:flex;align-items:center;gap:10px;height:33px;border-bottom:1px solid rgba(255,255,255,.04)}
+  .m:last-child{border-bottom:0}
+  .m .res{width:22px;flex:0 0 22px;height:16px;border-radius:4px;display:grid;place-items:center;
+    font-size:8.5px;font-weight:800;letter-spacing:0}
+  .m .res.w{background:var(--ac10);color:var(--ac);border:1px solid var(--ac22)}
+  .m .res.l{background:rgba(255,255,255,.03);color:#6E7789;border:1px solid rgba(255,255,255,.06)}
+  .m .map{width:78px;flex:0 0 78px;font-size:10.5px;font-weight:600;color:#C3CBDA;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .m .track{flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,.06);overflow:hidden;position:relative}
+  .m .track i{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:rgba(255,255,255,.30)}
+  .m.win .track i{background:linear-gradient(90deg,var(--ac60),var(--ac))}
+  .m .kd{width:38px;flex:0 0 38px;text-align:right;font-family:'Chakra Petch';font-size:11px;font-weight:600;color:#D8DEEA;letter-spacing:.02em}
+  .m .kdv{width:34px;flex:0 0 34px;text-align:right;font-size:9px;font-weight:500;color:#5C6577}
+
+  .quick{flex:0 0 96px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .qa{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:12px 14px;
+    display:flex;flex-direction:column;justify-content:flex-start;gap:9px;position:relative;overflow:hidden;
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.028)}
+  .qa::after{content:'';position:absolute;right:-30px;top:-40px;width:120px;height:120px;border-radius:50%;
+    background:radial-gradient(circle,var(--ac06),transparent 70%)}
+  .qa .top{display:flex;align-items:center;justify-content:space-between}
+  .qa .ic{width:30px;height:30px;border-radius:8px;display:grid;place-items:center;
+    background:rgba(255,255,255,.035);border:1px solid var(--line-2);color:var(--ac)}
+  .qa .ic svg{width:15px;height:15px}
+  .qa .ar{font-size:13px;color:#49515F}
+  .qa .tt{font-size:12.5px;font-weight:700;color:#E4E9F2;letter-spacing:-.015em}
+  .qa .ds{margin-top:3px;font-size:9.5px;font-weight:500;color:#6C7688;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+  /* ============ 하단 상태바 ============ */
+  .sbar{flex:0 0 44px;height:44px;border-radius:11px;border:1px solid var(--line);background:#10131B;
+    display:flex;align-items:center;gap:13px;padding:0 15px}
+  .sbar .it{display:flex;align-items:center;gap:7px;font-size:10.5px;font-weight:500;color:#727C8E;white-space:nowrap}
+  .sbar .it b{font-family:'Chakra Petch';font-size:12px;font-weight:600;color:#E4E9F2;letter-spacing:.02em}
+  .sbar .it b.ac{color:var(--ac)}
+  .sbar .pips{display:flex;gap:3px;align-items:center}
+  .sbar .pips i{width:15px;height:4px;border-radius:2px;background:rgba(255,255,255,.08)}
+  .sbar .pips i.on{background:var(--ac)}
+  .sbar .sd{width:3px;height:3px;border-radius:50%;background:#333A48}
+  .sbar .sp{flex:1}
+  .sbar .ghost{height:26px;padding:0 10px;border-radius:6px;border:1px solid var(--line-2);
+    display:inline-flex;align-items:center;gap:6px;font-size:10px;font-weight:600;color:#A2ABBB}
+  .sbar .ghost svg{width:10px;height:10px;color:#5F6879}
+</style>
+</head>
+<body>
+
+<!-- ══════════════════ 공통 SVG 심볼 ══════════════════ -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-logo" viewBox="0 0 32 32">
+      <path d="M16 2.6l11.6 6.7v13.4L16 29.4 4.4 22.7V9.3z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+      <circle cx="16" cy="16" r="5.2" fill="none" stroke="currentColor" stroke-width="1.4" opacity=".55"/>
+      <circle cx="16" cy="16" r="1.6" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-home" viewBox="0 0 24 24"><path d="M4 10.6L12 4l8 6.6V20a.9.9 0 01-.9.9h-4.3v-6h-5.6v6H4.9A.9.9 0 014 20z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></symbol>
+    <symbol id="i-grid" viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="6.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.4" fill="none" stroke="currentColor" stroke-width="1.7"/></symbol>
+    <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="3.4" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="12" cy="12" r="1" fill="currentColor"/></symbol>
+    <symbol id="i-trend" viewBox="0 0 24 24"><path d="M4 16.5l5-5 3.2 3.2L20 7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M15.4 7H20v4.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 3.4l7 2.6v5.6c0 4.3-2.9 7.5-7 9-4.1-1.5-7-4.7-7-9V6z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><path d="M9.2 12l2 2 3.6-3.8" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-map" viewBox="0 0 24 24"><path d="M9 4.8L4 6.8v12.4l5-2 6 2 5-2V4.8l-5 2z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M9 4.8v12.4M15 6.8v12.4" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+    <symbol id="i-flag" viewBox="0 0 24 24"><path d="M6 3.6v16.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><path d="M6 4.6h11.4l-2.3 4 2.3 4H6z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-trophy" viewBox="0 0 24 24"><path d="M8 4.5h8v4.2a4 4 0 01-8 0z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8 5.6H5.2v1.6A3 3 0 008 10.2M16 5.6h2.8v1.6A3 3 0 0116 10.2" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M12 12.8v3.4M8.8 19.6h6.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></symbol>
+    <symbol id="i-sliders" viewBox="0 0 24 24"><path d="M5 8h6M15 8h4M5 16h4M13 16h6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/><circle cx="13" cy="8" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/><circle cx="11" cy="16" r="2" fill="none" stroke="currentColor" stroke-width="1.6"/></symbol>
+    <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 3.4l1 2.2 2.4-.5 1 2.3 2.2 1-.5 2.4 1.6 1.8-1.6 1.8.5 2.4-2.2 1-1 2.3-2.4-.5-1 2.2-1-2.2-2.4.5-1-2.3-2.2-1 .5-2.4L4 12l1.6-1.8-.5-2.4 2.2-1 1-2.3 2.4.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round" opacity=".85"/></symbol>
+    <symbol id="i-play" viewBox="0 0 24 24"><path d="M7 4.6l12 7.4-12 7.4z" fill="currentColor"/></symbol>
+    <symbol id="i-bolt" viewBox="0 0 24 24"><path d="M13.4 3.2L6 13.4h5l-.9 7.4 7.9-10.4h-5.1z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+    <symbol id="i-arrow" viewBox="0 0 24 24"><path d="M9 5l7 7-7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+    <symbol id="i-min" viewBox="0 0 12 12"><path d="M2 6h8" fill="none" stroke="currentColor" stroke-width="1.1"/></symbol>
+    <symbol id="i-close" viewBox="0 0 12 12"><path d="M2.4 2.4l7.2 7.2M9.6 2.4l-7.2 7.2" fill="none" stroke="currentColor" stroke-width="1.2"/></symbol>
+  </defs>
+</svg>
+
+<div id="stage" style="display:flex;flex-direction:column;gap:26px;align-items:center"></div>
+<script>
+/* ---------------------------------------------
+   프레임 렌더러 — 세 가지 컬러 톤에 같은 레이아웃
+   --------------------------------------------- */
+const THEMES = [
+  {cls:'t1', key:'theme-1-coral', name:'발로란트 트래커 톤', hex:'#FF4655'},
+  {cls:'t2', key:'theme-2-ice',   name:'Blitz / OP.GG 프로 톤', hex:'#38BDF8'},
+  {cls:'t3', key:'theme-3-gold',  name:'프리미엄 무광 골드 톤', hex:'#DFC07C'},
+];
+
+const RECS = [
+  {nm:'VT 1w6ts Rasp Novice',              area:'정밀 플릭',    diff:'초급', pb:'78', score:'78', delta:'+3.2', up:true,  pri:false},
+  {nm:'Wide Wall 3 Targets TE',            area:'와이드 플릭',  diff:'초급', pb:'58', score:'58', delta:'+1.8', up:true,  pri:false},
+  {nm:'Reflex Micro++ flick reload small', area:'마이크로 보정', diff:'초급', pb:'45', score:'39', delta:'-0.6', up:false, pri:true},
+  {nm:'Close Long Strafes Easy',           area:'트래킹·무빙',  diff:'초급', pb:'—',  score:'—',  delta:'미기록', up:false, pri:false},
+  {nm:'voxTS Static Click rAim',           area:'타겟 스위칭',  diff:'초급', pb:'—',  score:'—',  delta:'미기록', up:false, pri:false},
+];
+const GAMES = [
+  {map:'크로스포트',  w:1, kd:'1.86', kdN:1.86, k:'11', d:'5'},
+  {map:'올드타운',    w:0, kd:'0.83', kdN:0.83, k:'8',  d:'12'},
+  {map:'마린베이스',  w:1, kd:'1.42', kdN:1.42, k:'13', d:'7'},
+  {map:'웨어하우스',  w:0, kd:'0.75', kdN:0.75, k:'6',  d:'9'},
+  {map:'프로방스',    w:1, kd:'2.10', kdN:2.10, k:'12', d:'6'},
+];
+
+function rail(active){
+  const icons = [
+    ['home','홈'],['grid','에임 대시보드'],['target','시나리오 라이브러리'],['trend','에임 기록·분석'],
+    ['shield','서든 병영수첩'],['map','맵·약점 분석'],['flag','친구·클랜 순위표'],['trophy','18단계 티어표'],['sliders','전술 도구']
+  ];
+  return `<aside class="rail">
+    <div class="logo" style="color:var(--ac)"><svg><use href="#i-logo"/></svg></div>
+    <div class="nav">
+      ${icons.map(([ic,lb],i)=>`<div class="ni ${i===active?'on':''}" title="${lb}"><svg><use href="#i-${ic}"/></svg></div>`).join('')}
+    </div>
+    <div class="sp"></div>
+    <div class="gear" title="설정"><svg><use href="#i-gear"/></svg></div>
+  </aside>`;
+}
+
+function frame(t, idx){
+  const recRows = RECS.map((r,i)=>`
+    <div class="rec ${r.pri?'pri':''}">
+      <span class="no">${String(i+1).padStart(2,'0')}</span>
+      <div class="info">
+        <div class="nm">${r.nm}</div>
+        <div class="mt"><span>${r.area}</span><span class="s">·</span><span>${r.diff}</span><span class="s">·</span><span class="pb">PB ${r.pb}</span>${r.pri?'<span class="weak">약점 1순위</span>':''}</div>
+      </div>
+      <div class="score"><b class="${r.score==='—'?'no':''}">${r.score}</b><span class="${r.up?'up':''}">${r.delta}</span></div>
+      <div class="run"><svg><use href="#i-play"/></svg></div>
+    </div>`).join('');
+
+  const mRows = GAMES.map(g=>`
+    <div class="m ${g.w?'win':''}">
+      <span class="res ${g.w?'w':'l'}">${g.w?'승':'패'}</span>
+      <span class="map">${g.map}</span>
+      <div class="track"><i style="width:${Math.min(100, g.kdN/2.2*100)}%"></i></div>
+      <span class="kd">${g.kd}</span>
+      <span class="kdv">${g.k} / ${g.d}</span>
+    </div>`).join('');
+
+  return `<section class="frame ${t.cls}" id="frame-${idx+1}" data-key="${t.key}">
+    <div class="tbar">
+      <div class="brand" style="color:var(--ac)">
+        <svg><use href="#i-logo"/></svg>
+        <span class="bname">SA AIM LABS</span>
+        <span class="slash">//</span>
+        <span class="cur">홈</span>
+      </div>
+      <div class="mid"><span class="pill"><i></i>NEXON API 연결됨</span></div>
+      <div class="wins">
+        <div class="wbtn"><svg><use href="#i-min"/></svg></div>
+        <div class="wbtn"><svg><use href="#i-close"/></svg></div>
+      </div>
+    </div>
+
+    <div class="body">
+      ${rail(0)}
+      <div class="main">
+
+        <div class="card hero">
+          <div class="hero-top">
+            <div class="ident">
+              <div class="ava">휴</div>
+              <div class="who">
+                <div class="row">
+                  <h1>휴가중.</h1>
+                  <span class="chip">리드 클랜</span>
+                  <span class="chip ac">3연승 중</span>
+                </div>
+                <div class="sub"><span>서든어택 랭크전</span><span class="s">·</span><span>최근 100판 승률 <b>47.0%</b></span><span class="s">·</span><span>전적 최신화 <b>11-25 04:02</b></span></div>
+              </div>
+            </div>
+
+            <div class="tiers">
+              <div class="tier">
+                <div class="emb"><img src="../ui/assets/solo_113.png" alt=""></div>
+                <div class="tx"><span class="lb">솔로</span><span class="nm">그랜드마스터 I</span><span class="rp">3,261 RP</span></div>
+              </div>
+              <div class="tier">
+                <div class="emb"><img src="../ui/assets/party_10.png" alt=""></div>
+                <div class="tx"><span class="lb">파티</span><span class="nm">그랜드마스터 III</span><span class="rp">3,435 RP</span></div>
+              </div>
+              <div class="vline"></div>
+              <div class="aim">
+                <div class="lb">통합 에임</div>
+                <div class="score"><b>2,075</b><i>/ 3,600</i></div>
+                <div class="meta"><span class="grd">골드 II</span></div>
+                <div class="bar"><i></i></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="strip">
+            <div class="cell"><span class="mark"></span><span class="k">오늘 랭크 컨디션</span><span class="v">보통</span><span class="d">표본 6판</span></div>
+            <div class="cell"><span class="mark"></span><span class="k">최근 폼</span><span class="v">K/D 57.9%</span><span class="d">최근 12판</span></div>
+            <div class="cell hot"><span class="mark"></span><span class="k">약점 1순위</span><span class="v ac">마이크로 보정 41</span><span class="d">오늘 추천 반영</span></div>
+          </div>
+        </div>
+
+        <div class="mid">
+          <div class="card recs">
+            <div class="panel-hd">
+              <div>
+                <div class="tt"><i></i><h2>오늘의 추천 연습 5종</h2></div>
+                <div class="sc">약점 우선 · 스나 맞춤 · KovaaK's 로테이션</div>
+              </div>
+              <div class="rt"><b>3</b> / 5 완료</div>
+            </div>
+            <div class="rec-list">${recRows}</div>
+            <div class="rec-foot">
+              <div class="hint">가장 약한 <b>마이크로 보정</b>부터 · 남은 2종 약 22분</div>
+              <button class="btn-primary"><svg><use href="#i-play"/></svg>5종 연속 실행</button>
+            </div>
+          </div>
+
+          <div class="right">
+            <div class="card matches">
+              <div class="panel-hd">
+                <div>
+                  <div class="tt"><i></i><h2>최근 랭크 5판</h2></div>
+                  <div class="sc">솔로 랭크전 · 최근 전적</div>
+                </div>
+                <div class="rt">3승 2패 · <b>평균 K/D 1.28</b></div>
+              </div>
+              <div class="m-list">${mRows}</div>
+            </div>
+
+            <div class="quick">
+              <div class="qa">
+                <div class="top">
+                  <span class="ic"><svg><use href="#i-shield"/></svg></span>
+                  <span class="ar">›</span>
+                </div>
+                <div>
+                  <div class="tt">병영수첩</div>
+                  <div class="ds">전적 · 티어 · 최근 100판</div>
+                </div>
+              </div>
+              <div class="qa">
+                <div class="top">
+                  <span class="ic"><svg><use href="#i-bolt"/></svg></span>
+                  <span class="ar">›</span>
+                </div>
+                <div>
+                  <div class="tt">그래픽·마우스 최적화</div>
+                  <div class="ds">엔비디아 · 전원 · 가속</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="sbar">
+          <div class="it">오늘 추천 <b>3</b> / 5 완료</div>
+          <div class="pips"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></div>
+          <div class="sd"></div>
+          <div class="it">연속 <b class="ac">4</b>일</div>
+          <div class="sd"></div>
+          <div class="it">이번 주 목표 <b>2 / 5일</b></div>
+          <div class="sp"></div>
+          <div class="it">최근 7일 <b class="ac">+124</b>점</div>
+          <div class="sd"></div>
+          <div class="ghost">에임 대시보드<svg><use href="#i-arrow"/></svg></div>
+        </div>
+
+      </div>
+    </div>
+  </section>`;
+}
+
+document.getElementById('stage').innerHTML = THEMES.map(frame).join('');
+</script>
+</body>
+</html>

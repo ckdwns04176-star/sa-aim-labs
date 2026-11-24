@@ -43,6 +43,13 @@ DEFAULTS: dict[str, Any] = {
         "goals": {"win": 55.0, "kd": 60.0, "dmg": 1400, "rp": 4000},
         "supabase": {"url": DEFAULT_URL, "anon_key": DEFAULT_ANON_KEY},
         "cloud_email": "",
+        # ── v1.5.0 ──
+        "theme": "coral",                 # coral / ice / gold (#4)
+        "ui_scale": 100,                  # 90 / 100 / 115 / 125 (#1)
+        "ui_scale_auto": True,            # QHD 이상이면 자동으로 키운다
+        "excluded_scenarios": [],         # 추천에서 빼 둔 시나리오 이름
+        "watch_trainers": True,           # 코박스·에임랩 종료 감지 알림
+        "auto_cloud": True,               # 로그인 상태면 30분마다 자동 동기화
     },
     "records": [],
     "leaderboard": [],
@@ -50,6 +57,8 @@ DEFAULTS: dict[str, Any] = {
     "rotation": [],
     "more": [],
     "barracks": {},
+    "barracks_ids": {},          # 닉네임 → {sn, clan_id, photo, profile}
+    "custom_scenarios": [],      # 사용자가 직접 추가한 시나리오 (#5)
     "barracks_history": [],
     "condition_history": [],
     "ui": {"digest_ack": None},
@@ -63,6 +72,7 @@ DEFAULTS: dict[str, Any] = {
         "last_launch": None,
     },
     "cloud": {"email": None, "user_id": None, "access_token": None, "refresh_token": None, "last_sync": None},
+    "cloud_auto": {"last_at": None, "last_reason": None},
 }
 
 
@@ -237,6 +247,15 @@ class Store:
     def barracks_cache(self) -> dict[str, Any]:
         return self.data.setdefault("barracks", {})
 
+    # ------------------------------------------------------------ barracks ids (v1.5.0)
+    def barracks_ids(self) -> dict[str, Any]:
+        """닉네임 → 병영수첩 user_nexon_sn·클랜 ID·프로필 사진 캐시."""
+        return self.data.setdefault("barracks_ids", {})
+
+    # ------------------------------------------------------------ custom scenarios (v1.5.0)
+    def custom_scenarios(self) -> list[dict[str, Any]]:
+        return self.data.setdefault("custom_scenarios", [])
+
     # ------------------------------------------------------------ barracks snapshots (v1.3.0)
     def barracks_history(self) -> list[dict[str, Any]]:
         """병영수첩 최신화 스냅샷 [{date, at, nickname, stats, tier, basic}] — 날짜별 비교용."""
@@ -317,6 +336,10 @@ class Store:
 
     def cloud(self) -> dict[str, Any]:
         return self.data.setdefault("cloud", copy.deepcopy(DEFAULTS["cloud"]))
+
+    def cloud_auto(self) -> dict[str, Any]:
+        """자동 백업 상태 {last_at, last_reason}."""
+        return self.data.setdefault("cloud_auto", copy.deepcopy(DEFAULTS["cloud_auto"]))
 
     # ------------------------------------------------------------ backup / restore
     def export_backup(self, dest: str | os.PathLike[str] | None = None) -> Path:

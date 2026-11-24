@@ -165,11 +165,11 @@ def backend_checks() -> None:
     real_fetch = updates.fetch_latest
     try:
         updates.clear()
-        updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.4.1", "name": "v1.4.1",
+        updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.5.1", "name": "v1.5.1",
                                                     "url": "https://github.com/x/y", "download": "https://x/y.exe",
                                                     "published_at": "2026-11-23T00:00:00Z", "notes": ""}
         newer = updates.check(paths.APP_VERSION, force=True)
-        check("새 버전 감지", newer.get("ok") and newer.get("newer") and newer.get("latest") == "1.4.1",
+        check("새 버전 감지", newer.get("ok") and newer.get("newer") and newer.get("latest") == "1.5.1",
               str(newer.get("message")))
         updates.clear()
         updates.fetch_latest = lambda timeout=4.0: {"ok": True, "tag": "v1.0.0", "url": "", "download": ""}
@@ -331,11 +331,12 @@ def backend_checks() -> None:
         "maps": [{"map": "A", "games": 8, "win": 50.0, "kd": 52.0, "weak": 40}],
         "matches": [{"result": "승"}] * 5,
         "recent": {"sniper": 60, "assault": 40}})
-    check("솔로/파티 격차 코칭", any("2,100" in t["text"] and "2,600" in t["text"] for t in gap),
-          str([t["title"] for t in gap]))
+    _gap_hit = [t for t in gap if ("2,100" in t["text"] and "2,600" in t["text"])
+                or ("2,100" in t["title"] and "2,600" in t["title"])]
+    check("솔로/파티 격차 코칭", bool(_gap_hit), str([t["title"] for t in gap]))
 
     # ---- 12. 앱 버전 · API 노출
-    check("APP_VERSION 1.4.0", paths.APP_VERSION == "1.4.0", paths.APP_VERSION)
+    check("APP_VERSION 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
     import main as app_main
 
     exposed = app_main._public_names(api)

@@ -29,6 +29,7 @@ WM_NULL = 0x0000
 WM_LBUTTONUP = 0x0202
 WM_LBUTTONDBLCLK = 0x0203
 WM_RBUTTONUP = 0x0205
+WM_CONTEXTMENU = 0x007B
 WM_HOTKEY = 0x0312
 
 NIM_ADD = 0x00000000
@@ -38,6 +39,7 @@ NIM_DELETE = 0x00000002
 NIF_MESSAGE = 0x00000001
 NIF_ICON = 0x00000002
 NIF_TIP = 0x00000004
+NIF_INFO = 0x00000010
 
 IMAGE_ICON = 1
 LR_LOADFROMFILE = 0x00000010
@@ -72,6 +74,53 @@ _VK = {"A": 0x41, "B": 0x42, "C": 0x43, "D": 0x44, "E": 0x45, "F": 0x46, "G": 0x
 
 def available() -> bool:
     return os.name == "nt"
+
+
+def _configure(user32, kernel32, shell32) -> None:
+    """64비트 핸들 손상 방지 — ctypes 기본 restype(c_int)은 HMENU/HWND 를 잘라 먹는다.
+
+    v1.5.0 (#18) · 우클릭 메뉴가 안 뜨던 원인: `CreatePopupMenu()` 가 돌려주는
+    HMENU 는 64비트인데 ctypes 는 기본으로 32비트 int 로 받아 핸들이 잘렸고,
+    그래서 `TrackPopupMenu(menu, …, hwnd, …)` 가 실패해 메뉴가 뜨지 않았다.
+    """
+    from ctypes import wintypes
+
+    try:
+        user32.CreatePopupMenu.restype = wintypes.HMENU
+        user32.CreatePopupMenu.argtypes = []
+        user32.AppendMenuW.restype = wintypes.BOOL
+        user32.AppendMenuW.argtypes = [wintypes.HMENU, wintypes.UINT, ctypes.c_size_t, wintypes.LPCWSTR]
+        user32.TrackPopupMenu.restype = wintypes.BOOL
+        user32.TrackPopupMenu.argtypes = [wintypes.HMENU, wintypes.UINT, ctypes.c_int, ctypes.c_int,
+                                          ctypes.c_int, wintypes.HWND, ctypes.c_void_p]
+        user32.DestroyMenu.restype = wintypes.BOOL
+        user32.DestroyMenu.argtypes = [wintypes.HMENU]
+        user32.SetForegroundWindow.restype = wintypes.BOOL
+        user32.SetForegroundWindow.argtypes = [wintypes.HWND]
+        user32.BringWindowToTop.restype = wintypes.BOOL
+        user32.BringWindowToTop.argtypes = [wintypes.HWND]
+        user32.CreateWindowExW.restype = wintypes.HWND
+        user32.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.DWORD,
+                                           ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                           wintypes.HWND, wintypes.HMENU, wintypes.HINSTANCE, ctypes.c_void_p]
+        user32.DestroyWindow.restype = wintypes.BOOL
+        user32.DestroyWindow.argtypes = [wintypes.HWND]
+        user32.PostMessageW.restype = wintypes.BOOL
+        user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.GetCursorPos.restype = wintypes.BOOL
+        user32.GetCursorPos.argtypes = [ctypes.POINTER(wintypes.POINT)]
+        user32.RegisterHotKey.restype = wintypes.BOOL
+        user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+        user32.UnregisterHotKey.restype = wintypes.BOOL
+        user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.LoadImageW.restype = wintypes.HANDLE
+        user32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
+                                      ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        shell32.Shell_NotifyIconW.restype = wintypes.BOOL
+        shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.c_void_p]
+        kernel32.GetModuleHandleW.restype = wintypes.HINSTANCE
+    except Exception:  # noqa: BLE001 - 구형 파이썬/윈도우에서도 트레이는 시도한다
+        log.debug("tray prototypes not configured", exc_info=True)
 
 
 def parse_hotkey(spec: str) -> tuple[int, int] | None:
@@ -269,6 +318,7 @@ class TrayIcon:
         hwnd = int(self._hwnd or 0)
         menu = 0
         try:
+            _configure(user32, ctypes.windll.kernel32, ctypes.windll.shell32)
             menu = user32.CreatePopupMenu()
             if not menu:
                 return
@@ -323,7 +373,7 @@ class TrayIcon:
                 event = int(lparam) & 0xFFFF
                 if event in (WM_LBUTTONUP, WM_LBUTTONDBLCLK):
                     self._toggle()
-                elif event == WM_RBUTTONUP:
+                elif event in (WM_RBUTTONUP, WM_CONTEXTMENU):
                     self._menu()
                 return 0
             if msg == WM_HOTKEY and int(wparam) == HOTKEY_ID:
@@ -371,6 +421,7 @@ class TrayIcon:
             kernel32 = ctypes.windll.kernel32
             user32 = ctypes.windll.user32
             shell32 = ctypes.windll.shell32
+            _configure(user32, kernel32, shell32)
 
             WNDPROC = ctypes.WINFUNCTYPE(ctypes.c_ssize_t, wintypes.HWND, wintypes.UINT,
                                          wintypes.WPARAM, wintypes.LPARAM)

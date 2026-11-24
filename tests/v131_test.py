@@ -225,7 +225,7 @@ def backend_checks() -> None:
     from app import paths, winutil, nvidia, drs, scoring, nexon
     from app.store import Store
 
-    check("APP_VERSION 1.4.0", paths.APP_VERSION == "1.4.0", paths.APP_VERSION)
+    check("APP_VERSION 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
 
     # 1·2. 창 이동 · 최대화 제거
     style = 0x00CF0000  # WS_OVERLAPPEDWINDOW
@@ -317,15 +317,16 @@ def backend_checks() -> None:
     flat = " ".join(t["title"] + " " + t["text"] for t in coach)
     banned = [w for w in ("복도", "초동 교전", "초동", "각이 애매", "브리핑") if w in flat]
     check("코칭에 번역투·타게임 용어 없음", not banned, str(banned))
-    check("코칭에 서든 콜아웃 사용", any(w in flat for w in ("A롱", "B롱", "숏", "중통", "홀", "컨", "1픽")), flat[:80])
+    # v1.5.0 — 확인되지 않은 지형 이름(2층·골목·중통)은 쓰지 않고 실제 수치로만 쓴다
+    check("코칭에 확인 안 된 지형 이름 없음", not any(w in flat for w in ("2층", "골목", "중통")), flat[:80])
     check("코칭이 숫자를 그대로 인용", "2,100" in flat and "2,600" in flat and "46.0" in flat, flat[:100])
 
     guide = scoring.map_guide({"map": "제5보급-심플", "games": 11, "win": 63.6, "kd": 49.5, "dmg": 765.9})
     gflat = " ".join(guide["tips"])
-    check("맵 가이드에 보급창고 콜아웃", any(w in gflat for w in ("A롱", "B롱", "숏", "컨", "창고")), gflat[:80])
+    check("맵 가이드에 지어낸 지형 이름 없음", not any(w in gflat for w in ("2층", "골목", "중통")), gflat[:80])
     check("맵 가이드에 번역투 없음", not any(w in gflat for w in ("복도", "초동", "각이 애매")), gflat[:80])
     italy = scoring.map_guide({"map": "이탈리아-폭파", "games": 6, "win": 33.3, "kd": 43.5, "dmg": 836.8})
-    check("이탈리아 콜아웃(시장·홀·2층)", any(w in " ".join(italy["tips"]) for w in ("시장", "홀", "2층")),
+    check("이탈리아 가이드 — 수치 기반 조언", any(w in " ".join(italy["tips"]) for w in ("승률", "K/D", "딜량")),
           str(italy.get("callouts")))
 
     # 17. 프로필 카드 제거 → 기어 버튼
@@ -396,8 +397,10 @@ def ui_checks() -> None:
         # 17. 설정 기어
         gear = page.evaluate("""() => ({btn: !!document.getElementById('settings-btn'),
             card: !!document.getElementById('profile-card'),
-            label: (document.getElementById('settings-btn')||{}).innerText})""")
-        check("사이드바 맨 아래 기어 설정 버튼", gear["btn"] and not gear["card"] and "설정" in (gear["label"] or ""),
+            title: (document.getElementById('settings-btn')||{}).getAttribute('title')||'',
+            bottom: (() => { const b = document.getElementById('settings-btn'); const n = document.querySelector('.sidebar .nav-item');
+                             return b && n ? (b.getBoundingClientRect().top > n.getBoundingClientRect().top) : false; })()})""")
+        check("사이드바 맨 아래 기어 설정 버튼", gear["btn"] and not gear["card"] and "설정" in gear["title"] and gear["bottom"],
               str(gear))
         page.click("#settings-btn")
         page.wait_for_timeout(250)
@@ -455,7 +458,7 @@ def ui_checks() -> None:
             const importBtn = document.getElementById('kovak-import-head');
             const runAll = document.getElementById('run-all-btn');
             const nav = [...document.querySelectorAll('.nav-item')].find(b => b.dataset.screen === 'recs');
-            return {nav: nav ? nav.innerText.trim() : '',
+            return {nav: nav ? (nav.getAttribute('title') || nav.innerText.trim()) : '',
                     h1: (document.querySelector('#s-recs h1')||{}).innerText,
                     order: importBtn && runAll ? (importBtn.getBoundingClientRect().right <= runAll.getBoundingClientRect().left) : false,
                     importBtn: !!importBtn, old: !!document.getElementById('kovak-import-2')};

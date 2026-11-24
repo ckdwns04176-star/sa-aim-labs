@@ -144,7 +144,7 @@ def main() -> int:
     check("main.py 코드에 쿼리스트링 문자열 없음",
           not any(('desktop=1&log' in s) or ('wv2=0' in s) or ('urllib.parse.quote' in s) for s in string_consts),
           "")
-    check("APP_VERSION 1.4.0", app_paths.APP_VERSION == "1.4.0", app_paths.APP_VERSION)
+    check("APP_VERSION 1.5.0", app_paths.APP_VERSION == "1.5.0", app_paths.APP_VERSION)
 
     # ── 0) 쿼리스트링이 전혀 없는 순수 file:// URL 로도 데스크톱 부팅이 된다.
     #       v1.0.1 은 main.py 가 ?desktop=1&log=...&wv2=0 을 붙이면서 WebView2 가
@@ -223,6 +223,11 @@ def main() -> int:
               "%APPDATA%" in (ov.get("text") or "") and "SA_Aim_Labs" in (ov.get("text") or ""),
               (ov.get("text") or "")[-120:])
         check("샘플 데이터를 실제 앱으로 쓰지 않음(AL.real=false)", err["real"] is False, str(err["real"]))
+        # v1.5.0 — 스플래시 전환(줌) 애니메이션이 끝날 때까지 기다린다
+        try:
+            page.wait_for_selector("#app-splash", state="hidden", timeout=4000)
+        except Exception:  # noqa: BLE001
+            pass
         splash2 = page.evaluate(SPLASH_STATE)
         check("오류 시 스플래시는 걷힘", splash2["visible"] is False, json.dumps(splash2, ensure_ascii=False))
         check("브리지 없음 시나리오 JS 오류 없음", not errors, "; ".join(errors[:2]))

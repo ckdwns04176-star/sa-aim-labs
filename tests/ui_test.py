@@ -27,11 +27,9 @@ RESULTS: list[tuple[str, bool, str]] = []
 
 
 def _open_rail(page) -> None:
-    """v1.4.0 — 트레이너/무기 토글은 사이드바를 호버해야 펼쳐진다."""
-    page.mouse.move(640, 420)
-    page.wait_for_timeout(220)
-    page.mouse.move(30, 600)
-    page.wait_for_timeout(360)
+    """v1.5.0 — 트레이너/무기 토글은 에임 대시보드 안으로 옮겼다 (#16)."""
+    page.evaluate("() => { document.querySelectorAll('.screen').forEach(s => { s.hidden = (s.id !== 's-dashboard'); }); }")
+    page.wait_for_timeout(120)
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
