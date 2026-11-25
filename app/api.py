@@ -2932,8 +2932,10 @@ class Api:
         settings = self._overlay_settings()
         if not settings.get("enabled"):
             return self._ok(enabled=False, message="설정에서 오버레이를 켜 주세요")
-        if self._overlay.state().get("open"):
-            self._overlay.hide_all()
+        open_kinds = set(self._overlay.state().get("open") or [])
+        if open_kinds & {"party", "match"}:
+            self._overlay.hide("party")
+            self._overlay.hide("match")
             return self._ok(closed=True)
         return self.overlay_mapban_start()
 
@@ -3032,7 +3034,11 @@ class Api:
         if shot.get("ok"):
             for lines in shot.get("lines") or []:
                 card_names.append(_map_line(lines))
-        if len([n for n in card_names if n]) < 2:
+        # 맵 이름으로 **확인된 카드**가 2개 이상이어야 맵 밴 화면으로 본다.
+        # (대기실·채팅 UI 글자를 맵 이름으로 오인하지 않도록)
+        known = [(name, v150.map_key(name)) for name in card_names]
+        known = [(name, key) for name, key in known if key]
+        if len(known) < 2:
             return {"ok": False, "cards": [], "source": "ocr-failed",
                     "message": "맵 이름을 읽지 못했습니다 · 맵 밴 화면에서 다시 눌러 주세요"}
         table: dict[str, dict[str, Any]] = {}
@@ -3090,8 +3096,10 @@ class Api:
         settings = self._overlay_settings()
         if not settings.get("enabled"):
             return self._err("오버레이가 꺼져 있습니다")
-        if self._overlay.state().get("open"):
-            self._overlay.hide_all()
+        open_kinds = set(self._overlay.state().get("open") or [])
+        if open_kinds & {"party", "match"}:
+            self._overlay.hide("party")
+            self._overlay.hide("match")
             return self._ok(closed=True)
         try:
             client = self._client()
