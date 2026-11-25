@@ -20,7 +20,7 @@ from typing import Any, Callable, Sequence
 
 from . import nexon
 
-DEFAULT_DEPTH = 16
+DEFAULT_DEPTH = 12
 PROFILE_BUDGET = 1.2
 TOTAL_BUDGET = 3.4
 
@@ -46,6 +46,8 @@ def weapon_of(recent: dict[str, Any]) -> str:
 
 def badge_text(row: dict[str, Any]) -> str:
     """`스나 · 이 맵 64% · KD 61%` — 오버레이 한 줄 배지."""
+    if row.get("error"):
+        return "정보 없음"
     weapon = WEAPON_KO.get(str(row.get("weapon") or ""), "스나")
     parts = [weapon]
     map_win = row.get("map_win")
@@ -55,6 +57,8 @@ def badge_text(row: dict[str, Any]) -> str:
         parts.append(f"전체 {round(float(row['win']))}%")
     if row.get("kd") is not None:
         parts.append(f"KD {round(float(row['kd']))}%")
+    if len(parts) == 1:
+        parts.append("표본 없음")
     return " · ".join(parts)
 
 
@@ -79,12 +83,11 @@ def _profile(client: nexon.NexonClient, name: str) -> dict[str, Any]:
         ouid = client.resolve_ouid(name)
         basic = client.user_basic(ouid)
         real = str(basic.get("user_name") or name)
-        tier = client.user_tier(ouid)
         recent = client.user_recent(ouid)
         return {
             "name": real, "ouid": ouid,
             "clan": basic.get("clan_name") or "",
-            "tier": nexon.kr_tier(tier.get("party_rank_match_tier") or tier.get("solo_rank_match_tier")),
+            "tier": "",
             "weapon": weapon_of(recent),
             "win": _pct(recent.get("recent_win_rate")),
             "kd": _pct(recent.get("recent_kill_death_rate")),
@@ -94,23 +97,15 @@ def _profile(client: nexon.NexonClient, name: str) -> dict[str, Any]:
         return {"name": name, "error": nexon.friendly_error(str(exc)), "weapon": "sniper"}
 
 
-def _details(client: nexon.NexonClient, row: dict[str, Any], map_name: str,
-             depth: int) -> dict[str, Any]:
-    ouid = row.get("ouid")
-    if not ouid:
-        return row
+def _finish_row(row: dict[str, Any], rows: list[dict[str, Any]],
+                details: list[dict[str, Any] | None], map_name: str) -> dict[str, Any]:
     try:
-        rows = client.recent_matches(str(ouid), 20)
-        details = []
-        for item in rows[:depth]:
-            match_id = item.get("match_id")
-            detail = client.match_detail_cached(match_id) or client.match_detail(match_id)
-            details.append(detail)
         agg = nexon.aggregate(rows, details, str(row.get("name") or ""))
         row = dict(row)
         row["games"] = int(agg.get("games") or 0)
-        row["win"] = _pct(agg.get("win")) if agg.get("games") else row.get("win")
-        row["kd"] = _pct(agg.get("kd")) if agg.get("games") else row.get("kd")
+        if agg.get("games"):
+            row["win"] = _pct(agg.get("win"))
+            row["kd"] = _pct(agg.get("kd"))
         maps = [m for m in (agg.get("maps") or []) if m.get("games")]
         row["maps"] = maps
         if map_name:
@@ -118,9 +113,9 @@ def _details(client: nexon.NexonClient, row: dict[str, Any], map_name: str,
                 if nexon_map_equal(entry.get("map"), map_name):
                     row["map_win"] = _pct(entry.get("win"))
                     break
-        return row
     except Exception:  # noqa: BLE001 - 정밀 단계 실패는 프로필 값으로 버틴다
-        return row
+        pass
+    return row
 
 
 def nexon_map_equal(a: Any, b: Any) -> bool:
@@ -132,6 +127,26 @@ def nexon_map_equal(a: Any, b: Any) -> bool:
 
     left, right = base(a), base(b)
     return bool(left) and bool(right) and (left == right or left in right or right in left)
+
+
+def _recent_party(client: nexon.NexonClient, ouid: str, limit: int = 20) -> list[dict[str, Any]]:
+    """파티 랭크 목록 1콜 (없으면 솔로 1콜) — 스카우팅은 파티전이 기준.
+
+    NEXON API 는 목록을 최대 1000건까지 돌려주기도 해서, 최근 20판만 남긴다
+    (전체 1000판을 집계하면 '이 맵 승률'이 엉뚱한 표본이 된다).
+    """
+    try:
+        rows = client.matches(ouid, nexon.MATCH_TYPES[1])
+    except Exception:  # noqa: BLE001
+        rows = []
+    if not rows:
+        try:
+            rows = client.matches(ouid, nexon.MATCH_TYPES[0])
+        except Exception:  # noqa: BLE001
+            rows = []
+    rows = list(rows)
+    rows.sort(key=nexon.match_time, reverse=True)
+    return rows[:limit]
 
 
 def quick_scout(client: nexon.NexonClient, names: Sequence[str], map_name: str = "",
@@ -162,27 +177,54 @@ def quick_scout(client: nexon.NexonClient, names: Sequence[str], map_name: str =
         except Exception:  # noqa: BLE001
             pass
 
-    # ── B) 최근 경기 상세 → 이 맵 승률 (병렬 · 남은 시간만큼) ─────────
-    remaining = max(0.4, budget - (time.monotonic() - started))
+    # ── B) 최근 경기 상세 → 이 맵 승률 (전체 병렬 · 남은 시간만큼) ─────
+    #     선수별로 순서대로 10~16콜을 하면 5초를 넘긴다.  목록 조회와 상세 조회를
+    #     나눠 **모든 선수의 상세를 한 풀에서** 동시에 받는다.
+    remaining = max(0.5, budget - (time.monotonic() - started))
+    deadline = started + budget
     refined: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=len(targets)) as pool:
-        futures = {pool.submit(_details, client, row, map_name, depth): row for row in ordered
-                   if row.get("ouid")}
-        refined_map: dict[str, dict[str, Any]] = {}
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        row_jobs = {pool.submit(_recent_party, client, str(r["ouid"])): r
+                    for r in ordered if r.get("ouid")}
+        match_rows: dict[str, list[dict[str, Any]]] = {}
         try:
-            for future in as_completed(futures, timeout=remaining):
-                row = future.result()
-                refined_map[row["name"]] = row
-                if on_update:
-                    current = [refined_map.get(r["name"], r) for r in ordered]
-                    try:
-                        on_update([row_payload(r) for r in current])
-                    except Exception:  # noqa: BLE001
-                        pass
+            for future in as_completed(row_jobs, timeout=max(0.4, remaining * 0.45)):
+                row = row_jobs[future]
+                try:
+                    match_rows[row["name"]] = future.result()
+                except Exception:  # noqa: BLE001
+                    match_rows[row["name"]] = []
         except Exception:  # noqa: BLE001 - 남은 선수는 프로필 값 유지
             pass
+
+    tasks: list[tuple[str, str, str]] = []      # (선수 이름, match_id, 이름)
     for row in ordered:
-        refined.append(refined_map.get(row["name"], row))
+        for match in (match_rows.get(row["name"]) or [])[:depth]:
+            if match.get("match_id"):
+                tasks.append((row["name"], str(match["match_id"]), str(row.get("name") or "")))
+    details_by_player: dict[str, dict[str, dict[str, Any] | None]] = {}
+    if tasks:
+        with ThreadPoolExecutor(max_workers=10) as pool:
+            jobs = {}
+            for name, match_id, _nick in tasks:
+                cached = client.match_detail_cached(match_id)
+                if cached is not None:
+                    details_by_player.setdefault(name, {})[match_id] = cached
+                    continue
+                jobs[pool.submit(client.match_detail, match_id)] = (name, match_id)
+            for future in as_completed(jobs, timeout=max(0.4, deadline - time.monotonic())):
+                name, match_id = jobs[future]
+                try:
+                    details_by_player.setdefault(name, {})[match_id] = future.result()
+                except Exception:  # noqa: BLE001
+                    details_by_player.setdefault(name, {})[match_id] = None
+
+    for row in ordered:
+        name = row["name"]
+        rows = (match_rows.get(name) or [])[:depth]
+        detail_map = details_by_player.get(name) or {}
+        details = [detail_map.get(str(m.get("match_id"))) for m in rows]
+        refined.append(_finish_row(row, rows, details, map_name) if rows else row)
     payload = [row_payload(r) for r in refined]
     found = len([r for r in refined if not r.get("error")])
     return {"ok": found > 0, "rows": payload, "raw": refined,

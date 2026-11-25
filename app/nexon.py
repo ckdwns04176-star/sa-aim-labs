@@ -34,7 +34,7 @@ BASE_URL = "https://open.api.nexon.com"
 # v1.0.0 — 앱에는 넥슨 키가 들어가지 않는다.  모든 조회는 Cloudflare Workers
 # 프록시를 거치고, 사용자가 개인 키를 직접 넣은 경우에만 넥슨으로 바로 쏜다.
 PROXY_URL = "https://sa-aim-proxy.ckdwns04176.workers.dev"
-PROXY_MIN_INTERVAL = 0.04
+PROXY_MIN_INTERVAL = 0.03
 MATCH_MODE = "폭파미션"
 MATCH_TYPES = ("랭크전 솔로", "랭크전 파티")
 RECENT_N = 100
