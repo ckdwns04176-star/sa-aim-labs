@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>SA Aim Labs · Party Scan</title>
+<style>
+  html,body{margin:0;padding:0;background:transparent;overflow:hidden;
+    font-family:Pretendard,"Malgun Gothic","Segoe UI",sans-serif;color:#E8EEF8;
+    -webkit-user-select:none;user-select:none}
+  .wrap{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:space-between;padding:0 0 6px}
+  .hd{display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;border-radius:10px;
+    background:linear-gradient(180deg,rgba(14,18,27,.94),rgba(14,18,27,.86));
+    border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 26px rgba(0,0,0,.45);
+    margin:0 2px 0 2px}
+  .mark{width:16px;height:16px;border-radius:5px;background:linear-gradient(140deg,#FF4655,#FB923C);
+    box-shadow:0 0 12px rgba(255,70,85,.45);flex:0 0 16px}
+  .ttl{font-size:11.5px;font-weight:900;letter-spacing:.02em}
+  .sub{font-size:9px;color:#8FA1B8;font-weight:700}
+  .sp{flex:1}
+  .pill{height:19px;padding:0 8px;border-radius:999px;font-size:9px;font-weight:800;display:inline-flex;
+    align-items:center;gap:5px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:#B9C7D9}
+  .pill i{width:5px;height:5px;border-radius:50%;background:#6EE7C0;box-shadow:0 0 8px #6EE7C0}
+  .pill.warn i{background:#FBBF24;box-shadow:0 0 8px #FBBF24}
+  .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:0.9%;margin:0 1px}
+  .chip{height:30px;border-radius:7px;display:flex;align-items:center;gap:6px;padding:0 8px;
+    background:linear-gradient(180deg,rgba(12,16,24,.92),rgba(12,16,24,.78));
+    border:1px solid rgba(120,190,255,.18);box-shadow:0 6px 16px rgba(0,0,0,.4);overflow:hidden}
+  .chip.ok{border-color:rgba(110,231,192,.30)}
+  .chip.corrected{border-color:rgba(251,191,36,.34)}
+  .chip.unknown{border-color:rgba(255,70,85,.30)}
+  .dot{width:6px;height:6px;border-radius:50%;flex:0 0 6px;background:#6EE7C0;box-shadow:0 0 8px rgba(110,231,192,.8)}
+  .chip.corrected .dot{background:#FBBF24;box-shadow:0 0 8px rgba(251,191,36,.8)}
+  .chip.unknown .dot{background:#FF4655;box-shadow:0 0 8px rgba(255,70,85,.8)}
+  .nm{font-size:11.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+  .sc{font-family:Chakra,Consolas,monospace;font-size:9px;color:#8FA1B8;margin-left:auto;flex:0 0 auto}
+  .empty{grid-column:1/-1;height:30px;display:flex;align-items:center;justify-content:center;
+    border:1px dashed rgba(255,255,255,.16);border-radius:7px;font-size:10px;color:#7C8DA4;
+    background:rgba(10,13,20,.72)}
+  .foot{display:flex;align-items:center;gap:8px;padding:0 12px;height:18px;font-size:8.5px;color:#5E6E85}
+  .foot b{color:#9FB0C6;font-weight:800}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hd">
+    <span class="mark"></span>
+    <div>
+      <div class="ttl">파티 대기실 5인 스캔</div>
+      <div class="sub" id="sub">닉네임 윗줄만 읽습니다 · 클랜명 제외</div>
+    </div>
+    <span class="sp"></span>
+    <span class="pill" id="preset"><i></i><span id="preset-t">프리셋 없음</span></span>
+    <span class="pill" id="stat"><i></i><span id="stat-t">대기</span></span>
+  </div>
+  <div class="cards" id="cards"></div>
+  <div class="foot"><span>Data based on NEXON Open API</span><span class="sp" style="flex:1"></span><span id="hint">F8 닫기 · F9 상대 분석</span></div>
+</div>
+<script>
+const OV = {
+  render(payload) {
+    const p = payload || {};
+    const rows = p.rows || [];
+    const cards = document.getElementById('cards');
+    if (!rows.length) {
+      cards.innerHTML = '<div class="empty">대기실 닉네임을 읽지 못했습니다 · F8 로 다시 스캔</div>';
+    } else {
+      cards.innerHTML = rows.map((r, i) => {
+        const status = r.status === 'ok' ? 'ok' : r.status === 'corrected' ? 'corrected' : 'unknown';
+        const name = r.name || r.raw || '—';
+        const score = r.score != null ? Math.round(Number(r.score) * 100) : null;
+        return `<div class="chip ${status}" title="${(r.raw||'')} · ${status}">
+          <span class="dot"></span><span class="nm">${esc(name)}</span>
+          <span class="sc">${status === 'ok' ? '확인' : status === 'corrected' ? '보정' : '?'}${score ? ' ' + score : ''}</span>
+        </div>`;
+      }).join('');
+    }
+    const presets = p.presets || [];
+    const presetT = document.getElementById('preset-t');
+    if (presetT) presetT.textContent = presets.length ? `프리셋 ${presets.length}개` : '프리셋 없음';
+    const okCount = rows.filter((r) => r.status === 'ok' || r.status === 'corrected').length;
+    const statT = document.getElementById('stat-t');
+    if (statT) statT.textContent = rows.length ? `${okCount}/${rows.length} 확인` : '대기';
+    const sub = document.getElementById('sub');
+    if (sub && p.me) sub.textContent = `내 닉네임 ${p.me} · 클랜명 제외`;
+    if (p.mapban && p.mapban.ok && Array.isArray(p.mapban.cards) && p.mapban.cards.length) {
+      const top = p.mapban.cards.filter((c) => c.tone === 'pick')[0];
+      if (top) document.getElementById('hint').textContent = `F8 맵 밴 · 픽 ${top.map} ${top.pct || ''}%`;
+    }
+  }
+};
+window.OV = OV;
+function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+(async function(){
+  try {
+    if (window.pywebview && window.pywebview.api && window.pywebview.api.overlay_payload) {
+      const res = await window.pywebview.api.overlay_payload('party');
+      if (res && res.payload) OV.render(res.payload);
+    }
+  } catch (e) {}
+  window.addEventListener('pywebviewready', async () => {
+    try {
+      const res = await window.pywebview.api.overlay_payload('party');
+      if (res && res.payload) OV.render(res.payload);
+    } catch (e) {}
+  });
+})();
+</script>
+</body>
+</html>

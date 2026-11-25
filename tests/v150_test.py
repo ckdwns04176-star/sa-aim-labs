@@ -212,7 +212,7 @@ def mock_js(state: dict) -> str:
 def backend() -> None:
     from app import paths, scoring, v150, barracks as barracks_mod, store as store_mod
 
-    check("APP_VERSION 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
+    check("APP_VERSION 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
 
     # ── 테마 · 배율
     check("기본 테마 = coral", v150.clean_theme(None) == "coral", v150.clean_theme(None))
@@ -226,7 +226,7 @@ def backend() -> None:
     check("QHD 자동 115%", v150.auto_ui_scale(2560, 1440, 1.0) == 115, "")
     check("QHD + OS 125% 는 그대로", v150.auto_ui_scale(2560, 1440, 1.25) == 100, "")
     check("FHD 는 100%", v150.auto_ui_scale(1920, 1080, 1.0) == 100, "")
-    check("4K 는 125%", v150.auto_ui_scale(3840, 2160, 1.0) == 125, "")
+    check("4K 도 115%", v150.auto_ui_scale(3840, 2160, 1.0) == 115, "")
 
     # ── 기본값 저장
     d = store_mod.DEFAULTS["settings"]
@@ -565,10 +565,11 @@ def ui() -> None:
         page.wait_for_timeout(400)
         mapinfo = page.evaluate("""() => {
             const weak = document.querySelector('#weak-list .weak');
-            return {thumbs: document.querySelectorAll('#weak-list .weak .weak-thumb img').length,
+            return {thumbs: document.querySelectorAll('#weak-list .weak .weak-bg').length,
+                    thumbs2: document.querySelectorAll('#weak-list .weak .weak-thumb').length,
                     tableThumbs: document.querySelectorAll('#map-table .map-cell .mthumb img').length};
         }""")
-        check("약점 카드 맵 이미지", mapinfo["thumbs"] == 3, str(mapinfo["thumbs"]))
+        check("약점 카드 맵 배경 이미지 + 작은 썸네일 제거", mapinfo["thumbs"] == 3 and mapinfo.get("thumbs2") == 0, str(mapinfo))
         check("맵별 분석 행 맵 이미지", mapinfo["tableThumbs"] >= 8, str(mapinfo["tableThumbs"]))
         page.evaluate("() => { const w = document.querySelector('#weak-list .weak'); if (w) w.click(); }")
         page.wait_for_timeout(300)

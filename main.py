@@ -208,10 +208,27 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=True)
     parser.add_argument("--drs-apply", metavar="MODE", help="internal: apply a Drs profile elevated")
     parser.add_argument("--drs-restore", action="store_true", help="internal: restore the latest Drs backup elevated")
+    parser.add_argument("--nvapi-stairfix", action="store_true", help="internal: apply stair-fix through NVAPI DRS")
+    parser.add_argument("--nvapi-settings", metavar="FILE", help="internal: apply a JSON list of DRS settings through NVAPI")
     parser.add_argument("--result", metavar="FILE", help="internal: write the elevated result JSON here")
     parser.add_argument("--serve", nargs="?", const=8710, type=int, help="dev: serve ui/ over HTTP")
     parser.add_argument("--debug", action="store_true", help="verbose log + devtools")
     args = parser.parse_args(argv)
+
+    if args.nvapi_stairfix or args.nvapi_settings:
+        import json as _json
+
+        from app import drs as _drs, nvapi_drs
+
+        pairs = list(_drs.STAIRFIX_SET)
+        if args.nvapi_settings:
+            try:
+                payload = _json.loads(Path(args.nvapi_settings).read_text(encoding="utf-8"))
+                pairs = [(int(a), int(b)) for a, b in (payload.get("settings") or [])]
+            except (OSError, ValueError, TypeError):
+                pairs = list(_drs.STAIRFIX_SET)
+        target = args.result or str(paths.data_dir() / "nvapi_result.json")
+        return nvapi_drs.cli(settings=pairs, result_path=target)
 
     if args.drs_apply or args.drs_restore:
         from app import nvidia
@@ -347,6 +364,13 @@ def main(argv: list[str] | None = None) -> int:
         api.start_cloud_auto()
     except Exception:  # noqa: BLE001
         log.debug("cloud auto backup could not start", exc_info=True)
+
+    # ── v1.0.0 · 인게임 오버레이 단축키(F8/F9) · 경기 종료 토스트 감시 ──
+    try:
+        overlay_state = api.start_overlays()
+        log.info("overlays · %s", overlay_state)
+    except Exception:  # noqa: BLE001 - 오버레이 실패가 앱 시작을 막지 않는다
+        log.debug("overlays could not start", exc_info=True)
 
     # ── 새 버전 확인 (백그라운드 · 실패해도 조용히) ──
     api.start_update_check()

@@ -4,9 +4,10 @@
 코박스(KovaaK's)·에임랩(Aim Lab) 훈련 기록, 5영역 레이더, 18단계 티어,
 NEXON Open API 병영수첩·친구 순위표, NVIDIA Drs 최적화 유틸을 한 화면에 모았습니다.
 
-**v1.5.0 — 딥 차콜 무광 디자인 + 3색 테마(코랄·아이스·골드), QHD 화면 배율,
-피드백 27건 반영, 신규 3종(파티랭크 5인 맵 밴·픽, 직전 대비 RP·스탯 등락 뱃지,
-코박스·에임랩 종료 감지 알림).**
+**v1.0.0 — 정식 첫 버전. 인게임 오버레이 3종(대기실 5인 OCR · 맵 밴 PICK/BAN
+글래스 바 · 10초 상대 5명 스카우팅) + 경기 종료 결과 토스트, Cloudflare Workers
+프록시 기본 연결(앱에 넥슨 키 없음), 30일 매치 캐시 자동 정리, 실기 UI 피드백
+전면 반영(상단 제목줄 제거 · 게스트 홈 · K/D % 표기 · 순위표 20명 · 자유 1:1 비교).**
 
 ```
 main.py                 엔트리 (창 생성 · 정중앙 배치 · --serve 미리보기 · --drs-apply 상승 헬퍼)
@@ -22,6 +23,13 @@ app/updates.py          GitHub Releases 새 버전 확인 (표준 라이브러�
 app/tray.py             시스템 트레이 아이콘 + Ctrl+Shift+A 전역 단축키 (Win32 ctypes)
 app/barracks.py         병영수첩 user_nexon_sn 해석 (ouid 와 다른 ID · 프로필/클랜 주소)
 app/v150.py             테마·화면 배율·공식 맵 이미지·파티 맵 밴픽·등락 뱃지·트레이너 감시
+app/overlay.py          인게임 오버레이 3종 창 관리 (투명·클릭 통과·항상 위 · 블루프린트 기하)
+app/party_lobby.py      대기실/10인 OCR 닉네임 파싱·보정·팀 분리·고정 파티 프리셋
+app/scouting.py         상대 5명 병렬 스카우팅 (프로필 → 이 맵 승률·KD 배지)
+app/nvapi_drs.py        NVAPI DRS (프로필에 설정 생성·저장 · 별도 프로세스)
+app/capture.py          PowerShell 화면 캡처 · Windows.Media.Ocr · 화면 지문
+app/hotkeys.py          F8/F9 전역 단축키 (RegisterHotKey)
+app/toast.py            경기 종료 감지 · 토스트 문구
 ui/index.html           화면 (정적 디자인 + 샘플 데이터 + 첫 로딩 스플래시)
 ui/bridge.js            화면 ↔ pywebview.api 연결 (실데이터 반영)
 tests/api_test.py       백엔드 테스트 (실응답 캐시 재생 · Drs 패치 · 평점 정규화)
@@ -30,6 +38,8 @@ tests/v110_test.py      v1.1.0 검증 (통합 점수 · 추천 UX · 모달 · �
 tests/v120_test.py      v1.2.0 검증 (코박스 인식 · 1:1 비교 · 전후 비교 · 리포트 카드 · 코칭 등 13종)
 tests/v130_test.py      v1.3.0 검증 (23가지 UI·기능 + PB 유지)
 tests/v150_test.py      v1.5.0 검증 (테마·배율·홈·레일 정렬·파티 맵·내 시나리오·병영 링크 등 120건)
+tests/v100_test.py      v1.0.0 검증 (프록시·캐시 정리·오버레이 기하/문구·OCR 보정·프리셋·단축키·서든 전용 Drs 패치)
+tests/v100_shot.py      v1.0.0 전 화면 + 오버레이 스크린샷 (tests/shots/v100-*.png)
 supabase/schema.sql     user_profiles 테이블 + RLS (SQL Editor 에 1회 실행)
 .github/workflows/      windows-latest 에서 .exe 빌드
 ```
@@ -157,3 +167,24 @@ pyinstaller --noconfirm --onefile --windowed --icon assets/app.ico --name "SA_Ai
 - `config.json` 의 `SUPABASE_ANON_KEY` 는 클라이언트 공개용(publishable) 키입니다.
   데이터는 Supabase RLS 로 본인 행만 읽고 쓸 수 있습니다.
 - NEXON `test_` 키는 발급자 본인 계정 전용입니다. 배포용으로는 `live_` 키 + 중계 서버가 필요합니다.
+
+## v1.0.0 오버레이 (인게임)
+
+| 단축키 | 동작 | 종료 |
+|---|---|---|
+| `F8` | 맵 밴 화면이면 5개 카드 위 PICK/BAN 글래스 바, 대기실이면 5인 OCR 배지 | 재입력 · 12초 · 화면 변화 1초 |
+| `F9` | 게임 시작 10초 — 상대 5명 배지(주무기 · 이 맵 승률 · KD%) | 재입력 · 14초 |
+
+* 오버레이는 DLL 주입·후킹 없이 **WS_EX_TOPMOST + WS_EX_NOACTIVATE + WS_EX_TRANSPARENT**
+  독립 투명 창으로만 그립니다 (클릭 통과).
+* 맵 밴 카드 이름은 화면 OCR 로 읽어 `시티캣(심플)` → `시티캣` 처럼 API 맵 이름과 맞춥니다.
+* 대기실 OCR 위치가 어긋나면 설정 → 오버레이 → **대기실 OCR 위치 보정(X/Y/배율)** 에서 맞춥니다.
+* 단축키는 설정에서 F6~F12 · Ctrl/Alt 조합으로 바꿀 수 있습니다.
+* 한 판이 끝나면 우하단에 승패·K/D·딜량·연승 토스트가 5초 표시됩니다(위치 ON/OFF 가능).
+
+## NEXON API 연결
+
+앱에는 넥슨 API 키가 들어 있지 않습니다. 기본은 Cloudflare Workers 프록시
+`https://sa-aim-proxy.ckdwns04176.workers.dev` 경유로 조회하고, 설정에서 개인 키를
+넣으면 그 키로 직접 호출합니다. 30일이 지난 매치 캐시는 하루 한 번 자동 정리되며,
+**훈련 기록·최고 기록·잔디·파티 프리셋은 영구 보관**합니다.

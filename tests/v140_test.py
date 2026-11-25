@@ -276,7 +276,7 @@ def mock_js(state: dict) -> str:
 def backend_checks() -> None:
     from app import paths, scoring, tilt, updates, v140
 
-    check("APP_VERSION 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
+    check("APP_VERSION 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
 
     # 위협도: 티어가 압도적이어야 한다 (실버 60% < 불레전드 50%)
     silver = v140.threat_score(1300, 60, 1200, win=55, streak=3)
@@ -511,7 +511,7 @@ def ui() -> None:
             kpiSub: [...document.querySelectorAll('#s-dashboard .kpi-foot')].filter(e => getComputedStyle(e).display !== 'none').length,
             cards: [...document.querySelectorAll('#s-dashboard .kpi')].map(c => Math.round(c.getBoundingClientRect().height)),
             greySubs: [...document.querySelectorAll('#s-dashboard .card-sub')].filter(e => getComputedStyle(e).display !== 'none').length,
-            titlebar: document.getElementById('tb-screen-name').textContent})""")
+            titlebar: (document.getElementById('tb-screen-name')||{}).textContent || null})""")
         check("대시보드 이름 = 에임 대시보드", dash["title"] == "에임 대시보드", dash["title"])
         check("추천 카드 버튼 2개만", dash["recBtns"] == ["rec-more", "rec-save"], str(dash["recBtns"]))
         check("18단계 사다리 제거", dash["ladder"] is False, str(dash["ladder"]))
@@ -521,7 +521,7 @@ def ui() -> None:
         # v1.5.0 (#7) — ? 아이콘을 없애고 회색 설명은 화면에 남긴다
         check("카드 회색 설명 표시 (설명 2개 이상)", dash["greySubs"] >= 2, str(dash["greySubs"]))
         check("KPI 카드 높이 균일", len(set(dash["cards"])) == 1, str(dash["cards"]))
-        check("타이틀바 현재 화면명", dash["titlebar"] == "에임 대시보드", dash["titlebar"])
+        check("상단 메뉴명 제목줄 제거 (v1.0.0)", dash["titlebar"] is None, str(dash["titlebar"]))
         page.screenshot(path=str(SHOTS / "v140-dashboard.png"))
 
         # 5. 시나리오 라이브러리 — PB 글자 제거
@@ -534,7 +534,7 @@ def ui() -> None:
             btnCount: ['warmup-btn-2','kovak-import-head','rec-more-2','plo-btn','personal-plo-btn','score-input-btn','run-all-btn'].filter(id => !!document.getElementById(id)).length})""")
         check("라이브러리 PB 글자 제거", not lib["pb"], str(lib["pb"]))
         check("라이브러리 안내 문구 삭제", not lib["note"], "")
-        check("라이브러리 상단 버튼 7개", lib["btnCount"] == 7, str(lib["btnCount"]))
+        check("라이브러리 상단 버튼 6개 (더 연습하기 제거 · v1.0.0)", lib["btnCount"] == 6, str(lib["btnCount"]))
         check("라이브러리 행 렌더", lib["cards"] > 20, str(lib["cards"]))
         page.screenshot(path=str(SHOTS / "v140-library.png"))
 
@@ -671,11 +671,12 @@ def ui() -> None:
         page.click("#settings-btn")
         page.wait_for_timeout(450)
         setg = page.evaluate("""() => ({key: (document.getElementById('set-key')||{}).value || '',
+            hasKeyField: !!document.getElementById('set-key'),
             meta: (document.getElementById('set-meta-line')||{}).textContent || '',
             body: document.getElementById('settings-mask').innerText,
             tilt: !!document.querySelector('[data-switch="tilt_watch"]'),
             tiltCls: (document.querySelector('[data-switch="tilt_watch"]')||{}).className || ''})""")
-        check("설정 — API 키 마스킹 표시", "•" in setg["key"], str(setg["key"][:16]))
+        check("설정 — API 키 입력칸 제거(프록시 기본)", setg.get("hasKeyField") is False, str(setg.get("key"))[:16])
         check("설정 — '소스 실행' 문구 삭제", "소스 실행" not in setg["body"] and "소스 실행" not in setg["meta"], setg["meta"])
         check("설정 — 연승·연패 토글 스위치", setg["tilt"] and "switch" in setg["tiltCls"], str(setg["tiltCls"]))
         page.screenshot(path=str(SHOTS / "v140-settings.png"))

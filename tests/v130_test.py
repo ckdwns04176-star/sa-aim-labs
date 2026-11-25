@@ -104,7 +104,7 @@ def backend() -> None:
     from app import drs, nvidia, paths, scoring, winutil
     import shutil
 
-    check("APP_VERSION 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
+    check("APP_VERSION 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
 
     # ---- 1. 창: 크기만 고정, 위치는 자유 + 드래그 중 감시 pause
     plan = winutil.window_fix_plan((300, 900, 1600, 900), work=(0, 0, 1920, 1040))
@@ -412,7 +412,7 @@ def ui_checks() -> None:
         check("설정 팝업에 API 키·닉네임·클라우드·코박스 폴더", cfg["cloud"] and cfg["stats"], str(cfg))
         check("설정 팝업에 점수 전체 초기화", cfg["reset"], str(cfg["reset"]))
         check("'닫으면 트레이로 숨기기' 옵션 없음", cfg["trayToggle"] is False, str(cfg["trayToggle"]))
-        check("설정 팝업 탭 구성", len(cfg["tabs"]) == 4, str(cfg["tabs"]))
+        check("설정 팝업 탭 구성 (오버레이 추가 · v1.0.0)", cfg["tabs"][:2] == ["계정 · API", "오버레이"] and len(cfg["tabs"]) == 5, str(cfg["tabs"]))
 
         # ---------- 10. 점수 전체 초기화 2중 확인
         page.click("#set-reset-scores")

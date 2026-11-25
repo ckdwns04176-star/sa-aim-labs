@@ -336,7 +336,7 @@ def backend_checks() -> None:
     check("솔로/파티 격차 코칭", bool(_gap_hit), str([t["title"] for t in gap]))
 
     # ---- 12. 앱 버전 · API 노출
-    check("APP_VERSION 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
+    check("APP_VERSION 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
     import main as app_main
 
     exposed = app_main._public_names(api)

@@ -41,8 +41,18 @@ GAME_EXE = "suddenattack.exe"
 # NVIDIA Profile Inspector setting ids used by the Sudden Attack guide.
 SETTING_AA_COMPAT = 0x00D55F7D      # Antialiasing compatibility (DX9) / 계단현상 · 타격효과 · 중세철창
 SETTING_AA_COMPAT2 = 0x1095DEF8     # Antialiasing compatibility (second dword, left untouched)
+SETTING_AA_MODE = 0x10D773D2        # Antialiasing - Mode (0=앱 설정, 1=Override)
+SETTING_AA_SETTING = 0x101E61A9     # Antialiasing - Setting (1 = 2x MSAA)
 STAIRFIX_VALUE = 0x00401241         # 0x00401241 — guide value
 DEFAULT_VALUE = 0x00020041          # driver default seen on a stock database
+
+# 계단현상 끄기 = 이 세트가 함께 있어야 드라이버가 0x00401241 을 실제로 쓴다.
+# (AA Mode/Setting 이 꺼져 있으면 compatibility 값은 무시된다 — v1.0.0 수정)
+STAIRFIX_SET: tuple[tuple[int, int], ...] = (
+    (SETTING_AA_COMPAT, STAIRFIX_VALUE),
+    (SETTING_AA_MODE, 1),
+    (SETTING_AA_SETTING, 1),
+)
 
 # Values we know how to describe (used by the UI/telemetry only).
 KNOWN_AA_COMPAT = {
@@ -57,6 +67,8 @@ KNOWN_AA_COMPAT = {
 # '안티앨리어싱 호환성 보조값'으로 표시하는 등 이름이 틀렸다.
 SETTING_NAMES: dict[int, tuple[str, str]] = {
     SETTING_AA_COMPAT: ("계단현상 끄기", "Antialiasing compatibility (DX9)"),
+    SETTING_AA_MODE: ("안티앨리어싱 모드", "Antialiasing - Mode"),
+    SETTING_AA_SETTING: ("안티앨리어싱 설정", "Antialiasing - Setting"),
     0x00A879CF: ("수직 동기", "Vertical Sync"),
     0x1057EB71: ("전원 관리 모드", "Power Management - Mode"),
     0x0005F543: ("저지연 모드 (제어판 상태)", "Ultra Low Latency - CPL State"),
@@ -89,6 +101,8 @@ VALUE_LABELS: dict[int, dict[int, str]] = {
     0x20C1221E: {0: "끔", 1: "켬", 2: "자동"},
     0x10835002: {0: "해제"},
     SETTING_AA_COMPAT: KNOWN_AA_COMPAT,
+    SETTING_AA_MODE: {0: "앱 설정 사용", 1: "앱 설정 무시(Override)"},
+    SETTING_AA_SETTING: {0: "앱 설정", 1: "2x", 2: "4x", 4: "8x"},
 }
 
 # '고성능 게이밍' 체크리스트 — 적용 결과 팝업에서 항목별 상태를 보여 준다.
@@ -406,35 +420,95 @@ def describe(value: int | None) -> str:
 
 
 # --------------------------------------------------------------------- write
-def set_stairfix(blob: bytes | bytearray, exe: str = GAME_EXE) -> tuple[bytearray, dict[str, Any]]:
-    """Return a patched copy with AA compatibility = 0x00401241.
+def stairfix_values(blob: bytes | bytearray, exe: str = GAME_EXE) -> dict[int, int | None]:
+    """계단현상 세트(호환성·AA 모드·AA 설정)의 현재 값."""
+    off = profile_offset(blob, exe)
+    if off is None:
+        return {sid: None for sid, _ in STAIRFIX_SET}
+    return {sid: get_dword(blob, off, sid) for sid, _ in STAIRFIX_SET}
 
-    ``changed`` is False when the value was already right (or when the profile
-    exists but the driver did not store the setting, which we report instead of
-    silently pretending).
+
+def stairfix_ready(blob: bytes | bytearray, exe: str = GAME_EXE) -> bool:
+    """세트 3개가 모두 의도한 값인가."""
+    values = stairfix_values(blob, exe)
+    return all(values.get(sid) == value for sid, value in STAIRFIX_SET)
+
+
+def profile_dwords(blob: bytes | bytearray, exe: str = GAME_EXE) -> dict[int, int]:
+    """서든어택 프로필의 DWORD 설정만 {id: value} 로 꺼낸다 (팩 → 내 프로필 이식용)."""
+    off = profile_offset(blob, exe)
+    if off is None:
+        return {}
+    out: dict[int, int] = {}
+    for rec in iter_settings(blob, off):
+        if rec["value_size"] >= 4:
+            out[rec["setting_id"]] = struct.unpack_from("<I", blob, rec["value_offset"])[0]
+    return out
+
+
+def apply_profile_values(blob: bytes | bytearray, values: dict[int, int],
+                         exe: str = GAME_EXE) -> tuple[bytearray, dict[str, Any]]:
+    """서든 프로필의 **기존 레코드만** values 로 바꾼다.
+
+    다른 게임 프로필·Base Profile 은 건드리지 않는다 (오프셋만 바꿔 쓴다).
+    없는 레코드는 ``missing`` 으로 돌려주고, 그건 NVAPI 가 새로 만든다.
     """
     apps = find_apps(blob, exe)
     if not apps:
         raise DrsFormatError(f"{exe} 프로필을 Drs DB에서 찾지 못했습니다")
     out = bytearray(blob)
-    report: dict[str, Any] = {"profiles": len(apps), "changed": False, "before": None, "after": None}
+    changed: list[dict[str, Any]] = []
+    missing: list[int] = []
     for app in apps:
         off = app["profile_offset"]
-        target = None
-        for rec in iter_settings(blob, off):
-            if rec["setting_id"] == SETTING_AA_COMPAT:
-                target = rec
-                break
-        if target is None or target["value_size"] < 4:
-            continue
-        before = struct.unpack_from("<I", blob, target["value_offset"])[0]
-        report["before"] = before if report["before"] is None else report["before"]
-        if before == STAIRFIX_VALUE:
-            report["after"] = before
-            continue
-        struct.pack_into("<I", out, target["value_offset"], STAIRFIX_VALUE)
-        report["changed"] = True
-        report["after"] = STAIRFIX_VALUE
+        present = {rec["setting_id"]: rec for rec in iter_settings(blob, off)}
+        for setting_id, value in values.items():
+            rec = present.get(setting_id)
+            if rec is None or rec["value_size"] < 4:
+                if setting_id not in missing:
+                    missing.append(setting_id)
+                continue
+            before = struct.unpack_from("<I", blob, rec["value_offset"])[0]
+            if before != value:
+                struct.pack_into("<I", out, rec["value_offset"], value)
+                changed.append({"id": setting_id, "before": before, "after": value})
+    return out, {"changed": changed, "missing": missing,
+                 "changed_count": len(changed), "total": len(values)}
+
+
+def set_stairfix(blob: bytes | bytearray, exe: str = GAME_EXE) -> tuple[bytearray, dict[str, Any]]:
+    """계단현상 끄기 세트를 적용한 복사본을 돌려준다.
+
+    기존에는 ``Antialiasing compatibility`` 레코드가 있을 때만 값을 바꿔서,
+    ① 레코드가 없으면 예외로 실패하고 ② AA Mode/Setting 이 꺼져 있으면
+    드라이버가 그 값을 무시했다.  이제는 **있으면 전부 패치**하고, 없는
+    레코드는 ``missing`` 으로 보고한다 (NVAPI 경로가 새로 만들 수 있다).
+    """
+    apps = find_apps(blob, exe)
+    if not apps:
+        raise DrsFormatError(f"{exe} 프로필을 Drs DB에서 찾지 못했습니다")
+    out = bytearray(blob)
+    report: dict[str, Any] = {"profiles": len(apps), "changed": False, "before": None,
+                              "after": None, "values": [], "missing": []}
+    for app in apps:
+        off = app["profile_offset"]
+        present = {rec["setting_id"]: rec for rec in iter_settings(blob, off)}
+        for setting_id, value in STAIRFIX_SET:
+            rec = present.get(setting_id)
+            if rec is None or rec["value_size"] < 4:
+                if setting_id not in report["missing"]:
+                    report["missing"].append(setting_id)
+                continue
+            before = struct.unpack_from("<I", blob, rec["value_offset"])[0]
+            row = {"id": f"0x{setting_id:08X}", "before": before, "after": value,
+                   "changed": before != value}
+            report["values"].append(row)
+            if setting_id == SETTING_AA_COMPAT:
+                report["before"] = before
+                report["after"] = value
+            if before != value:
+                struct.pack_into("<I", out, rec["value_offset"], value)
+                report["changed"] = True
     if report["after"] is None:
         raise DrsFormatError(
             "Drs DB의 서든어택 프로필에 Antialiasing compatibility 항목이 없습니다"

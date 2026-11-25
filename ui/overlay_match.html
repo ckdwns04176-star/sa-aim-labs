@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>SA Aim Labs · Match Overlay</title>
+<style>
+  html,body{margin:0;padding:0;background:transparent;overflow:hidden;color:#E8EEF8;
+    font-family:Pretendard,"Malgun Gothic","Segoe UI",sans-serif;-webkit-user-select:none;user-select:none}
+  .tabs{position:absolute;top:6px;left:50%;transform:translateX(-50%);display:flex;gap:4px;
+    padding:3px;border-radius:999px;background:rgba(10,13,20,.86);border:1px solid rgba(255,255,255,.12);
+    box-shadow:0 6px 18px rgba(0,0,0,.45)}
+  .tab{height:22px;padding:0 12px;border-radius:999px;display:inline-flex;align-items:center;gap:5px;
+    font-size:10px;font-weight:800;color:#8FA1B8;letter-spacing:.02em}
+  .tab.on{background:linear-gradient(180deg,#FF4655,#E23B49);color:#fff;box-shadow:0 3px 10px rgba(255,70,85,.35)}
+  .tab kbd{font-family:Chakra,Consolas,monospace;font-size:8.5px;opacity:.75;background:rgba(0,0,0,.22);
+    padding:1px 4px;border-radius:4px}
+  /* ---------------- map ban ---------------- */
+  .cards[hidden],.panel[hidden],.note[hidden],.tabs[hidden]{display:none!important}
+  .cards{position:absolute;left:0;right:0;bottom:12px;top:var(--tabpad,44px);display:grid;
+    grid-template-columns:repeat(5,1fr);gap:0.85%}  .col{position:relative;min-width:0}
+  .hdr{position:absolute;top:0;left:0;right:0;height:30px;display:flex;align-items:center;gap:6px;
+    padding:0 9px;border-radius:7px 7px 0 0;border:1px solid rgba(255,255,255,.14);border-bottom:0;
+    background:linear-gradient(180deg,rgba(16,21,31,.92),rgba(16,21,31,.72));
+    box-shadow:0 4px 14px rgba(0,0,0,.35);backdrop-filter:blur(3px)}
+  .hdr.plain{justify-content:flex-end}
+  .tag{font-size:9.5px;font-weight:900;letter-spacing:.09em}
+  .hdr.pick{border-color:rgba(52,211,153,.55);box-shadow:0 0 14px rgba(52,211,153,.22)}
+  .hdr.pick .tag{color:#34D399}
+  .hdr.ban{border-color:rgba(255,70,85,.55);box-shadow:0 0 14px rgba(255,70,85,.22)}
+  .hdr.ban .tag{color:#FF6B78}
+  .pct{margin-left:auto;font-family:Chakra,Consolas,monospace;font-size:13px;font-weight:800;color:#EDF4FF}
+  .hdr.pick .pct{color:#7BF0C4}
+  .hdr.ban .pct{color:#FFB0B6}
+  .gauge{position:absolute;left:8px;right:8px;bottom:17px;height:4px;border-radius:3px;
+    background:rgba(10,13,20,.72);overflow:hidden;box-shadow:0 0 0 1px rgba(255,255,255,.10)}
+  .gauge i{display:block;height:100%;border-radius:3px;background:linear-gradient(90deg,#0EA5E9,#34D399)}
+  .hdr.ban + .gauge i,.col.ban .gauge i{background:linear-gradient(90deg,#7F1D1D,#FF4655)}
+  .name{display:none}
+  .note{position:absolute;top:6px;right:8px;font-size:8.5px;color:#7C8DA4;background:rgba(10,13,20,.7);
+    padding:2px 6px;border-radius:6px}
+  /* ---------------- scout ---------------- */
+  .panel{position:absolute;inset:0;border-radius:12px;overflow:hidden;
+    background:linear-gradient(160deg,rgba(13,17,26,.95),rgba(10,13,20,.90));
+    border:1px solid rgba(255,255,255,.12);box-shadow:0 16px 40px rgba(0,0,0,.55)}
+  .panel .tabs{position:static;transform:none;margin:8px 10px 0;justify-content:space-between;box-shadow:none;
+    background:rgba(255,255,255,.04);border-color:rgba(255,255,255,.08)}
+  .head{display:flex;align-items:center;gap:8px;padding:8px 12px 6px}
+  .head .t{font-size:11.5px;font-weight:900;flex:0 1 auto;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .head .m{font-size:10px;font-weight:800;color:#FFB0B6;background:rgba(255,70,85,.12);
+    border:1px solid rgba(255,70,85,.28);border-radius:5px;padding:2px 6px}
+  .head .sp{flex:1}
+  .head .ms{font-family:Chakra,Consolas,monospace;font-size:9px;color:#8FA1B8}
+  .rows{display:flex;flex-direction:column;gap:4px;padding:0 10px 8px}
+  .row{display:flex;align-items:center;gap:8px;height:38px;padding:0 9px;border-radius:8px;
+    background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07)}
+  .row .nm{font-size:11.5px;font-weight:800;min-width:74px;max-width:110px;white-space:nowrap;
+    overflow:hidden;text-overflow:ellipsis}
+  .row .bd{flex:1;font-size:10.5px;color:#C7D3E4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .row .bd b{color:#EDF4FF;font-weight:800}
+  .row .kdbar{width:52px;height:5px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden;flex:0 0 52px}
+  .row .kdbar i{display:block;height:100%;background:linear-gradient(90deg,#0EA5E9,#6EE7C0)}
+  .row.hot .kdbar i{background:linear-gradient(90deg,#B45309,#FF4655)}
+  .row.empty{justify-content:center;color:#7C8DA4;font-size:10px}
+  .skeleton{height:38px;border-radius:8px;background:linear-gradient(90deg,rgba(255,255,255,.04),rgba(255,255,255,.10),rgba(255,255,255,.04));
+    background-size:200% 100%;animation:sh 1.2s linear infinite}
+  @keyframes sh{from{background-position:0 0}to{background-position:-200% 0}}
+  .foot{display:flex;align-items:center;gap:6px;padding:0 12px 8px;font-size:8.5px;color:#5E6E85}
+  .foot .sp{flex:1}
+</style>
+</head>
+<body>
+<div class="tabs" id="tabs">
+  <span class="tab" data-tab="mapban">맵 밴 <kbd>F8</kbd></span>
+  <span class="tab" data-tab="scout">상대 분석 <kbd>F9</kbd></span>
+</div>
+
+<div class="cards" id="cards" hidden></div>
+<div class="note" id="note" hidden></div>
+
+<div class="panel" id="panel" hidden>
+  <div class="tabs" id="tabs2">
+    <span class="tab" data-tab="mapban">맵 밴 <kbd>F8</kbd></span>
+    <span class="tab" data-tab="scout">상대 분석 <kbd>F9</kbd></span>
+  </div>
+  <div class="head">
+    <div class="t" id="s-title">상대 5명 스카우팅</div>
+    <div class="m" id="s-map" hidden>—</div>
+    <span class="sp"></span>
+    <div class="ms" id="s-ms">0ms</div>
+  </div>
+  <div class="rows" id="rows"></div>
+  <div class="foot"><span>Data based on NEXON Open API</span><span class="sp"></span><span id="s-src">10초 카운트다운</span></div>
+</div>
+
+<script>
+const OV = {
+  render(payload) {
+    const p = payload || {};
+    const tab = p.tab === 'scout' ? 'scout' : 'mapban';
+    document.querySelectorAll('.tab').forEach((el) => el.classList.toggle('on', el.dataset.tab === tab));
+    const cards = document.getElementById('cards');
+    const panel = document.getElementById('panel');
+    const note = document.getElementById('note');
+    const outerTabs = document.getElementById('tabs');
+    if (outerTabs) outerTabs.hidden = tab !== 'mapban';
+    if (tab === 'mapban') {
+      panel.hidden = true; cards.hidden = false;
+      document.body.style.setProperty('--tabpad', (p.tab_pad ? Number(p.tab_pad) : 44) + 'px');
+      renderMapban(p, cards, note);
+    } else {
+      cards.hidden = true; note.hidden = true; panel.hidden = false;
+      renderScout(p);
+    }
+  }
+};
+window.OV = OV;
+
+function renderMapban(p, cards, note) {
+  const rows = p.cards || [];
+  cards.innerHTML = (rows.length ? rows : Array.from({length:5}, () => ({}))).map((c, i) => {
+    const tone = c.tone === 'pick' ? 'pick' : c.tone === 'ban' ? 'ban' : '';
+    const pct = c.pct == null ? '—' : `${Math.round(c.pct)}%`;
+    const tag = c.label || '';
+    const gauge = c.gauge == null ? 50 : c.gauge;
+    return `<div class="col ${tone}">
+      <div class="hdr ${tone || 'plain'}">${tag ? `<span class="tag">${tag}</span>` : ''}<span class="pct">${pct}</span></div>
+      <div class="gauge"><i style="width:${Math.max(3, Math.min(100, gauge))}%"></i></div>
+      <div class="name">${esc(c.map || '')}</div>
+    </div>`;
+  }).join('');
+  note.hidden = false;
+  note.textContent = p.seconds ? `${Math.round(p.seconds)}초 뒤 자동 종료 · 화면이 바뀌면 즉시` : '화면이 바뀌면 즉시 종료';
+}
+
+function renderScout(p) {
+  const rows = p.rows || [];
+  const map = (p.map || '').trim();
+  const mapEl = document.getElementById('s-map');
+  if (mapEl) { mapEl.hidden = !map; mapEl.textContent = map; }
+  const ms = document.getElementById('s-ms');
+  if (ms) ms.textContent = p.elapsed != null ? `${Math.round(Number(p.elapsed) * 1000)}ms` : (p.loading ? '분석 중…' : '');
+  const src = document.getElementById('s-src');
+  if (src) src.textContent = p.source === 'last-match' ? '직전 판 API' : p.source === 'manual' ? '직접 입력' : '10인 화면 OCR';
+  const box = document.getElementById('rows');
+  if (!rows.length) {
+    box.innerHTML = p.loading
+      ? Array.from({length:5}, () => '<div class="skeleton"></div>').join('')
+      : '<div class="row empty">상대 닉네임을 읽지 못했습니다 · F9 로 다시</div>';
+    return;
+  }
+  box.innerHTML = rows.map((r) => {
+    const kd = Number(r.kd || 0);
+    const hot = kd >= 60 ? 'hot' : '';
+    return `<div class="row ${hot}">
+      <span class="nm">${esc(r.name || '—')}</span>
+      <span class="bd">${badge(r)}</span>
+      <span class="kdbar"><i style="width:${Math.max(4, Math.min(100, kd))}%"></i></span>
+    </div>`;
+  }).join('');
+}
+
+function badge(r) {
+  const parts = [esc(r.weapon || '스나')];
+  if (r.map_win != null) parts.push(`이 맵 <b>${Math.round(Number(r.map_win))}%</b>`);
+  else if (r.win != null) parts.push(`전체 <b>${Math.round(Number(r.win))}%</b>`);
+  if (r.kd != null) parts.push(`KD <b>${Math.round(Number(r.kd))}%</b>`);
+  return parts.join(' · ');
+}
+
+function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+
+(async function(){
+  const load = async () => {
+    try {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.overlay_payload) {
+        const res = await window.pywebview.api.overlay_payload('match');
+        if (res && res.payload) OV.render(res.payload);
+      }
+    } catch (e) {}
+  };
+  await load();
+  window.addEventListener('pywebviewready', load);
+})();
+</script>
+</body>
+</html>

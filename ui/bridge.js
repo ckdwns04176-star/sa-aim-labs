@@ -820,16 +820,10 @@
     if (api) {
       api.innerHTML = `
         <div class="card-hd" style="padding:0">
-          <div><div class="card-title"><span class="bar"></span>넥슨 API · 서든 닉네임</div>
+          <div><div class="card-title"><span class="bar"></span>서든 닉네임 · 목표</div>
             <div class="card-sub">병영수첩 · 친구 순위표 · 목표 4종</div></div>
-          <span class="ustate ${nexon.connected ? 'on' : 'warn'}">${nexon.connected ? '키 등록됨' : '키 필요'}</span>
         </div>
         ${inputRow('set-nick', '서든어택 닉네임', set.nickname || '', { maxlength: 12 })}
-        <div class="field"><label>NEXON Open API 키</label>
-          <input id="set-key" class="inp" type="text" value="${nexon.connected ? esc(set.api_key_masked || '등록됨') : ''}"
-            placeholder="발급: open.api.nexon.com">
-          
-        </div>
         
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
           ${inputRow('set-goal-win', '승률 %', goals.win ?? 55, { type: 'number' })}
@@ -837,10 +831,79 @@
           ${inputRow('set-goal-dmg', '딜량', goals.dmg ?? 1400, { type: 'number' })}
           ${inputRow('set-goal-rp', '솔로 RP', goals.rp ?? 4000, { type: 'number' })}
         </div>
+        <div class="set-note" style="margin-top:9px">
+          서든 전적은 앱에 기본 연결된 <b>NEXON Open API 프록시</b>로 조회합니다 · 키 입력이 필요 없습니다.<br>
+          마지막 병영수첩 최신화 <b>${nexon.last_barracks_at ? String(nexon.last_barracks_at).replace('T', ' ').slice(0, 16) : '—'}</b> · 출처 Data based on NEXON Open API
+        </div>
         <div class="set-actions">
           <button class="btn btn-primary" id="set-api-save">저장</button>
           <button class="btn btn-ghost" id="set-api-test">저장 · 조회</button>
           <button class="btn btn-ghost" id="set-goal-save">목표 저장</button>
+        </div>`;
+    }
+
+    /* ---------- 카드 1.5 · 인게임 오버레이 (v1.0.0) ---------- */
+    const ov = $('#set-overlay');
+    if (ov) {
+      const ovSet = ((st && st.overlay) || {}).settings || {};
+      const hot = ((st && st.overlay) || {}).hotkeys || {};
+      const presets = (st && st.party_presets) || [];
+      const reg = (hot.registered || []);
+      const failed = hot.failed || {};
+      const failTxt = Object.entries(failed).filter(([, v]) => v && v !== '사용 안 함').map(([k, v]) => `${k}: ${v}`).join(' · ');
+      ov.innerHTML = `
+        <div class="card-hd" style="padding:0">
+          <div><div class="card-title"><span class="bar"></span>인게임 오버레이 · 결과 토스트</div>
+            <div class="card-sub">파티 대기실 OCR · 맵 밴 PICK/BAN · 상대 5명 스카우팅</div></div>
+          <span class="ustate ${reg.length ? 'on' : 'warn'}">${reg.length ? '단축키 작동' : '대기'}</span>
+        </div>
+        ${switchRow('overlay_enabled', '오버레이 사용', 'F8 대기실·맵 밴 · F9 상대 분석 (게임 화면 위에 클릭 통과로 표시)', ovSet.enabled !== false)}
+        <div class="set-row2" style="margin-top:4px">
+          <div class="field"><label>대기실 · 맵 밴 단축키</label>
+            <select id="set-ov-hot1" class="inp">${['F6','F7','F8','F9','F10','F11','F12','Ctrl+F8','Ctrl+F9','Alt+F8','Alt+F9','None'].map(k=>`<option value="${k}" ${ovSet.hotkey_lobby===k?'selected':''}>${k}</option>`).join('')}</select></div>
+          <div class="field"><label>상대 분석 단축키</label>
+            <select id="set-ov-hot2" class="inp">${['F6','F7','F8','F9','F10','F11','F12','Ctrl+F8','Ctrl+F9','Alt+F8','Alt+F9','None'].map(k=>`<option value="${k}" ${ovSet.hotkey_scout===k?'selected':''}>${k}</option>`).join('')}</select></div>
+        </div>
+        <div class="set-row2">
+          <div class="field"><label>맵 밴 자동 종료 (초)</label>
+            <input id="set-ov-sec" class="inp" type="number" min="3" max="40" value="${Number(ovSet.mapban_seconds||12)}"></div>
+          <div class="field"><label>파티 배지 유지 (초)</label>
+            <input id="set-ov-psec" class="inp" type="number" min="3" max="40" value="${Number(ovSet.party_seconds||15)}"></div>
+        </div>
+        ${switchRow('toast_enabled', '경기 종료 결과 토스트', '한 판이 끝나면 우하단에 승패·K/D·딜량·연승을 5초 표시', ovSet.toast_enabled !== false)}
+        ${switchRow('toast_auto', '새 경기 자동 감지', '최근 전적을 45초마다 확인해 새 판만 띄웁니다', ovSet.toast_auto !== false)}
+        <div class="field"><label>토스트 위치</label>
+          <select id="set-ov-pos" class="inp">
+            <option value="br" ${ovSet.toast_position!=='tr'?'selected':''}>우하단 (기본)</option>
+            <option value="tr" ${ovSet.toast_position==='tr'?'selected':''}>우상단</option>
+          </select></div>
+        <div class="set-actions">
+          <button class="btn btn-primary" id="ov-save">오버레이 설정 저장</button>
+          <button class="btn btn-ghost" id="ov-toast-preview">토스트 미리보기</button>
+          <button class="btn btn-ghost" id="ov-party-preview">파티 배지 미리보기</button>
+          <button class="btn btn-ghost" id="ov-scout-preview">상대 분석 미리보기</button>
+          <button class="btn btn-ghost" id="ov-hide">오버레이 끄기</button>
+        </div>
+        <div class="set-sub">고정 5인 파티 프리셋</div>
+        <div class="set-row2">
+          <input id="ov-preset-name" class="key-input" maxlength="20" placeholder="프리셋 이름 (예: 새벽 고정팟)">
+          <button class="btn btn-cyan" id="ov-preset-save">현재 5명 저장</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">
+          ${presets.length ? presets.map(p=>`<div class="preset-line"><b>${esc(p.name)}</b><span class="mini">${p.count}명 · ${esc((p.members||[]).join(', '))}</span><span class="sp"></span>
+            <button class="btn btn-ghost" data-preset-load="${escAttr(p.name)}" style="height:22px;font-size:9.5px;padding:0 7px">불러오기</button>
+            <button class="btn btn-ghost" data-preset-del="${escAttr(p.name)}" style="height:22px;font-size:9.5px;padding:0 7px">삭제</button></div>`).join('')
+            : '<div class="preset-line"><span class="mini">저장된 프리셋이 없습니다 · 대기실을 스캔한 뒤 저장하면 5명이 그대로 담깁니다</span></div>'}
+        </div>
+        <div class="set-sub">대기실 OCR 위치 보정</div>
+        <div class="set-row3">
+          <div class="field"><label>X 보정 (px)</label><input id="set-ov-x" class="inp" type="number" value="${Number(ovSet.scan_calib && ovSet.scan_calib.offset_x || 0)}"></div>
+          <div class="field"><label>Y 보정 (px)</label><input id="set-ov-y" class="inp" type="number" value="${Number(ovSet.scan_calib && ovSet.scan_calib.offset_y || 0)}"></div>
+          <div class="field"><label>배율</label><input id="set-ov-scale" class="inp" type="number" step="0.01" min="0.7" max="1.4" value="${Number(ovSet.scan_calib && ovSet.scan_calib.scale || 1)}"></div>
+        </div>
+        <div class="overlay-note">
+          ${reg.length ? `등록된 단축키 · <b>${reg.join(', ')}</b>` : '단축키가 아직 등록되지 않았습니다 (Windows · 다른 프로그램이 키를 쓰는 중이면 바꿔 주세요)'}${failTxt ? `<br>${esc(failTxt)}` : ''}<br>
+          오버레이는 <b>DLL 주입·후킹 없이</b> 클릭 통과 투명 창으로만 그립니다 · 맵 밴은 화면이 바뀌면 1초 안에 스스로 꺼집니다 (12초 안전 타이머).
         </div>`;
     }
 
@@ -953,6 +1016,11 @@
     if (metaLine) {
       metaLine.textContent = `v${meta.version || '1.4.0'} · 훈련 기록 ${n0(count)}회`;
     }
+    /* v1.0.0 — 자유 1:1 비교 왼쪽 기본값 = 내 닉네임 */
+    const cmpLeft = $('#cmp-left');
+    if (cmpLeft && !cmpLeft.value) {
+      cmpLeft.value = set.nickname || (nexon.nickname || '');
+    }
   }
 
   function switchRow(key, title, desc, on) {
@@ -968,7 +1036,7 @@
     const note = $('#cloud-note');
     if (note) {
       note.innerHTML = cloud.signed_in
-        ? `프로젝트 <b>${String(cloud.url || '').replace('https://', '')}</b> · 10명 순위표와 훈련 기록이 계정에 저장되어 다른 PC 에서 이어집니다.`
+        ? `프로젝트 <b>${String(cloud.url || '').replace('https://', '')}</b> · 순위표와 훈련 기록이 계정에 저장되어 다른 PC 에서 이어집니다.`
         : '앱에 기본 클라우드 서버가 이미 들어 있습니다 · 이메일로 로그인하면 다른 PC 와 기록이 이어집니다.';
     }
   }
@@ -980,15 +1048,24 @@
     };
     const patch = {};
     const nick = read('set-nick');
-    const key = read('set-key');
     const kovak = read('set-kovak');
     const aim = read('set-aimlab');
     if (nick) patch.nickname = nick;
-    if (key) patch.api_key = key;
     if (kovak !== '') patch.kovak_path = kovak;
     if (aim !== '') patch.aimlab_path = aim;
     const statsEl = $('#set-kovak-stats');
     if (statsEl) patch.kovak_stats_path = String(statsEl.value || '').trim();
+    /* v1.0.0 — 오버레이 설정 */
+    const readNum = (id) => { const el = $('#' + id); return el && String(el.value).trim() !== '' ? Number(el.value) : undefined; };
+    const hot1 = $('#set-ov-hot1'), hot2 = $('#set-ov-hot2'), pos = $('#set-ov-pos');
+    if (hot1) patch.overlay_hotkey_lobby = hot1.value;
+    if (hot2) patch.overlay_hotkey_scout = hot2.value;
+    if (pos) patch.toast_position = pos.value;
+    const sec = readNum('set-ov-sec'); if (sec !== undefined) patch.overlay_mapban_seconds = sec;
+    const psec = readNum('set-ov-psec'); if (psec !== undefined) patch.overlay_party_seconds = psec;
+    const ox = readNum('set-ov-x'); if (ox !== undefined) patch.overlay_scan_x = ox;
+    const oy = readNum('set-ov-y'); if (oy !== undefined) patch.overlay_scan_y = oy;
+    const osc = readNum('set-ov-scale'); if (osc !== undefined) patch.overlay_scan_scale = osc;
     return patch;
   }
 
@@ -1814,7 +1891,10 @@
     if (!AL.real) return toast('앱(.exe)에서 1:1 비교를 볼 수 있습니다', false);
     const result = await call('compare_friend', name);
     if (!result || !result.ok) return fail(result, '비교할 전적이 없습니다');
-    const cmp = result.compare;
+    showCompare(result.compare);
+  }
+
+  function showCompare(cmp) {
     const body = $('#cmp-body');
     const title = $('#cmp-title');
     if (title) title.textContent = `${cmp.me.name} vs ${cmp.friend.name}`;
@@ -1841,6 +1921,17 @@
     const mask = $('#compare-mask');
     if (mask) mask.classList.add('show');
   }
+
+  async function comparePlayers(left, right) {
+    if (!AL.real) return toast('앱(.exe)에서 1:1 비교를 볼 수 있습니다', false);
+    if (!String(right || '').trim()) return toast('오른쪽에 비교할 닉네임을 입력해 주세요', false);
+    busy(true, '두 사람 전적을 모으는 중…');
+    const result = await call('compare_players', String(left || ''), String(right || ''));
+    busy(false);
+    if (!result || !result.ok) return fail(result, '비교할 전적을 찾지 못했습니다');
+    showCompare(result.compare);
+  }
+  AL.comparePlayers = comparePlayers;
   AL.compareFriend = compareFriend;
 
   /* ------------------------------------------------------------ 주간 목표 수정 */
@@ -2545,7 +2636,9 @@
       ? `<span class="mthumb"><img src="${src}" alt=""></span>`
       : `<span class="mthumb"><svg viewBox="0 0 24 24"><use href="#i-map"/></svg></span>`;
     const pct = Number(row.expected || 0);
+    const bg = (typeof mapImg === 'function') ? mapImg(row.map) : '';
     return `<div class="party-row ${kind}">
+      ${bg ? `<span class="party-bg" style="background-image:url('${bg}')"></span>` : ''}
       <span class="pk">${i + 1}</span>${thumb}
       <span class="nm">${esc(row.map)}</span>
       <span class="gm">${row.games}판</span>
@@ -3117,11 +3210,18 @@
     /* ---------- v1.5.0 · 파티랭크 5인 맵 밴·픽 ---------- */
     const partyRun = $('#party-run');
     if (partyRun) partyRun.addEventListener('click', () => runPartyMap());
-    const partyLoad = $('#party-load');
-    if (partyLoad) partyLoad.addEventListener('click', () => loadPartyMembers());
     const partyInput = $('#party-names');
     if (partyInput) partyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runPartyMap(); } });
     $('#util-pane-tactics') && renderPartyMap(AL.partyMap || null);
+
+    /* ---------- v1.0.0 · 자유 1:1 비교 (양쪽 아무 닉네임) ---------- */
+    const cmpLeft = $('#cmp-left'), cmpRight = $('#cmp-right'), cmpRun = $('#cmp-run');
+    const myNick = ((AL.state && AL.state.settings && AL.state.settings.nickname) ||
+                    (AL.state && AL.state.nexon && AL.state.nexon.nickname) || '');
+    if (cmpLeft && !cmpLeft.value) cmpLeft.value = myNick;
+    const runCompare = () => { if (AL.comparePlayers) AL.comparePlayers(cmpLeft ? cmpLeft.value : '', cmpRight ? cmpRight.value : ''); };
+    if (cmpRun) cmpRun.addEventListener('click', runCompare);
+    [cmpLeft, cmpRight].forEach((el) => { if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runCompare(); } }); });
     const utilBalance = $('#util-balance');
     if (utilBalance) utilBalance.addEventListener('click', () => openBalance());
     const balBox = $('#balance-members');
@@ -3530,7 +3630,7 @@
         if (e.target.closest('#set-api-save') || e.target.closest('#set-api-test')) {
           if (!AL.real) return toast('앱(.exe)에서 키를 저장할 수 있습니다', false);
           const patch = collectSettings();
-          if (!patch.nickname && !patch.api_key) return toast('닉네임 또는 API 키를 입력해 주세요', false);
+          if (!patch.nickname) return toast('서든어택 닉네임을 입력해 주세요', false);
           const saved = await call('save_settings', patch);
           if (!saved || !saved.ok) return fail(saved, '저장하지 못했습니다');
           if (saved.state) applyState(saved.state);
@@ -3542,6 +3642,61 @@
           const result = await call('save_settings', collectSettings());
           if (result && result.state) applyState(result.state);
           return toast('✅ 실행 설정을 저장했습니다', true);
+        }
+        if (e.target.closest('#ov-save')) {
+          if (!AL.real) return toast('앱(.exe)에서 저장할 수 있습니다', false);
+          const saved = await call('save_settings', collectSettings());
+          if (!saved || !saved.ok) return fail(saved, '오버레이 설정을 저장하지 못했습니다');
+          if (saved.state) applyState(saved.state);
+          const hot = ((saved.state || {}).overlay || {}).hotkeys || {};
+          return toast(hot.registered && hot.registered.length
+            ? `✅ 오버레이 저장 · 단축키 ${hot.registered.join(', ')}`
+            : '✅ 저장했지만 단축키 등록이 안 됐습니다 (Windows · 키 선점 확인)', true, 4600);
+        }
+        if (e.target.closest('#ov-toast-preview')) {
+          if (!AL.real) return toast('앱(.exe)에서 실제 오버레이로 보여 줍니다', false);
+          const r = await call('overlay_toast_preview', ($('#set-ov-pos') || {}).value || '');
+          return toast(r && r.ok ? '토스트 미리보기 · 5초 뒤 사라집니다' : (r && r.message) || '미리보기를 띄우지 못했습니다', !!(r && r.ok));
+        }
+        if (e.target.closest('#ov-party-preview')) {
+          if (!AL.real) return toast('앱(.exe)에서 실제 오버레이로 보여 줍니다', false);
+          const r = await call('overlay_preview', 'party');
+          return toast(r && r.ok ? '파티 배지 미리보기 · 10초' : (r && r.message) || '미리보기를 띄우지 못했습니다', !!(r && r.ok));
+        }
+        if (e.target.closest('#ov-scout-preview')) {
+          if (!AL.real) return toast('앱(.exe)에서 실제 오버레이로 보여 줍니다', false);
+          const r = await call('overlay_preview', 'scout');
+          return toast(r && r.ok ? '상대 분석 미리보기 · 12초' : (r && r.message) || '미리보기를 띄우지 못했습니다', !!(r && r.ok));
+        }
+        if (e.target.closest('#ov-hide')) {
+          if (!AL.real) return;
+          await call('overlay_hide', '');
+          return toast('오버레이를 모두 껐습니다', true);
+        }
+        if (e.target.closest('#ov-preset-save')) {
+          if (!AL.real) return toast('앱(.exe)에서 저장할 수 있습니다', false);
+          const nameEl = $('#ov-preset-name');
+          const name = nameEl ? nameEl.value : '';
+          const r = await call('save_party_preset', name, null, true);
+          if (!r || !r.ok) return fail(r, '프리셋을 저장하지 못했습니다');
+          if (r.state) applyState(r.state);
+          return toast(r.message || '프리셋을 저장했습니다', true);
+        }
+        const presetLoad = e.target.closest('[data-preset-load]');
+        if (presetLoad) {
+          const r = await call('load_party_preset', presetLoad.dataset.presetLoad);
+          if (!r || !r.ok) return fail(r, '프리셋을 불러오지 못했습니다');
+          const input = $('#party-names');
+          if (input) input.value = (r.members || []).join(', ');
+          if (r.mapban) { AL.partyMap = r.mapban; renderPartyMap(r.mapban); }
+          return toast(`${r.message} · 전술 도구에 채웠습니다`, true);
+        }
+        const presetDel = e.target.closest('[data-preset-del]');
+        if (presetDel) {
+          const r = await call('delete_party_preset', presetDel.dataset.presetDel);
+          if (r && r.state) applyState(r.state);
+          else if (r && r.presets) { const st = Object.assign({}, AL.state || {}); st.party_presets = r.presets; AL.state = st; renderSettings(st); }
+          return toast(r && r.message || '삭제했습니다', !!(r && r.ok));
         }
         if (e.target.closest('#set-open-folder')) {
           const result = await call('open_data_folder');
@@ -3608,7 +3763,14 @@
       }
       if (name === 'maps') { renderMaps(AL.peek || AL.state.barracks); }
       if (name === 'records') { if (typeof drawRecords === 'function') drawRecords(); }
-      if (name === 'utils') perfRefresh(false);
+      if (name === 'utils') {
+        perfRefresh(false);
+        const left = $('#cmp-left');
+        if (left && !left.value) {
+          left.value = (AL.state.settings && AL.state.settings.nickname) ||
+                       (AL.state.nexon && AL.state.nexon.nickname) || '';
+        }
+      }
     };
     AL.onSwitch = function () {
       if (!AL.state) return;

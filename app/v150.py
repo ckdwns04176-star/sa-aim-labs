@@ -482,13 +482,14 @@ def is_excluded(name: Any, excluded: Iterable[str]) -> bool:
 
 # ---------------------------------------------------------------- 화면 배율
 def auto_ui_scale(screen_w: int, screen_h: int, dpi_scale: float = 1.0) -> int:
-    """QHD(2560×1440) 이상 + 낮은 OS 배율이면 115% 로 키운다 (v1.5.0 · #1)."""
+    """해상도별 기본 배율 — QHD(2560×1440) 이상 115%, FHD 이하 100% (v1.0.0).
+
+    OS 배율이 이미 큰 경우(125% 이상)에는 창이 화면을 넘치므로 100% 로 둔다.
+    """
     try:
         w, h = int(screen_w), int(screen_h)
     except (TypeError, ValueError):
         return DEFAULT_UI_SCALE
-    if w >= 3840 and h >= 2160 and float(dpi_scale or 1.0) < 1.75:
-        return 125
     if w >= 2560 and h >= 1440 and float(dpi_scale or 1.0) < 1.25:
         return 115
     return DEFAULT_UI_SCALE

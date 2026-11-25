@@ -119,6 +119,37 @@ def _configure(user32, kernel32, shell32) -> None:
         shell32.Shell_NotifyIconW.restype = wintypes.BOOL
         shell32.Shell_NotifyIconW.argtypes = [wintypes.DWORD, ctypes.c_void_p]
         kernel32.GetModuleHandleW.restype = wintypes.HINSTANCE
+        # v1.0.0 — 64비트 프로토타입 누락 보강 (없으면 핸들이 잘리거나 기본 int 로 반환돼
+        # 우클릭 메뉴·메시지 루프가 조용히 실패했다)
+        user32.DefWindowProcW.restype = ctypes.c_ssize_t
+        user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.RegisterClassW.restype = wintypes.ATOM
+        user32.RegisterClassW.argtypes = [ctypes.c_void_p]
+        user32.GetMessageW.restype = wintypes.BOOL
+        user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND,
+                                       wintypes.UINT, wintypes.UINT]
+        user32.TranslateMessage.restype = wintypes.BOOL
+        user32.TranslateMessage.argtypes = [ctypes.POINTER(wintypes.MSG)]
+        user32.DispatchMessageW.restype = ctypes.c_ssize_t
+        user32.DispatchMessageW.argtypes = [ctypes.POINTER(wintypes.MSG)]
+        user32.LoadIconW.restype = wintypes.HICON
+        user32.LoadIconW.argtypes = [wintypes.HINSTANCE, ctypes.c_void_p]
+        user32.ShowWindow.restype = wintypes.BOOL
+        user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.GetForegroundWindow.argtypes = []
+        user32.GetWindowThreadProcessId.restype = wintypes.DWORD
+        user32.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+        user32.AttachThreadInput.restype = wintypes.BOOL
+        user32.AttachThreadInput.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.BOOL]
+        user32.AllowSetForegroundWindow.restype = wintypes.BOOL
+        user32.AllowSetForegroundWindow.argtypes = [wintypes.DWORD]
+        user32.SetFocus.restype = wintypes.HWND
+        user32.SetFocus.argtypes = [wintypes.HWND]
+        user32.IsWindow.restype = wintypes.BOOL
+        user32.IsWindow.argtypes = [wintypes.HWND]
+        kernel32.GetCurrentThreadId.restype = wintypes.DWORD
+        kernel32.GetCurrentThreadId.argtypes = []
     except Exception:  # noqa: BLE001 - 구형 파이썬/윈도우에서도 트레이는 시도한다
         log.debug("tray prototypes not configured", exc_info=True)
 
@@ -307,20 +338,23 @@ class TrayIcon:
     def _menu(self) -> None:
         """우클릭 컨텍스트 메뉴 — 열기 / 설정 / 종료.
 
-        트레이 메뉴가 안 뜨던 원인: 팝업 메뉴를 띄우기 전에 우리 창을 포그라운드로
-        올리지 않으면 Windows 가 메뉴를 바로 닫아 버린다(다른 창을 클릭한 것처럼
-        처리됨).  SetForegroundWindow + BringWindowToTop 뒤에 TrackPopupMenu 를
-        호출하고, 끝나면 PostMessage(WM_NULL) 로 메뉴 잔상을 정리한다.
+        v1.0.0 — 0×0 비표시 창은 SetForegroundWindow 가 거의 항상 실패해서
+        TrackPopupMenu 가 즉시 닫혔다.  포그라운드 스레드와 입력 큐를 잠시
+        AttachThreadInput 으로 연결하고 AllowSetForegroundWindow 로 허용한 뒤
+        메뉴를 띄우고, 끝나면 반드시 분리한다.
         """
         from ctypes import wintypes
 
         user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
         hwnd = int(self._hwnd or 0)
         menu = 0
+        attached: tuple[int, int] | None = None
         try:
-            _configure(user32, ctypes.windll.kernel32, ctypes.windll.shell32)
+            _configure(user32, kernel32, ctypes.windll.shell32)
             menu = user32.CreatePopupMenu()
             if not menu:
+                self._error = "팝업 메뉴를 만들지 못했습니다"
                 return
             user32.AppendMenuW(menu, MF_STRING, 1, "열기")
             user32.AppendMenuW(menu, MF_STRING, 2, "설정")
@@ -328,14 +362,13 @@ class TrayIcon:
             user32.AppendMenuW(menu, MF_STRING, 3, "종료")
             point = wintypes.POINT()
             user32.GetCursorPos(ctypes.byref(point))
-            if hwnd:
-                user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
-                user32.BringWindowToTop(ctypes.c_void_p(hwnd))
+            attached = self._attach_foreground(user32, kernel32, hwnd)
             flags = TPM_RIGHTBUTTON | TPM_RETURNCMD | TPM_NONOTIFY
             cmd = user32.TrackPopupMenu(menu, flags, int(point.x), int(point.y), 0,
                                         ctypes.c_void_p(hwnd), None)
             if hwnd:
                 user32.PostMessageW(ctypes.c_void_p(hwnd), WM_NULL, 0, 0)
+            log.info("tray menu · x=%s y=%s cmd=%s attached=%s", point.x, point.y, cmd, bool(attached))
             if cmd == 1:
                 self._open()
             elif cmd == 2:
@@ -345,11 +378,42 @@ class TrayIcon:
         except Exception:  # noqa: BLE001
             log.exception("tray menu failed")
         finally:
+            if attached:
+                try:
+                    user32.AttachThreadInput(ctypes.c_uint(attached[0]), ctypes.c_uint(attached[1]), False)
+                except Exception:  # noqa: BLE001
+                    pass
             if menu:
                 try:
                     user32.DestroyMenu(ctypes.c_void_p(menu))
                 except Exception:  # noqa: BLE001
                     pass
+
+    def _attach_foreground(self, user32: Any, kernel32: Any, hwnd: int) -> tuple[int, int] | None:
+        """메뉴를 띄우기 전에 우리 스레드를 포그라운드 입력 큐에 붙인다."""
+        if not hwnd:
+            return None
+        attached: tuple[int, int] | None = None
+        try:
+            foreground = user32.GetForegroundWindow()
+            target_thread = int(user32.GetWindowThreadProcessId(foreground, None) or 0) if foreground else 0
+            self_thread = int(kernel32.GetCurrentThreadId())
+            try:
+                user32.AllowSetForegroundWindow(ctypes.c_uint(0xFFFFFFFF))  # ASFW_ANY
+            except Exception:  # noqa: BLE001
+                pass
+            if target_thread and target_thread != self_thread:
+                if user32.AttachThreadInput(ctypes.c_uint(target_thread), ctypes.c_uint(self_thread), True):
+                    attached = (target_thread, self_thread)
+            ok = bool(user32.SetForegroundWindow(ctypes.c_void_p(hwnd)))
+            user32.BringWindowToTop(ctypes.c_void_p(hwnd))
+            user32.SetFocus(ctypes.c_void_p(hwnd))
+            if not ok:
+                self._error = "메뉴 창을 포그라운드로 올리지 못했습니다 (메뉴는 계속 시도)"
+                log.debug("SetForegroundWindow failed for tray menu")
+        except Exception:  # noqa: BLE001 - 포커스 실패가 메뉴를 막지는 않는다
+            log.debug("tray foreground attach failed", exc_info=True)
+        return attached
 
     def _open(self) -> None:
         try:

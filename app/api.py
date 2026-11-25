@@ -16,7 +16,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from . import barracks as barracks_mod, kovak, nexon, nvidia, paths, scoring, supabase_sync, tilt, tray, updates, v140, v150, winutil
+from . import barracks as barracks_mod, capture as capture_mod, kovak, nexon, nvidia, overlay, party_lobby, paths, scoring, scouting, supabase_sync, tilt, toast, tray, updates, v140, v150, winutil
+from . import hotkeys as hotkeys_mod
 from .store import Store, now_iso, today_str
 
 GAMES = ("kovak", "aimlab")
@@ -79,6 +80,15 @@ class Api:
         self._cloud_thread: Any = None
         # v1.5.0 — 모니터 해상도·OS 배율 (main.py 가 창을 만들기 전에 채운다)
         self._display: dict[str, Any] = {"width": 0, "height": 0, "scale": 1.0, "auto_scale": 100}
+        # v1.0.0 — 인게임 오버레이 · 단축키 · 경기 종료 토스트 · 캐시 정리
+        self._overlay = overlay.OverlayHub()
+        self._overlay.bind_api(self)
+        self._hotkeys = hotkeys_mod.HotkeyListener()
+        self._match_watch: toast.MatchWatcher | None = None
+        self._overlay_lock = __import__("threading").Lock()
+        self._last_scan: list[dict[str, Any]] = []
+        self._cache_cleanup: dict[str, Any] | None = None
+        self._cleanup_cache_once()
 
     def set_display(self, width: int = 0, height: int = 0, scale: float = 1.0) -> dict[str, Any]:
         """모니터 작업 영역·OS 배율을 받아 QHD 자동 보정값을 정한다 (#1)."""
@@ -555,6 +565,10 @@ class Api:
                 "connected": bool((store.settings.get("api_key") or "").strip()),
                 "nickname": store.settings.get("nickname") or "",
                 "last_barracks_at": (barracks or {}).get("updated_at"),
+                "proxy": nexon.PROXY_URL,
+                "endpoint": "proxy" if not (store.settings.get("api_key") or "").strip() else "direct",
+                "ready": True,
+                "key_required": False,
             },
             "barracks": barracks,
             "leaderboard": nexon.leaderboard_payload(members),
@@ -629,6 +643,14 @@ class Api:
             "barracks_links": links,
             "trainer_watch": watch_state,
             "cloud_auto": {**self.store.cloud_auto(), "enabled": bool(settings.get("auto_cloud", True))},
+            "overlay": {**self._overlay.state(), "settings": self._overlay_settings(),
+                        "hotkeys": self._hotkeys.state(),
+                        "last_scan": list(self.store.overlay_cache().get("last_scan") or [])[:5],
+                        "last_scan_at": self.store.overlay_cache().get("last_scan_at")},
+            "party_presets": party_lobby.preset_payload(self.store.party_presets()),
+            "attribution": "Data based on NEXON Open API",
+            "cache_cleanup": self._cache_cleanup or {"ok": True, "skipped": True},
+            "guest": not bool((store.settings.get("nickname") or "").strip()) and not bool(barracks),
         }
 
     # ------------------------------------------------------------ v1.3.0 helpers
@@ -755,7 +777,7 @@ class Api:
                 continue
             seen.add(key)
             out.append(m)
-        return out[:10]
+        return out[:20]
 
     # ------------------------------------------------------------ settings
     _MASK_CHARS = ("\u2022", "*", "…")
@@ -771,7 +793,10 @@ class Api:
                    "tray_background", "notify", "autosave", "goals", "cloud_email",
                    "hotkey_enabled", "kovak_stats_path", "kovak_autofill", "week_goals",
                    "tilt_watch", "tilt_interval", "weapon", "game", "onboarded",
-                   "theme", "ui_scale", "ui_scale_auto", "excluded_scenarios", "watch_trainers", "auto_cloud"}
+                   "theme", "ui_scale", "ui_scale_auto", "excluded_scenarios", "watch_trainers", "auto_cloud",
+                   "overlay_enabled", "overlay_hotkey_lobby", "overlay_hotkey_scout",
+                   "overlay_mapban_seconds", "overlay_party_seconds", "overlay_scan_x",
+                   "overlay_scan_y", "overlay_scan_scale", "toast_enabled", "toast_position", "toast_auto"}
         clean: dict[str, Any] = {}
         for key, value in (patch or {}).items():
             if key not in allowed:
@@ -811,6 +836,22 @@ class Api:
                     if text and text.lower() not in {s.lower() for s in seen}:
                         seen.append(text)
                 value = seen[:200]
+            elif key in ("overlay_hotkey_lobby", "overlay_hotkey_scout"):
+                value = overlay.clean_hotkey(value, "F8" if key.endswith("lobby") else "F9")
+            elif key in ("overlay_mapban_seconds", "overlay_party_seconds"):
+                value = overlay.parse_seconds(value, 12.0 if "mapban" in key else 15.0)
+            elif key in ("overlay_scan_x", "overlay_scan_y"):
+                try:
+                    value = max(-600, min(600, int(float(value))))
+                except (TypeError, ValueError):
+                    continue
+            elif key == "overlay_scan_scale":
+                try:
+                    value = max(0.7, min(1.4, round(float(value), 2)))
+                except (TypeError, ValueError):
+                    continue
+            elif key == "toast_position":
+                value = value if value in overlay.TOAST_POSITIONS else "br"
             elif isinstance(value, bool):
                 value = bool(value)
             clean[key] = value
@@ -833,6 +874,19 @@ class Api:
                 watcher.start() if clean["watch_trainers"] else watcher.stop()
             except Exception:  # noqa: BLE001
                 log.debug("trainer watch toggle failed", exc_info=True)
+        if any(key.startswith("overlay_") or key.startswith("toast_") for key in clean):
+            try:
+                self.apply_overlay_hotkeys()
+            except Exception:  # noqa: BLE001
+                log.debug("overlay hotkeys could not apply", exc_info=True)
+            try:
+                set_ = self.store.settings
+                if set_.get("toast_enabled", True) and set_.get("toast_auto", True):
+                    self._watcher().start()
+                else:
+                    self._watcher().stop()
+            except Exception:  # noqa: BLE001
+                log.debug("match watcher toggle failed", exc_info=True)
         return self.get_state()
 
     def save_cloud_config(self, url: str, anon_key: str) -> dict[str, Any]:
@@ -1055,7 +1109,10 @@ class Api:
 
     # ------------------------------------------------------------ NEXON
     def _client(self, api_key: str | None = None, *, force: bool = False) -> nexon.NexonClient:
+        """개인 키가 있으면 직접, 없으면 공용 프록시로.  앱 코드에는 키가 없다."""
         key = (api_key if api_key is not None else self.store.settings.get("api_key") or "").strip()
+        if key and self._looks_masked(key):
+            key = ""
         if api_key:
             self.store.update_settings({"api_key": key})
         return nexon.NexonClient(key, progress=self._progress, force=force)
@@ -1079,8 +1136,6 @@ class Api:
             nick = saved_nick
         if not nick:
             raise ValueError("서든어택 닉네임을 입력해 주세요")
-        if not (self.store.settings.get("api_key") or "").strip():
-            raise ValueError("NEXON Open API 키를 입력해 주세요 · 설정 탭에서 저장할 수 있습니다")
         return nick, key or None
 
     def fetch_barracks(self, nickname: str | None = None, api_key: str | None = None) -> dict[str, Any]:
@@ -1118,8 +1173,6 @@ class Api:
             key = (api_key or "").strip()
             if key and self._looks_masked(key):
                 key = ""
-            if not (key or (self.store.settings.get("api_key") or "").strip()):
-                raise ValueError("NEXON Open API 키를 먼저 저장해 주세요 · 설정 탭")
             client = self._client(key or None, force=True)
             try:
                 ouid = nick if v140.is_ouid(nick) else client.resolve_ouid(nick)
@@ -1183,10 +1236,10 @@ class Api:
                 members = [m for m in members if str(m.get("name", "")).strip().lower() in wanted] or members
             if not members:
                 raise ValueError("순위표에 등록된 닉네임이 없습니다")
-            rows = nexon.build_leaderboard(client, members[:10], progress=self._progress,
+            rows = nexon.build_leaderboard(client, members[:20], progress=self._progress,
                                            depth=nexon.DETAIL_DEPTH if depth is None else int(depth))
             renamed = [r for r in rows if r.get("renamed_from")]
-            self.store.set_leaderboard([{**r} for r in rows[:10]])
+            self.store.set_leaderboard([{**r} for r in rows[:20]])
             message = f"{len(rows)}명 전적 일괄 갱신 완료"
             if renamed:
                 message += " · 닉변 " + ", ".join(f"{r['renamed_from']} → {r['name']}" for r in renamed[:3])
@@ -1206,8 +1259,8 @@ class Api:
             if not name and not ouid:
                 raise ValueError("닉네임을 입력해 주세요")
             members = self._ensure_me(None)
-            if len(members) >= 10:
-                raise ValueError("10명이 가득 찼습니다 · 한 명을 삭제한 뒤 등록해 주세요")
+            if len(members) >= 20:
+                raise ValueError("20명이 가득 찼습니다 · 한 명을 삭제한 뒤 등록해 주세요")
             if any((m.get("ouid") and m.get("ouid") == ouid) or str(m.get("name", "")).lower() == name.lower()
                    for m in members):
                 raise ValueError("이미 등록된 닉네임입니다")
@@ -1264,7 +1317,7 @@ class Api:
                 break
         else:
             members.insert(0, {**member, "me": True})
-        self.store.set_leaderboard(members[:10])
+        self.store.set_leaderboard(members[:20])
 
     # ------------------------------------------------------------ v1.3.1 · 메모 · 폴더
     def save_member_memo(self, nickname: str, text: str) -> dict[str, Any]:
@@ -1302,7 +1355,8 @@ class Api:
 
     def open_barracks_page(self, ouid: str | None = None, nickname: str | None = None) -> dict[str, Any]:
         """서든 병영수첩 홈페이지를 기본 브라우저로 연다 (v1.5.0 · user_nexon_sn 사용)."""
-        nick = str(nickname or "").strip() or (self.store.settings.get("nickname") or "").strip()
+        nick = "" if str(nickname or "").strip() in ("내", "me", "ME") else str(nickname or "").strip()
+        nick = nick or (self.store.settings.get("nickname") or "").strip()
         target = str(ouid or "").strip()
         sn = barracks_mod.parse_sn(target) or barracks_mod.parse_sn(nick)
         if not sn and nick:
@@ -2529,6 +2583,37 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
 
+    def compare_players(self, left: str = "", right: str = "") -> dict[str, Any]:
+        """자유 1:1 비교 — 양쪽 모두 아무 닉네임/ouid/병영 URL (나 vs 남, 타인 vs 타인)."""
+        try:
+            def pick(text: str, fallback_me: bool = False) -> dict[str, Any]:
+                name = v140.normalize_target(str(text or "").strip())
+                if not name and fallback_me:
+                    name = (self.store.settings.get("nickname") or "").strip()
+                if not name:
+                    raise ValueError("비교할 닉네임을 입력해 주세요")
+                members = self._ensure_me(None)
+                key = name.lower()
+                for row in members:
+                    if str(row.get("name", "")).strip().lower() == key or str(row.get("ouid") or "") == name:
+                        return dict(row)
+                for row in self.store.barracks_cache().values():
+                    if str((row or {}).get("nickname") or "").strip().lower() == key:
+                        return self._member_from_barracks(row)
+                fetched = nexon.fetch_member(self._client(), name, depth=0)
+                if not fetched.get("ok"):
+                    raise ValueError(fetched.get("error") or f"'{name}' 전적을 불러오지 못했습니다")
+                self._upsert_member(fetched)
+                return fetched
+
+            me_row = pick(left, fallback_me=True)
+            other = pick(right, fallback_me=False)
+            compare = scoring.friend_compare(me_row, other)
+            return {"ok": True, "compare": compare,
+                    "message": f"{compare['me']['name']} vs {compare['friend']['name']} · {compare['verdict']}"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
     # ------------------------------------------------------------ 전원 · 게임 모드
     def perf_state(self, force: bool = False) -> dict[str, Any]:
         now = time.monotonic()
@@ -2637,6 +2722,441 @@ class Api:
     def tray_state(self) -> dict[str, Any]:
         return {"ok": True, "tray": self._tray_state(), "state": self._build_state()}
 
+    # ------------------------------------------------------------ v1.0.0 · 인게임 오버레이
+    def _overlay_settings(self) -> dict[str, Any]:
+        set_ = self.store.settings
+        return {
+            "enabled": bool(set_.get("overlay_enabled", True)),
+            "hotkey_lobby": overlay.clean_hotkey(set_.get("overlay_hotkey_lobby"), "F8"),
+            "hotkey_scout": overlay.clean_hotkey(set_.get("overlay_hotkey_scout"), "F9"),
+            "mapban_seconds": overlay.parse_seconds(set_.get("overlay_mapban_seconds"), 12.0),
+            "party_seconds": overlay.parse_seconds(set_.get("overlay_party_seconds"), 15.0),
+            "toast_enabled": bool(set_.get("toast_enabled", True)),
+            "toast_position": (set_.get("toast_position") if set_.get("toast_position") in overlay.TOAST_POSITIONS else "br"),
+            "toast_auto": bool(set_.get("toast_auto", True)),
+            "scan_calib": {"offset_x": set_.get("overlay_scan_x") or 0,
+                           "offset_y": set_.get("overlay_scan_y") or 0,
+                           "scale": set_.get("overlay_scan_scale") or 1.0},
+        }
+
+    _overlay_settings._serializable = False  # type: ignore[attr-defined]
+
+    def _cleanup_cache_once(self) -> None:
+        """하루 한 번, 30일 지난 넥슨 매치 캐시만 정리한다 (기록·잔디·프리셋 불변)."""
+        try:
+            last = str(self.store.data.get("cache_cleanup_at") or "")[:10]
+            if last == today_str():
+                self._cache_cleanup = {"ok": True, "skipped": True}
+                return
+            self._cache_cleanup = nexon.purge_expired_cache(30)
+            self.store.data["cache_cleanup_at"] = now_iso()
+            self.store.save()
+            log.info("nexon cache cleanup · %s", self._cache_cleanup)
+        except Exception:  # noqa: BLE001 - 정리 실패는 앱을 막지 않는다
+            log.exception("cache cleanup failed")
+            self._cache_cleanup = {"ok": False}
+
+    _cleanup_cache_once._serializable = False  # type: ignore[attr-defined]
+
+    def _known_names(self) -> list[str]:
+        """OCR 보정에 쓸 이름 — 순위표 · 최근 파티원 · 프리셋 · 내 닉네임."""
+        names: list[str] = []
+        me = (self.store.settings.get("nickname") or "").strip()
+        if me:
+            names.append(me)
+        for row in self.store.leaderboard():
+            name = str((row or {}).get("name") or "").strip()
+            if name:
+                names.append(name)
+        try:
+            for row in self._coplayers():
+                if row.get("name"):
+                    names.append(str(row["name"]))
+        except Exception:  # noqa: BLE001
+            pass
+        for preset in self.store.party_presets():
+            for member in (preset or {}).get("members") or []:
+                names.append(str(member))
+        return list(dict.fromkeys(n for n in names if n))[:80]
+
+    _known_names._serializable = False  # type: ignore[attr-defined]
+
+    def _map_entries_fast(self, names: list[str]) -> list[dict[str, Any]]:
+        """파티원 맵 전적을 저장된 캐시에서만 모은다 (오버레이용 · API 0건)."""
+        cache = self.store.barracks_cache()
+        stored = self.store.data.get("party_maps") or {}
+        entries: list[dict[str, Any]] = []
+        for name in names:
+            key = str(name or "").strip().lower()
+            if not key:
+                continue
+            barracks = cache.get(name) or next(
+                (b for b in cache.values() if str((b or {}).get("nickname") or "").lower() == key), None)
+            maps = (barracks or {}).get("maps") or (stored.get(key) or {}).get("maps") or []
+            entries.append({"name": name, "maps": maps,
+                            "source": "cache" if maps else "none"})
+        return entries
+
+    _map_entries_fast._serializable = False  # type: ignore[attr-defined]
+
+    def start_overlays(self) -> dict[str, Any]:
+        """앱 시작 시 오버레이 단축키·경기 토스트 감시를 켠다 (main.py 가 부른다)."""
+        result = self.apply_overlay_hotkeys()
+        settings = self._overlay_settings()
+        if settings.get("toast_enabled") and settings.get("toast_auto"):
+            try:
+                watcher = self._watcher()
+                watcher.start()
+
+                def _prime() -> None:
+                    try:
+                        match = toast.last_match(self._client(),
+                                                (self.store.settings.get("nickname") or ""))
+                        if match:
+                            watcher.prime(match.get("match_id"))
+                    except Exception:  # noqa: BLE001 - 첫 확인 실패는 무시
+                        log.debug("toast prime failed", exc_info=True)
+
+                __import__("threading").Thread(target=_prime, daemon=True).start()
+            except Exception:  # noqa: BLE001
+                log.debug("match watcher could not start", exc_info=True)
+        return result
+
+    start_overlays._serializable = False  # type: ignore[attr-defined]
+
+    def apply_overlay_hotkeys(self) -> dict[str, Any]:
+        """설정에 적힌 F8/F9 를 실제 전역 단축키로 등록한다."""
+        settings = self._overlay_settings()
+        if not settings.get("enabled"):
+            self._hotkeys.stop()
+            return {"ok": True, "enabled": False, "hotkeys": self._hotkeys.state(),
+                    "message": "오버레이가 꺼져 있습니다"}
+        mapping = {"lobby": settings["hotkey_lobby"], "scout": settings["hotkey_scout"]}
+        mapping = {k: v for k, v in mapping.items() if v and v != "None"}
+        self._hotkeys.start(mapping, self._on_hotkey)
+        state = self._hotkeys.state()
+        return {"ok": bool(state.get("registered")), "enabled": True, "hotkeys": state,
+                "message": ("단축키 등록 · " + ", ".join(state.get("registered") or [])) if state.get("registered")
+                           else "단축키를 등록하지 못했습니다 (Windows 전용 / 키 선점 확인)"}
+
+    def _on_hotkey(self, name: str) -> None:
+        if name == "scout":
+            self.overlay_scout_start()
+        else:
+            self.overlay_lobby_toggle()
+
+    _on_hotkey._serializable = False  # type: ignore[attr-defined]
+
+    def _watcher(self) -> toast.MatchWatcher:
+        if self._match_watch is None:
+            self._match_watch = toast.MatchWatcher(
+                client_factory=lambda: self._client(),
+                nick_provider=lambda: (self.store.settings.get("nickname") or ""),
+                on_match=self._on_match_finished,
+            )
+        return self._match_watch
+
+    _watcher._serializable = False  # type: ignore[attr-defined]
+
+    def _on_match_finished(self, match: dict[str, Any]) -> None:
+        settings = self._overlay_settings()
+        if not (settings.get("toast_enabled") and settings.get("toast_auto")):
+            return
+        self._show_toast(match)
+
+    _on_match_finished._serializable = False  # type: ignore[attr-defined]
+
+    def _show_toast(self, match: dict[str, Any]) -> dict[str, Any]:
+        settings = self._overlay_settings()
+        lines = overlay.toast_lines(match)
+        payload = {**lines, "seconds": overlay.TOAST_SECONDS}
+        area = overlay.game_area()
+        rect = overlay.toast_rect(area, settings.get("toast_position") or "br")
+        return self._overlay.show("toast", payload, rect=rect, seconds=overlay.TOAST_SECONDS + 0.6)
+
+    _show_toast._serializable = False  # type: ignore[attr-defined]
+
+    # ------------------------------------------------------------ 오버레이 공개 API
+    def overlay_state(self) -> dict[str, Any]:
+        settings = self._overlay_settings()
+        return {"ok": True, "overlay": {**self._overlay.state(), **{
+                    "enabled": settings["enabled"], "hotkey_lobby": settings["hotkey_lobby"],
+                    "hotkey_scout": settings["hotkey_scout"], "toast_position": settings["toast_position"],
+                    "mapban_seconds": settings["mapban_seconds"], "scan_calib": settings["scan_calib"]}},
+                "hotkeys": self._hotkeys.state(), "toast": self._watcher().state(),
+                "cache_cleanup": self._cache_cleanup or {"ok": True, "skipped": True},
+                "attribution": "Data based on NEXON Open API"}
+
+    def overlay_payload(self, kind: str = "match") -> dict[str, Any]:
+        """오버레이 페이지가 로드되자마자 자기 내용을 그릴 때 쓴다."""
+        return {"ok": True, "payload": self._overlay.payload(kind), "kind": kind}
+
+    def overlay_hide(self, kind: str = "") -> dict[str, Any]:
+        if kind in overlay.KINDS:
+            return self._ok(**self._overlay.hide(kind))
+        self._overlay.hide_all()
+        return self._ok(hidden=True)
+
+    def overlay_preview(self, kind: str = "toast", position: str = "") -> dict[str, Any]:
+        """설정 화면의 미리보기 — 실제 게임 없이 샘플 데이터로 띄운다."""
+        if kind == "toast":
+            sample = {"map": "제3보급창고", "result": "승", "kills": 14, "deaths": 6,
+                      "damage": 1840, "streak": 3}
+            settings = self._overlay_settings()
+            area = overlay.game_area()
+            rect = overlay.toast_rect(area, position or settings.get("toast_position") or "br")
+            lines = overlay.toast_lines(sample)
+            return self._ok(**self._overlay.show("toast", {**lines, "seconds": 5}, rect=rect,
+                                                 seconds=5.6))
+        if kind == "party":
+            rows = self.store.overlay_cache().get("last_scan") or []
+            payload = {"rows": rows or _sample_party_rows(self._store_nick()), "presets": self.party_presets()["presets"]}
+            area = overlay.game_area()
+            return self._ok(**self._overlay.show("party", payload, rect=overlay.party_overlay_rect(area),
+                                                 seconds=10))
+        if kind == "scout":
+            area = overlay.game_area()
+            payload = {"tab": "scout", "rows": _sample_scout_rows(), "map": "제3보급창고"}
+            return self._ok(**self._overlay.show("match", payload, rect=overlay.scout_overlay_rect(area),
+                                                 seconds=12))
+        return self._err("알 수 없는 미리보기 종류입니다")
+
+    def _store_nick(self) -> str:
+        return (self.store.settings.get("nickname") or "").strip()
+
+    _store_nick._serializable = False  # type: ignore[attr-defined]
+
+    # ------------------------------------------------------------ 파티 대기실 OCR
+    def overlay_lobby_toggle(self) -> dict[str, Any]:
+        """F8 — 열려 있으면 닫고, 아니면 맵 밴 → 파티 대기실 순서로 화면을 판별."""
+        settings = self._overlay_settings()
+        if not settings.get("enabled"):
+            return self._ok(enabled=False, message="설정에서 오버레이를 켜 주세요")
+        if self._overlay.state().get("open"):
+            self._overlay.hide_all()
+            return self._ok(closed=True)
+        return self.overlay_mapban_start()
+
+    def party_scan(self) -> dict[str, Any]:
+        """대기실 5칸 OCR → 보정 → API 검증."""
+        try:
+            if os.name != "nt":
+                return self._err("인게임 OCR은 Windows 에서만 동작합니다")
+            settings = self._overlay_settings()
+            area = overlay.game_area()
+            client = self._client()
+            known = self._known_names()
+            scan = party_lobby.scan_party(client, area, known, calib=settings.get("scan_calib"))
+            if scan.get("rows"):
+                cache = self.store.overlay_cache()
+                cache["last_scan_at"] = now_iso()
+                cache["last_scan"] = scan["rows"]
+                self.store.save()
+                self._last_scan = scan["rows"]
+            return {"ok": bool(scan.get("ok")), "rows": scan.get("rows") or [],
+                    "names": scan.get("names") or [], "run": scan,
+                    "presets": self.party_presets()["presets"],
+                    "mapban": self._mapban_payload(scan.get("names") or []) if scan.get("rows") else None,
+                    "message": scan.get("message") or ""}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, rows=[])
+
+    def overlay_party_show(self) -> dict[str, Any]:
+        settings = self._overlay_settings()
+        if not settings.get("enabled"):
+            return self._err("오버레이가 꺼져 있습니다")
+        scan = self.party_scan()
+        rows = scan.get("rows") or []
+        if not rows or not any(r.get("name") for r in rows):
+            # OCR 실패 — 직전 판 API 에서 우리 팀 5명을 그대로 불러온다
+            try:
+                me = self._store_nick()
+                fallback = party_lobby.last_match_teams(self._client(), me) if me else {"ok": False}
+                mine = [r for r in (fallback.get("rows") or []) if r.get("team") in ("mine", "내 팀", "red")][:5]
+                if mine:
+                    rows = [{"slot": i, "name": r.get("name"), "status": "ok", "score": 1.0}
+                            for i, r in enumerate(mine)]
+                    scan = {**scan, "ok": True, "rows": rows, "names": [r["name"] for r in rows],
+                            "message": "직전 판 API 에서 우리 팀 5명을 불러왔습니다"}
+                    self._last_scan = rows
+            except Exception:  # noqa: BLE001 - 폴백 실패는 원래 메시지를 보여 준다
+                log.debug("party fallback failed", exc_info=True)
+        if not rows:
+            return {**scan, "message": scan.get("message") or "대기실 닉네임을 읽지 못했습니다"}
+        area = overlay.game_area()
+        payload = {"rows": rows, "presets": self.party_presets()["presets"],
+                   "mapban": scan.get("mapban"), "me": self._store_nick()}
+        shown = self._overlay.show("party", payload, rect=overlay.party_overlay_rect(area),
+                                   seconds=settings.get("party_seconds"))
+        return {**scan, **shown, "kind": "party"}
+
+    def party_presets(self) -> dict[str, Any]:
+        return {"ok": True, "presets": party_lobby.preset_payload(self.store.party_presets())}
+
+    def save_party_preset(self, name: str = "", members: Any = None, use_scan: bool = True) -> dict[str, Any]:
+        try:
+            rows = party_lobby.clean_members(members)
+            if not rows and use_scan and self._last_scan:
+                rows = [str(r.get("name") or "") for r in self._last_scan if r.get("name")]
+            if not rows:
+                rows = party_lobby.clean_members([self._store_nick()])
+            entry = self.store.save_party_preset(name, rows)
+            return self._ok(preset=entry, presets=self.party_presets()["presets"],
+                            state=self._build_state(), message=f"프리셋 저장 · {entry['name']} ({len(entry['members'])}명)")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def delete_party_preset(self, name: str = "") -> dict[str, Any]:
+        try:
+            removed = self.store.delete_party_preset(name)
+            return self._ok(removed=removed, presets=self.party_presets()["presets"],
+                            message="프리셋을 삭제했습니다" if removed else "해당 프리셋이 없습니다")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def load_party_preset(self, name: str = "") -> dict[str, Any]:
+        rows = party_lobby.preset_payload(self.store.party_presets())
+        hit = next((r for r in rows if r["name"] == str(name or "").strip()), None)
+        if not hit:
+            return self._err("프리셋을 찾지 못했습니다")
+        return self._ok(preset=hit, members=hit["members"], mapban=self._mapban_payload(hit["members"]),
+                        message=f"프리셋 · {hit['name']} ({len(hit['members'])}명)")
+
+    # ------------------------------------------------------------ 맵 밴
+    def _mapban_payload(self, names: list[str]) -> dict[str, Any]:
+        """5개 카드 이름 + 파티/내 맵 전적 → PICK/BAN 배지."""
+        area = overlay.game_area()
+        rects = overlay.mapban_name_rects(area, self._overlay_settings().get("scan_calib"))
+        shot = capture_mod.ocr_regions([(r["x"], r["y"], r["w"], r["h"]) for r in rects])
+        card_names: list[str] = []
+        if shot.get("ok"):
+            for lines in shot.get("lines") or []:
+                card_names.append(_map_line(lines))
+        if len([n for n in card_names if n]) < 2:
+            return {"ok": False, "cards": [], "source": "ocr-failed",
+                    "message": "맵 이름을 읽지 못했습니다 · 맵 밴 화면에서 다시 눌러 주세요"}
+        table: dict[str, dict[str, Any]] = {}
+        for entry in self._map_entries_fast(names or [self._store_nick()]):
+            for row in entry.get("maps") or []:
+                key = v150.map_key(row.get("map"))
+                slot = table.setdefault(key, {"map": row.get("map"), "win": 0.0, "games": 0, "_w": 0.0})
+                games = float(row.get("games") or 0)
+                slot["games"] += int(games)
+                slot["_w"] += float(row.get("win") or 0) * games
+        entries = []
+        for name in card_names:
+            key = v150.map_key(name)
+            slot = table.get(key) or {}
+            games = int(slot.get("games") or 0)
+            win = round(slot["_w"] / games, 1) if games else None
+            entries.append({"map": name, "win": win, "games": games})
+        rows = overlay.verdict_rows(entries)
+        return {"ok": True, "cards": rows, "maps": card_names, "source": "nexon-cache",
+                "message": f"맵 {len([n for n in card_names if n])}개 인식 · 픽/밴 추천"}
+
+    def overlay_mapban_start(self) -> dict[str, Any]:
+        settings = self._overlay_settings()
+        if not settings.get("enabled"):
+            return self._err("오버레이가 꺼져 있습니다")
+        if os.name != "nt":
+            return self._err("인게임 오버레이는 Windows 에서만 동작합니다")
+        preset = party_lobby.preset_payload(self.store.party_presets())
+        names: list[str] = []
+        if self._last_scan:
+            names = [str(r.get("name") or "") for r in self._last_scan if r.get("name")]
+        if not names and preset:
+            names = list(preset[0].get("members") or [])
+        if not names:
+            names = [self._store_nick()]
+        plan = self._mapban_payload(names)
+        if not plan.get("ok"):
+            # 맵 밴 화면이 아니면 대기실 스캔으로 넘어간다
+            party = self.overlay_party_show()
+            if party.get("ok"):
+                return {**party, "screen": "party"}
+            return {**plan, "screen": "unknown", "party": party.get("message")}
+        area = overlay.game_area()
+        payload = {"tab": "mapban", "cards": plan.get("cards") or [],
+                   "maps": plan.get("maps") or [], "seconds": settings.get("mapban_seconds"),
+                   "tab_pad": overlay.mapban_tab_pad(area)}
+        shown = self._overlay.show("match", payload, rect=overlay.mapban_overlay_rect(area),
+                                    seconds=settings.get("mapban_seconds"))
+        if shown.get("ok"):
+            self._overlay.arm_disappear("match", rect=overlay.mapban_overlay_rect(area))
+        return {**plan, **shown, "screen": "mapban", "kind": "match"}
+
+    # ------------------------------------------------------------ 10초 상대 스카우팅
+    def overlay_scout_start(self, red: Any = None, blue: Any = None, map_name: str = "") -> dict[str, Any]:
+        settings = self._overlay_settings()
+        if not settings.get("enabled"):
+            return self._err("오버레이가 꺼져 있습니다")
+        if self._overlay.state().get("open"):
+            self._overlay.hide_all()
+            return self._ok(closed=True)
+        try:
+            client = self._client()
+            me = self._store_nick()
+            rows: list[dict[str, Any]] = []
+            source = "ocr"
+            if red or blue:
+                rows = [{"team": "red", "name": n, "slot": i} for i, n in enumerate(party_lobby.clean_members(red, 5))]
+                rows += [{"team": "blue", "name": n, "slot": i} for i, n in enumerate(party_lobby.clean_members(blue, 5))]
+                source = "manual"
+            else:
+                area = overlay.game_area()
+                scan = party_lobby.scan_teams(area, self._known_names(), client)
+                rows = scan.get("rows") or []
+                if len([r for r in rows if r.get("name")]) < 6:
+                    fallback = party_lobby.last_match_teams(client, me)
+                    if fallback.get("ok"):
+                        rows, source = fallback.get("rows") or [], "last-match"
+            if not me:
+                return self._err("설정에서 서든 닉네임을 먼저 저장해 주세요")
+            split = party_lobby.team_of(rows, me)
+            opponents = [str(r.get("name") or "") for r in split.get("opponents") or [] if r.get("name")]
+            if not opponents:
+                return self._err("상대 팀을 가르지 못했습니다 · 10인 화면에서 다시 눌러 주세요",
+                                 rows=rows)
+            area = overlay.game_area()
+            payload = {"tab": "scout", "map": map_name or "", "rows": [],
+                       "loading": True, "mine": [r.get("name") for r in split.get("mine") or []],
+                       "opponents": opponents, "source": source, "seconds": 12}
+            shown = self._overlay.show("match", payload, rect=overlay.scout_overlay_rect(area),
+                                        seconds=14)
+
+            def _update(rows_payload: list[dict[str, Any]]) -> None:
+                self._overlay.refresh("match", {**payload, "rows": rows_payload,
+                                                "loading": len(rows_payload) == 0})
+
+            result = scouting.quick_scout(client, opponents, map_name, on_update=_update)
+            payload["rows"] = result.get("rows") or []
+            payload["loading"] = False
+            payload["elapsed"] = result.get("elapsed")
+            self._overlay.refresh("match", payload)
+            cache = self.store.overlay_cache()
+            cache["last_team"] = payload["rows"]
+            self.store.save()
+            return {"ok": bool(result.get("ok")), "shown": shown, "rows": payload["rows"],
+                    "opponents": opponents, "mine": payload["mine"], "source": source,
+                    "elapsed": result.get("elapsed"),
+                    "message": result.get("message") or f"상대 {len(opponents)}명 분석"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, rows=[])
+
+    def overlay_toast_preview(self, position: str = "") -> dict[str, Any]:
+        return self.overlay_preview("toast", position=position)
+
+    def overlay_toast_last(self) -> dict[str, Any]:
+        """방금 끝난 판으로 토스트를 띄운다 (수동)."""
+        try:
+            match = toast.last_match(self._client(), self._store_nick())
+            if not match:
+                return self._err("최근 경기를 찾지 못했습니다")
+            return self._ok(**self._show_toast(match), match=match,
+                            message=f"{match.get('map') or '최근 경기'} 결과 토스트")
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
     # ------------------------------------------------------------ misc
     def app_info(self) -> dict[str, Any]:
         return {
@@ -2657,3 +3177,32 @@ def _area_for(game: str, weapon: str, name: str) -> str:
         if item["name"] == name:
             return item["area"]
     return "precision"
+
+
+def _map_line(lines: Any) -> str:
+    """맵 카드 이름 OCR 줄 → 맵 이름 (괄호 접미사는 남겨 두고 매칭에서 뗀다)."""
+    best = ""
+    for line in (lines or []):
+        text = str(line or "").strip().replace("　", " ")
+        text = "".join(ch for ch in text if ch.isalnum() or ch in "()-심플폭파클래식[]")
+        if len(text) < 2:
+            continue
+        if len(text) > len(best):
+            best = text
+    return best[:24]
+
+
+def _sample_party_rows(me: str) -> list[dict[str, Any]]:
+    names = [me or "게스트", "시티캣", "프로방스", "제5보급", "크로스포트"]
+    return [{"slot": i, "name": name, "status": "ok", "score": 1.0}
+            for i, name in enumerate(names[:5])]
+
+
+def _sample_scout_rows() -> list[dict[str, Any]]:
+    return [
+        {"name": "적팀1", "badge": "스나 · 이 맵 64% · KD 61%", "weapon": "스나", "map_win": 64, "kd": 61},
+        {"name": "적팀2", "badge": "라플 · 이 맵 48% · KD 54%", "weapon": "라플", "map_win": 48, "kd": 54},
+        {"name": "적팀3", "badge": "스나 · 이 맵 71% · KD 66%", "weapon": "스나", "map_win": 71, "kd": 66},
+        {"name": "적팀4", "badge": "스나 · 전체 55% · KD 58%", "weapon": "스나", "win": 55, "kd": 58},
+        {"name": "적팀5", "badge": "라플 · 이 맵 44% · KD 49%", "weapon": "라플", "map_win": 44, "kd": 49},
+    ]

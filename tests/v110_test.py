@@ -178,7 +178,7 @@ def mock_js(state: dict) -> str:
 def backend() -> None:
     from app import scoring, winutil, paths
 
-    check("버전 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
+    check("버전 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
 
     import datetime as _dt
     _d1 = (_dt.date.today() - _dt.timedelta(days=1)).isoformat()
@@ -408,7 +408,7 @@ def ui() -> None:
               .filter((id) => document.getElementById(id)).length,
             noSub: !document.getElementById('rec-grid-sub')})""")
         check("추천 화면 · 에임랩 스나 라이브러리 24종 이상", aim_sub["items"] >= 24, str(aim_sub))
-        check("추천 화면 · 상단 버튼 7개 정리", aim_sub["btns"] == 7, str(aim_sub["btns"]))
+        check("추천 화면 · 상단 버튼 6개 정리 (더 연습하기 제거 · v1.0.0)", aim_sub["btns"] == 6, str(aim_sub["btns"]))
         check("추천 화면 · 회색 부연 설명 제거 (v1.3.1)", aim_sub.get("noSub") is True, str(aim_sub.get("noSub")))
         page.screenshot(path=str(SHOTS / "v110-recs-aimlab-sniper.png"))
         _open_rail(page)

@@ -225,7 +225,7 @@ def backend_checks() -> None:
     from app import paths, winutil, nvidia, drs, scoring, nexon
     from app.store import Store
 
-    check("APP_VERSION 1.5.0", paths.APP_VERSION == "1.5.0", paths.APP_VERSION)
+    check("APP_VERSION 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
 
     # 1·2. 창 이동 · 최대화 제거
     style = 0x00CF0000  # WS_OVERLAPPEDWINDOW

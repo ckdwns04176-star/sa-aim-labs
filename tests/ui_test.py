@@ -208,10 +208,9 @@ def main() -> int:
             return {nick: nick ? nick.getAttribute('placeholder') : 'MISSING',
                     key: key ? key.getAttribute('placeholder') : 'MISSING'};
         }""")
-        # v1.4.0 — 키가 등록돼 있으면 마스킹 값이, 없으면 발급 안내 placeholder 가 보인다
-        key_val = page.evaluate("() => (document.getElementById('set-key')||{}).value || ''")
+        # v1.0.0 — 프록시가 기본이라 API 키 입력칸 자체를 없앴다
         check("닉네임 placeholder 없음", ph.get("nick") in ("", None), str(ph))
-        check("API 키는 마스킹 또는 등록 상태로 표시", ("•" in key_val) or (key_val == "" and ph.get("key")), str({"value": key_val[:14]}))
+        check("API 키 입력칸 제거(프록시 기본)", ph.get("key") == "MISSING", str(ph))
 
         # 2-1) 클라우드 카드: 용도 설명 + 고급 서버 설정 접힘
         cloud_card = page.evaluate("""() => {

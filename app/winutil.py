@@ -36,6 +36,14 @@ def mouse_values(enabled: bool) -> dict[str, str]:
     return {"MouseSpeed": "0", "MouseThreshold1": "0", "MouseThreshold2": "0"}
 
 
+def mouse_params(enabled: bool) -> tuple[int, int, int]:
+    """SPI_SETMOUSE 의 int[3] *(threshold1, threshold2, acceleration)*.
+
+    계단현상(가속) 끄기 = (0,0,0), 켜기 = (6,10,1) — 윈도우 기본값.
+    """
+    return (6, 10, 1) if enabled else (0, 0, 0)
+
+
 def read_mouse_values() -> dict[str, str] | None:
     if os.name != "nt":
         return None
@@ -82,22 +90,28 @@ def set_mouse_accel(enabled: bool) -> dict[str, Any]:
     except OSError as exc:
         return {"ok": False, "enabled": get_mouse_accel(), "message": f"레지스트리를 쓰지 못했습니다 · {exc}"}
 
-    applied = True
+    # SPI_SETMOUSE 는 pvParam 이 **int[3] 배열 포인터**여야 한다. None 을 넘기면
+    # Windows 가 즉시 거부해서 레지스트리만 바뀌고 재부팅 전까지 반영되지 않았다 (v1.0.0 수정).
+    applied = False
     try:
-        ctypes.windll.user32.SystemParametersInfoW(  # type: ignore[attr-defined]
-            SPI_SETMOUSE, 0, None, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
-        )
-    except Exception:  # noqa: BLE001 - values are already in the registry
+        params = mouse_params(bool(enabled))
+        gain = (ctypes.c_int * 3)(*params)
+        applied = bool(ctypes.windll.user32.SystemParametersInfoW(  # type: ignore[attr-defined]
+            SPI_SETMOUSE, 0, ctypes.byref(gain), SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
+        ))
+    except Exception:  # noqa: BLE001 - 레지스트리 값은 이미 저장됐다
         applied = False
 
     return {
         "ok": True,
         "enabled": bool(enabled),
         "live": applied,
+        "params": mouse_params(bool(enabled)),
         "values": values,
-        "message": ("마우스 가속 끄기 완료 · 포인터 정확도 향상 해제 (재부팅 불필요)"
-                    if not enabled else
-                    "마우스 가속을 다시 켰습니다 · 포인터 정확도 향상 복원"),
+        "message": (("마우스 가속 끄기 완료 · 포인터 정확도 향상 해제 (재부팅 불필요)"
+                     if not enabled else
+                     "마우스 가속을 다시 켰습니다 · 포인터 정확도 향상 복원")
+                    + ("" if applied else " · 일부만 적용됨 · 로그아웃 후 다시 확인해 주세요")),
     }
 
 
@@ -269,6 +283,126 @@ def _window_rect(hwnd: int) -> tuple[int, int, int, int] | None:
         return int(rect.left), int(rect.top), int(rect.right - rect.left), int(rect.bottom - rect.top)
     except Exception:  # noqa: BLE001
         return None
+
+
+# ------------------------------------------------------------------ overlay windows (v1.0.0)
+# 인게임 오버레이는 DLL 인젝션·후킹 없이 "독립 투명 창"으로만 만든다.
+#   WS_EX_TOPMOST     항상 위
+#   WS_EX_NOACTIVATE  게임 포커스를 뺏지 않음
+#   WS_EX_TRANSPARENT 클릭 통과 (투표·조준에 영향 없음)
+#   WS_EX_TOOLWINDOW  Alt+Tab·작업표시줄에 노출되지 않음
+GWL_EXSTYLE = -20
+WS_EX_TRANSPARENT = 0x00000020
+WS_EX_TOOLWINDOW = 0x00000080
+WS_EX_TOPMOST = 0x00000008
+WS_EX_NOACTIVATE = 0x08000000
+WS_EX_LAYERED = 0x00080000
+HWND_TOPMOST = -1
+SWP_SHOWWINDOW = 0x0040
+
+OVERLAY_EX_STYLE = (WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT |
+                    WS_EX_TOOLWINDOW | WS_EX_LAYERED)
+
+
+def overlay_style(style: int) -> int:
+    """클릭 통과 오버레이 확장 스타일 (순수 함수 · 테스트용)."""
+    return int(style) | OVERLAY_EX_STYLE
+
+
+def apply_overlay_style(hwnd: int) -> dict[str, Any]:
+    """투명·클릭 통과·항상 위 창으로 만든다 (Windows 전용)."""
+    if os.name != "nt" or not hwnd:
+        return {"ok": False, "supported": False}
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        get_long = getattr(user32, "GetWindowLongPtrW", user32.GetWindowLongW)
+        set_long = getattr(user32, "SetWindowLongPtrW", user32.SetWindowLongW)
+        before = int(get_long(ctypes.c_void_p(hwnd), GWL_EXSTYLE))
+        target = overlay_style(before)
+        set_long(ctypes.c_void_p(hwnd), GWL_EXSTYLE, target)
+        user32.SetWindowPos(ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST), 0, 0, 0, 0,
+                            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
+        return {"ok": True, "supported": True, "before": f"0x{before:08X}", "after": f"0x{target:08X}"}
+    except Exception as exc:  # noqa: BLE001 - 스타일 적용 실패는 앱을 막지 않는다
+        return {"ok": False, "supported": True, "message": str(exc)}
+
+
+GAME_TITLE_HINTS = ("서든어택", "sudden attack", "suddenattack")
+
+
+def _client_rect(hwnd: int) -> tuple[int, int, int, int] | None:
+    """창의 클라이언트 영역을 화면 좌표로 (테두리 제외 — 오버레이 정렬 기준)."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        rect = wintypes.RECT()
+        if not user32.GetClientRect(ctypes.c_void_p(hwnd), ctypes.byref(rect)):
+            return None
+        point = wintypes.POINT(0, 0)
+        if not user32.ClientToScreen(ctypes.c_void_p(hwnd), ctypes.byref(point)):
+            return None
+        return int(point.x), int(point.y), int(rect.right - rect.left), int(rect.bottom - rect.top)
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def game_window() -> dict[str, Any] | None:
+    """실행 중인 서든어택 창(클라이언트 영역)을 찾는다.  없으면 None."""
+    if os.name != "nt":
+        return None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        found: list[dict[str, Any]] = []
+        EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+        buf = ctypes.create_unicode_buffer(256)
+
+        def _each(hwnd, _lparam):
+            try:
+                if not user32.IsWindowVisible(ctypes.c_void_p(hwnd)):
+                    return True
+                if not user32.GetWindowTextW(ctypes.c_void_p(hwnd), buf, 256):
+                    return True
+                title = str(buf.value or "")
+                if not any(hint.lower() in title.lower() for hint in GAME_TITLE_HINTS):
+                    return True
+                area = _client_rect(int(hwnd))
+                if not area or area[2] < 640 or area[3] < 360:
+                    return True
+                found.append({"hwnd": int(hwnd), "title": title,
+                              "x": area[0], "y": area[1], "width": area[2], "height": area[3]})
+            except Exception:  # noqa: BLE001 - 한 창의 오류는 건너뛴다
+                return True
+            return True
+
+        user32.EnumWindows(EnumProc(_each), 0)
+        return found[0] if found else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def screen_area() -> tuple[int, int, int, int]:
+    """기본 모니터 작업 영역 (없으면 0,0,0,0)."""
+    if os.name != "nt":
+        return 0, 0, 0, 0
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        rect = wintypes.RECT()
+        if ctypes.windll.user32.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):  # type: ignore[attr-defined]
+            return int(rect.left), int(rect.top), int(rect.right - rect.left), int(rect.bottom - rect.top)
+    except Exception:  # noqa: BLE001
+        pass
+    return 0, 0, 0, 0
 
 
 def _cursor_pos() -> tuple[int, int] | None:

@@ -31,6 +31,10 @@ from typing import Any, Callable, Iterable, Sequence
 from . import paths, scoring
 
 BASE_URL = "https://open.api.nexon.com"
+# v1.0.0 — 앱에는 넥슨 키가 들어가지 않는다.  모든 조회는 Cloudflare Workers
+# 프록시를 거치고, 사용자가 개인 키를 직접 넣은 경우에만 넥슨으로 바로 쏜다.
+PROXY_URL = "https://sa-aim-proxy.ckdwns04176.workers.dev"
+PROXY_MIN_INTERVAL = 0.04
 MATCH_MODE = "폭파미션"
 MATCH_TYPES = ("랭크전 솔로", "랭크전 파티")
 RECENT_N = 100
@@ -149,8 +153,9 @@ class NexonClient:
 
     def __init__(
         self,
-        api_key: str,
+        api_key: str = "",
         *,
+        proxy: str | None = None,
         cache_dir: str | os.PathLike[str] | None = None,
         timeout: float = 20.0,
         min_interval: float | None = None,
@@ -158,8 +163,12 @@ class NexonClient:
         force: bool = False,
     ):
         self.api_key = (api_key or "").strip()
+        self.proxy = (PROXY_URL if proxy is None else str(proxy)).strip().rstrip("/")
+        self.using_proxy = bool(self.proxy) and not self.api_key
         self.timeout = timeout
-        self.min_interval = self.MIN_INTERVAL if min_interval is None else min_interval
+        if min_interval is None:
+            min_interval = PROXY_MIN_INTERVAL if self.using_proxy else self.MIN_INTERVAL
+        self.min_interval = min_interval
         self.progress = progress
         self.force = force          # 전적 새로고침: 목록/프로필 캐시 TTL 무시
         self._lock = threading.Lock()
@@ -170,6 +179,10 @@ class NexonClient:
         self._cache_api = _DiskCache(os.path.join(cache_root, "nexon_api.json"), 600)
         self._cache_detail = _DiskCache(os.path.join(cache_root, "nexon_match_detail.json"), 5000)
 
+    @property
+    def endpoint(self) -> str:
+        return "proxy" if self.using_proxy else "direct"
+
     # ------------------------------------------------------------ http
     def _pace(self) -> None:
         with self._lock:
@@ -179,26 +192,37 @@ class NexonClient:
             self._last = time.monotonic()
 
     def _request(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
-        if not self.api_key:
-            raise NexonError("NEXON Open API 키가 없습니다 · 설정 탭에서 입력해 주세요")
         query = urllib.parse.urlencode({k: v for k, v in params.items() if v is not None})
-        url = f"{BASE_URL}{path}?{query}"
+        if self.using_proxy:
+            url = f"{self.proxy}{path}?{query}"
+            headers = {"Accept": "application/json",
+                       "User-Agent": f"SA-Aim-Labs/{paths.APP_VERSION}"}
+        elif self.api_key:
+            url = f"{BASE_URL}{path}?{query}"
+            headers = {"x-nxopen-api-key": self.api_key,
+                       "Accept": "application/json",
+                       "User-Agent": f"SA-Aim-Labs/{paths.APP_VERSION}"}
+        else:
+            raise NexonError("NEXON API 연결이 설정되지 않았습니다 · 설정 탭에서 개인 키를 넣거나 프록시를 확인해 주세요")
         last_error: Exception | None = None
         for attempt in range(4):
             self._pace()
-            req = urllib.request.Request(url, headers={
-                "x-nxopen-api-key": self.api_key,
-                "Accept": "application/json",
-                "User-Agent": f"SA-Aim-Labs/{paths.APP_VERSION}",
-            })
+            req = urllib.request.Request(url, headers=headers)
             try:
                 self.calls += 1
                 with urllib.request.urlopen(req, timeout=self.timeout) as resp:
                     raw = resp.read().decode("utf-8", "replace")
                 body = json.loads(raw) if raw else {}
                 if isinstance(body, dict) and body.get("error"):
-                    err = body["error"] or {}
-                    raise NexonError(friendly_error(f"{err.get('name', 'ERROR')} · {err.get('message', '')}".strip(" ·")))
+                    err = body["error"]
+                    if isinstance(err, dict):
+                        detail = f"{err.get('name', 'ERROR')} · {err.get('message', '')}".strip(" ·")
+                        code = str(err.get("name") or "")
+                    else:
+                        detail, code = str(err), ""
+                    if "not_allowed" in detail:
+                        raise NexonError("API 프록시가 이 요청을 막았습니다 · 잠시 후 다시 시도해 주세요")
+                    raise NexonError(friendly_error(detail))
                 return body
             except urllib.error.HTTPError as exc:
                 detail = ""
@@ -206,8 +230,11 @@ class NexonClient:
                 try:
                     payload = json.loads(exc.read().decode("utf-8", "replace"))
                     err = payload.get("error") or {}
-                    code = str(err.get("name") or "")
-                    detail = f"{err.get('name', '')} · {err.get('message', '')}".strip(" ·")
+                    if isinstance(err, dict):
+                        code = str(err.get("name") or "")
+                        detail = f"{err.get('name', '')} · {err.get('message', '')}".strip(" ·")
+                    else:
+                        detail = str(err)
                 except Exception:  # noqa: BLE001 - body may be empty
                     pass
                 last_error = NexonError(
@@ -587,7 +614,7 @@ def fetch_member(client: NexonClient, nickname: str, *, ouid: str | None = None,
 def build_leaderboard(client: NexonClient, members: Iterable[Any], progress: Progress | None = None,
                       depth: int = DETAIL_DEPTH) -> list[dict[str, Any]]:
     """members may be names or stored member dicts (ouid/me preserved)."""
-    rows = list(members)[:10]
+    rows = list(members)[:20]
     out: list[dict[str, Any]] = []
     total = len(rows) * 4
     for i, entry in enumerate(rows):
@@ -664,3 +691,71 @@ def ceil_pct(a: float) -> float:
 
 def key_digest(api_key: str) -> str:
     return hashlib.sha1((api_key or "").encode()).hexdigest()[:8]
+
+
+# --------------------------------------------------------------------- 캐시 정리 (v1.0.0)
+CACHE_TTL_DAYS = 30
+_CACHE_FILES = ("nexon_api.json", "nexon_match_detail.json")
+
+
+def purge_expired_cache(days: int = CACHE_TTL_DAYS, cache_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    """30일 지난 **넥슨 매치 캐시 항목만** 지운다.
+
+    사용자의 훈련 기록·최고 기록·잔디·파티 프리셋은 ``data.json`` 에 있고
+    여기서는 절대 건드리지 않는다.  지우는 대상은 cache/ 안의 넥슨 응답뿐이다.
+    """
+    root = str(cache_dir or paths.cache_dir())
+    cutoff = time.time() - max(1, int(days)) * 86400
+    removed = 0
+    kept = 0
+    touched: list[str] = []
+    for name in _CACHE_FILES:
+        path = os.path.join(root, name)
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as handle:
+                data = json.load(handle)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        fresh: dict[str, Any] = {}
+        for key, row in data.items():
+            try:
+                at = float((row or {}).get("at") or 0)
+            except (TypeError, ValueError):
+                at = 0.0
+            if at and at < cutoff:
+                removed += 1
+            else:
+                fresh[key] = row
+                kept += 1
+        if len(fresh) == len(data):
+            continue
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                json.dump(fresh, handle, ensure_ascii=False)
+            os.replace(tmp, path)
+            touched.append(name)
+        except OSError:
+            continue
+    # cache/ 안의 오래된 match 임시 파일도 30일이 지나면 정리 (data.json 은 제외)
+    try:
+        for entry in os.scandir(root):
+            if not entry.is_file():
+                continue
+            if entry.name in _CACHE_FILES or not entry.name.lower().startswith(("match_cache", "nexon_")):
+                continue
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    os.remove(entry.path)
+                    removed += 1
+                    touched.append(entry.name)
+            except OSError:
+                continue
+    except OSError:
+        pass
+    return {"ok": True, "days": int(days), "removed": removed, "kept": kept,
+            "files": touched}

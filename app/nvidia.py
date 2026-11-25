@@ -27,7 +27,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from . import drs, paths
+from . import drs, nvapi_drs, paths
 
 DRS_DIR = Path(r"C:\ProgramData\NVIDIA Corporation\Drs")
 DRS_FILES = ("nvdrsdb0.bin", "nvdrsdb1.bin", "nvdrssel.bin", "nvAppTimestamps", "nvdrswr.lk")
@@ -129,6 +129,9 @@ class DrsManager:
         self.backup_root = Path(backup_root) if backup_root else paths.nvidia_backup_dir()
         self.profiles_root = Path(profiles_root) if profiles_root else paths.assets_dir() / "profiles"
         self._force_platform = force_platform
+        # v1.0.0 — 파일 해시 대신 '마지막으로 적용한 팩'을 선호값으로 쓴다
+        # (다른 게임 프로필을 보존하면 파일은 팩과 같을 수 없기 때문)
+        self.preferred_mode: str | None = None
 
     # ------------------------------------------------------------ platform
     @property
@@ -204,29 +207,81 @@ class DrsManager:
         modes["stairfix"] = bool(self.profile_files("stairfix")) or self.stairfix_ready()
         return modes
 
-    def current_mode(self) -> str | None:
-        """Which profile is applied right now?
+    def _pack_game_values(self, mode: str) -> dict[int, int]:
+        src = self.profiles_root / mode / "nvdrsdb0.bin"
+        if not src.exists():
+            return {}
+        try:
+            return drs.profile_dwords(src.read_bytes(), GAME_EXE)
+        except (OSError, drs.DrsFormatError):
+            return {}
 
-        v1.3.0 — 팩 적용과 함께 계단현상 끄기가 병합되므로, 팩 일치를 먼저 보고
-        그다음에 계단현상만 적용된 상태를 본다(팩을 적용해 둔 사람이
-        'stairfix'로 보여 다시 적용되는 일을 막는다).
+    def _pack_values(self, mode: str) -> dict[int, int]:
+        """번들 팩에서 **서든에만 적용할** 설정을 꺼낸다.
+
+        팩의 서든 프로필 값 + 팩의 Base Profile 에 들어 있는 3D 성능 항목을
+        합친다(전역에 쓰지 않고 게임 프로필 오버라이드로만 넣기 위해).
         """
-        live = self.drs_dir / "nvdrsdb0.bin"
+        src = self.profiles_root / mode / "nvdrsdb0.bin"
+        if not src.exists():
+            return {}
+        try:
+            blob = src.read_bytes()
+            values = dict(drs.profile_dwords(blob, GAME_EXE))
+            base_off = drs.named_profile_offset(blob, "Base Profile")
+            if base_off is not None:
+                import struct as _struct
+
+                for rec in drs.iter_settings(blob, base_off):
+                    if rec["value_size"] >= 4 and rec["setting_id"] not in values:
+                        values[rec["setting_id"]] = _struct.unpack_from("<I", blob, rec["value_offset"])[0]
+            return values
+        except (OSError, drs.DrsFormatError):
+            return {}
+
+    def current_mode(self) -> str | None:
+        """지금 서든 프로필이 어떤 팩과 같은가 — **서든 프로필 값만** 비교한다.
+
+        파일 전체 해시 비교는 다른 게임 프로필까지 같아야 해서, 이제는 쓰지
+        않는다(다른 게임 설정을 보존하므로 파일은 당연히 다르다).
+        """
+        blob = self.live_blob()
+        if blob is None:
+            return None
+        try:
+            live_values = drs.profile_dwords(blob)
+        except drs.DrsFormatError:
+            live_values = {}
+        if not live_values:
+            if self.stairfix_applied():
+                return "stairfix"
+            return None
+        live_path = self.drs_dir / "nvdrsdb0.bin"
+        stair_ids = {sid for sid, _ in drs.STAIRFIX_SET}
+        candidates: list[tuple[int, str]] = []
         for mode in PACK_MODES:
             src = self.profiles_root / mode / "nvdrsdb0.bin"
-            if not (src.exists() and live.exists()):
+            if src.exists() and live_path.exists():
+                try:
+                    if _sha256(src) == _sha256(live_path):
+                        return mode          # 팩을 그대로 쓰는 첫 상태
+                except OSError:
+                    pass
+            pack_game = {sid: value for sid, value in self._pack_game_values(mode).items()
+                         if sid not in stair_ids}
+            if not pack_game:
                 continue
-            try:
-                if _sha256(src) == _sha256(live):
-                    return mode
-            except OSError:
-                continue
-            # 팩 + 계단현상 끄기 병합본도 그 팩으로 본다 — AA 값만 다른 경우
-            try:
-                if self.stairfix_applied() and _same_except_stairfix(src.read_bytes(), live.read_bytes()):
-                    return mode
-            except OSError:
-                continue
+            # **서든 프로필 값만** 비교한다 — 전역/다른 게임은 보존하므로 파일은 다를 수 있다.
+            # 계단현상 세트는 팩 기본값과 달라도 정상이므로 비교에서 뺀다.
+            matches = sum(1 for sid, value in pack_game.items() if live_values.get(sid) == value)
+            if matches == len(pack_game):
+                candidates.append((matches, mode))
+        if candidates:
+            best_matches = max(m for m, _ in candidates)
+            tied = [mode for m, mode in candidates if m == best_matches]
+            if self.preferred_mode in tied:
+                return self.preferred_mode
+            return tied[0]
         if self.stairfix_applied():
             return "stairfix"
         return None
@@ -252,6 +307,7 @@ class DrsManager:
         return {
             "supported": self.supported,
             "drs_dir": str(self.drs_dir),
+            "scope": "suddenattack.exe 프로필만 적용 · 다른 게임·전역 설정 유지",
             "drs_exists": self.drs_dir.is_dir(),
             "writable": self.writable(),
             "game_running": self.game_running(),
@@ -324,47 +380,103 @@ class DrsManager:
             shutil.rmtree(old, ignore_errors=True)
 
     # ------------------------------------------------------------ apply
+    def _nvapi_apply_values(self, values: dict[int, int]) -> dict[str, Any]:
+        """임의 설정값을 NVAPI 로 서든 프로필에만 저장 (서브프로세스)."""
+        if os.name != "nt" or not nvapi_drs.available() or not values:
+            return {"ok": False, "supported": False, "message": "NVAPI 없음"}
+        import tempfile
+        import time
+
+        result_path = Path(tempfile.gettempdir()) / f"sa_nvapi_set_{os.getpid()}_{int(time.time())}.json"
+        settings_path = Path(tempfile.gettempdir()) / f"sa_nvapi_in_{os.getpid()}_{int(time.time())}.json"
+        try:
+            settings_path.write_text(json.dumps({"settings": [[sid, val] for sid, val in values.items()]}),
+                                     encoding="utf-8")
+        except OSError as exc:
+            return {"ok": False, "supported": True, "message": f"NVAPI 입력 준비 실패 · {exc}"}
+        cmd = [str(sys.executable)]
+        if not getattr(sys, "frozen", False):
+            cmd.append(str(Path(__file__).resolve().parent.parent / "main.py"))
+        cmd += ["--nvapi-settings", str(settings_path), "--result", str(result_path)]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=30,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "supported": True, "message": f"NVAPI 호출 실패 · {exc}"}
+        data: dict[str, Any] = {}
+        try:
+            if result_path.exists():
+                data = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        finally:
+            for path in (result_path, settings_path):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+        if not data:
+            data = {"ok": False, "supported": True,
+                    "message": f"NVAPI 응답 없음 · rc={proc.returncode}"}
+        return data
+
     def apply(self, mode: str, *, force: bool = False) -> dict[str, Any]:
-        """프로필 팩 적용 + 계단현상 끄기 병합 (v1.3.1).
+        """라플/스나 팩의 **서든어택 프로필 값만** 내 프로필에 적용한다.
 
-        결과에 **실제로 무엇이 바뀌었는지**를 함께 담는다.
+        v1.0.0 — 예전에는 nvdrsdb0.bin 파일을 통째로 덮어써서 전역(Base Profile)과
+        다른 게임의 커스텀 프로필까지 함께 바뀔 수 있었다.  이제는
 
-          · ``changes``      — 서든어택 프로필 설정 before → after (읽는 이름 포함)
-          · ``base_changes`` — 전역('Base Profile') 설정 before → after
-          · ``files``        — Drs 파일 5개 크기·해시 before → after (진짜로 바뀐 증거)
-          · ``profile_items``— 적용 후 프로필이 설정하고 있는 전체 항목
-          · ``checklist``    — 계단현상·전원 관리·저지연·사전 렌더·텍스처 품질·수직 동기 상태
-          · ``unchanged_reason`` — 바뀐 값이 없을 때 그 이유
+          1) 팩에서 ``suddenattack.exe`` 프로필의 DWORD 값만 꺼내고,
+          2) 내 Drs DB 의 **같은 프로필 레코드만** 값만 바꿔 쓰고,
+          3) 레코드가 없는 항목은 NVAPI DRS 로 서든 프로필에만 새로 만든다.
 
-        적용 전 폴더는 항상 백업되고, 서든어택이 실행 중이면 거부한다.
+        다른 게임 프로필·전역 설정은 한 바이트도 건드리지 않는다.
         """
         self.ensure_supported()
         if mode not in MODES:
             raise DrsError(f"알 수 없는 프로필: {mode}")
         if mode == "stairfix" and not self.profile_files("stairfix"):
-            # 계단현상 끄기 = 내장된 Drs 패치 로직 (프로필 팩 없이 동작)
             return self.apply_stairfix(force=force)
-        files = self.profile_files(mode)
-        if len(files) < 2 or not (self.profiles_root / mode / "nvdrsdb0.bin").exists():
+        pack_values = self._pack_values(mode)
+        if not pack_values:
             raise DrsError(
                 f"{MODES[mode]} 데이터를 읽지 못했습니다 · 앱을 다시 설치해 주세요 "
                 f"(assets/profiles/{mode})"
             )
         if not self.drs_dir.is_dir():
             raise DrsError(f"NVIDIA Drs 폴더를 찾지 못했습니다 · {self.drs_dir}")
+        live = self.live_blob()
+        if live is None:
+            raise DrsError(f"Drs DB를 읽지 못했습니다 · {self.live_db}")
+        try:
+            before_values = drs.profile_dwords(live)
+        except drs.DrsFormatError as exc:
+            raise DrsError(str(exc)) from exc
+        if not before_values:
+            raise DrsError("Drs DB에 서든어택(suddenattack.exe) 프로필이 없습니다 · NVIDIA 제어판에서 게임을 한 번 추가해 주세요")
         if not force and self.game_running():
             raise DrsError("서든어택이 실행 중입니다 · 게임을 완전히 종료한 뒤 다시 시도해 주세요")
 
-        running = bool(self.game_running())
-        prev = self.current_mode()
-        if prev == mode:
+        prev_mode = self.current_mode()
+        self.preferred_mode = mode
+        stair_ids = {sid for sid, _ in drs.STAIRFIX_SET}
+        pack_game_ids = set(drs.profile_dwords(
+            (self.profiles_root / mode / "nvdrsdb0.bin").read_bytes())) if (self.profiles_root / mode / "nvdrsdb0.bin").exists() else set()
+        # 서든 프로필의 핵심 값이 모두 같고, 이미 있는 항목이 전부 목표값이면 '적용됨'
+        value_match = (all(before_values.get(sid) == value for sid, value in pack_values.items()
+                           if sid not in stair_ids and sid in before_values)
+                       and all(sid in before_values for sid in pack_game_ids))
+        # 다른 팩이 이미 적용된 상태면(prev_mode) 같은 값이어도 '전환'으로 본다 —
+        # 팩 두 개가 서든 프로필 값을 공유해도 사용자가 고른 모드로 기록해야 한다.
+        matched = (prev_mode == mode) or (prev_mode is None and value_match)
+        if matched:
             merged = self._merge_stairfix()
             after_blob = self.live_blob()
             if merged.get("changed"):
                 return {
                     "ok": True, "mode": mode, "merged": True, "stairfix": merged,
-                    "changes": merged.get("changes", []), "base_changes": [],
-                    "files": [], "profile_items": drs.profile_items(after_blob),
+                    "changes": merged.get("changes", []), "base_changes": [], "files": [],
+                    "profile_items": drs.profile_items(after_blob),
                     "checklist": drs.checklist_state(after_blob),
                     "message": f"{MODES[mode]} 유지 · 계단현상 끄기를 함께 적용했습니다",
                     "applied_at": _now(),
@@ -376,36 +488,61 @@ class DrsManager:
                     "unchanged_reason": _readiness(after_blob, [], [], mode),
                     "message": f"{MODES[mode]}이 이미 적용되어 있습니다"}
 
-        before_blob = self.live_blob()
-        before_files = drs.file_signature(self.drs_dir / name for name in DRS_FILES)
-        backup = self._make_backup(f"{MODES[mode]} 적용 전", prev)
+        backup = self._make_backup(f"{MODES[mode]} 적용 전", self.current_mode())
+        patched, report = drs.apply_profile_values(live, pack_values)
         try:
-            for path in files:
-                target = self.drs_dir / path.name
-                shutil.copy2(path, target)
-            for name in CORE_FILES:
+            for name in ("nvdrsdb0.bin", "nvdrsdb1.bin"):
                 target = self.drs_dir / name
-                if target.exists():
-                    if _sha256(target) != _sha256(self.profiles_root / mode / name):
-                        raise DrsError("복사한 Drs DB 검증에 실패했습니다")
+                if not target.exists():
+                    continue
+                if name == "nvdrsdb0.bin":
+                    target.write_bytes(patched)
+                else:
+                    # 미러 DB 도 자기 서든 프로필만 값만 바꾼다 (전체 복사 금지)
+                    try:
+                        mirror, _ = drs.apply_profile_values(target.read_bytes(), pack_values)
+                        target.write_bytes(mirror)
+                    except (OSError, drs.DrsFormatError):
+                        continue
         except PermissionError as exc:
             raise DrsError(f"관리자 권한이 필요합니다 · {exc}") from exc
         except OSError as exc:
             raise DrsError(f"Drs 파일을 쓰지 못했습니다 · {exc}") from exc
 
+        # 레코드가 없는 항목은 NVAPI 로 서든 프로필에만 새로 만든다
+        nvapi = self._nvapi_apply_values(pack_values) if report.get("missing") else {"ok": False, "skipped": True}
         merged = self._merge_stairfix()
         after_blob = self.live_blob()
         try:
-            changes = drs.change_list(before_blob, after_blob)
-        except Exception:  # noqa: BLE001 - 내역 표시는 최선 노력
-            changes = []
-        try:
-            base_changes = drs.base_change_list(before_blob, after_blob)
-        except Exception:  # noqa: BLE001
-            base_changes = []
-        after_files = drs.file_signature(self.drs_dir / name for name in DRS_FILES)
-        file_rows = _file_rows(before_files, after_files)
-        touched = [row["name"] for row in file_rows if row["changed"]]
+            after_values = drs.profile_dwords(after_blob)
+        except drs.DrsFormatError:
+            after_values = {}
+        changes: list[dict[str, Any]] = []
+        for setting_id, value in pack_values.items():
+            if setting_id in stair_ids:
+                continue
+            was, now = before_values.get(setting_id), after_values.get(setting_id)
+            if was == now:
+                continue
+            label, en = drs.setting_name(setting_id)
+            changes.append({"id": f"0x{setting_id:08X}", "name": label, "en": en,
+                            "before": (f"0x{was:08X}" if was is not None else "없음"),
+                            "after": (f"0x{now:08X}" if now is not None else "없음"),
+                            "label_before": drs.value_label(setting_id, was),
+                            "label_after": drs.value_label(setting_id, now),
+                            "created": was is None})
+        remaining = [sid for sid, value in pack_values.items()
+                     if sid not in stair_ids and after_values.get(sid) != value]
+        if remaining and int(nvapi.get("rc") or 0) == nvapi_drs.NVAPI_ACCESS_DENIED:
+            raise DrsError("관리자 권한이 필요합니다 · NVIDIA 프로필에 새 항목을 저장하지 못했습니다 (NVAPI ACCESS_DENIED)")
+        message = f"{MODES[mode]} 적용 완료 · 서든어택 프로필만 변경 · {len(changes)}개 값"
+        if nvapi.get("ok"):
+            message += " · NVAPI 로 누락 레코드 생성"
+        if remaining:
+            message += f" · ⚠ {len(remaining)}개 항목은 적용하지 못했습니다"
+        if merged.get("ok"):
+            message += " · 계단현상 끄기 포함"
+            changes.extend(merged.get("changes") or [])
         return {
             "ok": True,
             "mode": mode,
@@ -413,39 +550,40 @@ class DrsManager:
             "merged": bool(merged.get("ok")),
             "stairfix": merged,
             "changes": changes,
-            "base_changes": base_changes,
-            "files": file_rows,
-            "files_changed": touched,
+            "base_changes": [],
+            "files": [],
             "profile_items": drs.profile_items(after_blob),
             "checklist": drs.checklist_state(after_blob),
-            "unchanged_reason": _readiness(after_blob, changes, base_changes, mode),
-            "game_running": running,
-            "message": ((f"{MODES[mode]} + 계단현상 끄기 적용 완료 · "
-                         f"{len(changes) + len(base_changes)}개 항목 변경"
-                         if merged.get("ok") else
-                         f"{MODES[mode]} 적용 완료 · {len(changes) + len(base_changes)}개 항목 변경")
-                        + (" · ⚠ 서든어택을 재실행해야 적용됩니다" if running else " · 이전 설정 자동 백업")),
+            "nvapi": nvapi,
+            "applied_count": len(changes),
+            "remaining": len(remaining),
+            "other_profiles_preserved": True,
+            "unchanged_reason": _readiness(after_blob, changes, [], mode),
+            "game_running": False,
+            "message": message + " · 이전 설정 자동 백업",
             "applied_at": _now(),
         }
 
     def _merge_stairfix(self) -> dict[str, Any]:
-        """지금 Drs DB 의 서든 프로필에 계단현상 끄기(0x00401241)를 병합한다.
+        """지금 Drs DB 의 서든 프로필에 계단현상 끄기 세트를 병합한다.
 
         프로필 팩 DB 의 AA compatibility 는 기본값(``0x00020041``)이라 팩만
-        덮어쓰면 계단현상이 다시 켜진다.  그래서 복사 직후 같은 레코드 값을
-        패치하고(㉠오프셋은 변하지 않음) 실제 적용값을 다시 읽어 검증한다.
+        덮어쓰면 계단현상이 다시 켜진다.  또 예전에는 호환성 값만 바꿔서
+        AA Mode/Setting 이 꺼져 있으면 드라이버가 무시했다.  이제는
+        호환성 + AA 모드(Override) + AA 설정(2x)을 함께 패치하고 검증한다.
         """
         blob = self.live_blob()
         if blob is None:
             return {"ok": False, "changed": False, "message": "Drs DB를 읽지 못했습니다"}
         try:
-            before = drs.aa_compat(blob)
+            before_values = drs.stairfix_values(blob)
         except drs.DrsFormatError as exc:
             return {"ok": False, "changed": False, "message": str(exc)}
+        before = before_values.get(drs.SETTING_AA_COMPAT)
         if before is None:
             return {"ok": False, "changed": False,
                     "message": "서든 프로필에 Antialiasing compatibility 항목이 없습니다"}
-        if before == drs.STAIRFIX_VALUE:
+        if drs.stairfix_ready(blob):
             return {"ok": True, "changed": False, "before": f"0x{before:08X}",
                     "after": f"0x{drs.STAIRFIX_VALUE:08X}", "changes": []}
         try:
@@ -467,16 +605,25 @@ class DrsManager:
             return {"ok": False, "changed": False, "message": f"관리자 권한이 필요합니다 · {exc}"}
         except (OSError, drs.DrsFormatError) as exc:
             return {"ok": False, "changed": False, "message": str(exc)}
-        after = self.stairfix_value()
-        if after != drs.STAIRFIX_VALUE:
+        current = self.live_blob()
+        after_values = drs.stairfix_values(current) if current is not None else {}
+        if after_values.get(drs.SETTING_AA_COMPAT) != drs.STAIRFIX_VALUE:
             return {"ok": False, "changed": False, "message": "계단현상 끄기 값 검증에 실패했습니다"}
+        changes = [
+            self._stairfix_row(drs.SETTING_AA_COMPAT, before_values, after_values,
+                               "계단현상 끄기", "Antialiasing compatibility (DX9)"),
+            self._stairfix_row(drs.SETTING_AA_MODE, before_values, after_values,
+                               "안티앨리어싱 모드", "Antialiasing - Mode"),
+            self._stairfix_row(drs.SETTING_AA_SETTING, before_values, after_values,
+                               "안티앨리어싱 설정", "Antialiasing - Setting"),
+        ]
         return {
             "ok": True, "changed": bool(report.get("changed", True)),
             "before": f"0x{before:08X}", "after": f"0x{drs.STAIRFIX_VALUE:08X}",
-            "label": drs.describe(drs.STAIRFIX_VALUE),
-            "changes": [{"id": f"0x{drs.SETTING_AA_COMPAT:08X}", "name": "계단현상 끄기",
-                         "en": "Antialiasing compatibility (DX9)",
-                         "before": f"0x{before:08X}", "after": f"0x{drs.STAIRFIX_VALUE:08X}", "key": True}],
+            "label": drs.describe(drs.STAIRFIX_VALUE), "changes": changes,
+            "values": {f"0x{k:08X}": v for k, v in after_values.items()},
+            "aa_mode": after_values.get(drs.SETTING_AA_MODE),
+            "aa_setting": after_values.get(drs.SETTING_AA_SETTING),
         }
 
     def restore(self, backup_id: str, *, force: bool = False) -> dict[str, Any]:
@@ -512,6 +659,57 @@ class DrsManager:
         }
 
     # ------------------------------------------------------------ alias / stairfix
+    def _nvapi_stairfix(self) -> dict[str, Any]:
+        """NVAPI DRS 를 **별도 프로세스**로 먼저 시도한다 (앱 본체 보호).
+
+        nvapi64.dll 은 구조체 버전이 맞지 않으면 return code 로 알려 주지만,
+        만약의 접근 위반이 앱을 죽이지 않도록 서브프로세스에서만 호출한다.
+        """
+        if os.name != "nt" or not nvapi_drs.available():
+            return {"ok": False, "supported": False,
+                    "message": "NVAPI 없음 · Drs 파일 패치로 진행"}
+        import tempfile
+        import time
+
+        result_path = Path(tempfile.gettempdir()) / f"sa_nvapi_{os.getpid()}_{int(time.time())}.json"
+        cmd = [str(sys.executable)]
+        if not getattr(sys, "frozen", False):
+            cmd.append(str(Path(__file__).resolve().parent.parent / "main.py"))
+        cmd += ["--nvapi-stairfix", "--result", str(result_path)]
+        try:
+            proc = subprocess.run(cmd, capture_output=True, timeout=25,
+                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"ok": False, "supported": True, "message": f"NVAPI 호출 실패 · {exc}"}
+        data: dict[str, Any] = {}
+        try:
+            if result_path.exists():
+                data = json.loads(result_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        finally:
+            try:
+                result_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        if not data:
+            raw = (proc.stdout or b"").decode("utf-8", "replace").strip()
+            data = {"ok": False, "supported": True,
+                    "message": f"NVAPI 응답 없음 · rc={proc.returncode} {raw[:120]}"}
+        data["returncode"] = proc.returncode
+        return data
+
+    def _stairfix_row(self, setting_id: int, before: dict[int, int | None],
+                      after: dict[int, int | None], label: str, en: str) -> dict[str, Any]:
+        was, now = before.get(setting_id), after.get(setting_id)
+        return {"id": f"0x{setting_id:08X}", "name": label, "en": en,
+                "before": (f"0x{was:08X}" if was is not None else "없음"),
+                "after": (f"0x{now:08X}" if now is not None else "없음"),
+                "label_before": drs.value_label(setting_id, was),
+                "label_after": drs.value_label(setting_id, now),
+                "key": setting_id == drs.SETTING_AA_COMPAT,
+                "created": was is None}
+
     def apply_stairfix(self, *, force: bool = False) -> dict[str, Any]:
         self.ensure_supported()
         if not self.drs_dir.is_dir():
@@ -520,58 +718,88 @@ class DrsManager:
         if blob is None:
             raise DrsError(f"Drs DB를 읽지 못했습니다 · {self.live_db}")
         try:
-            before = drs.aa_compat(blob)
+            before_values = drs.stairfix_values(blob)
         except drs.DrsFormatError as exc:
             raise DrsError(str(exc)) from exc
-        if before == drs.STAIRFIX_VALUE:
+        if drs.stairfix_ready(blob):
             return {"ok": True, "mode": "stairfix", "unchanged": True,
                     "changes": [], "base_changes": [], "files": [],
                     "profile_items": drs.profile_items(blob),
                     "checklist": drs.checklist_state(blob),
-                    "unchanged_reason": "계단현상 끄기(Antialiasing compatibility 0x00401241)가 이미 적용되어 있습니다",
+                    "unchanged_reason": "계단현상 끄기 세트(호환성 0x00401241 · AA 모드 · AA 설정)가 이미 적용되어 있습니다",
                     "message": "계단현상 끄기가 이미 적용되어 있습니다",
                     "value": f"0x{drs.STAIRFIX_VALUE:08X}"}
         if not force and self.game_running():
             raise DrsError("서든어택이 실행 중입니다 · 게임을 완전히 종료한 뒤 다시 시도해 주세요")
 
         backup = self._make_backup("계단현상 끄기 적용 전", self.current_mode())
-        try:
-            patched, report = drs.set_stairfix(blob)
-            targets = [p for p in (self.drs_dir / "nvdrsdb0.bin", self.drs_dir / "nvdrsdb1.bin") if p.exists()]
-            for target in targets:
-                if target.name == "nvdrsdb1.bin":
-                    mirror, _ = drs.set_stairfix(target.read_bytes())
-                    target.write_bytes(mirror)
-                else:
-                    target.write_bytes(patched)
-        except PermissionError as exc:
-            raise DrsError(f"관리자 권한이 필요합니다 · {exc}") from exc
-        except (OSError, drs.DrsFormatError) as exc:
-            raise DrsError(f"Drs DB를 쓰지 못했습니다 · {exc}") from exc
 
-        after = self.stairfix_value()
-        if after != drs.STAIRFIX_VALUE:
-            raise DrsError("Drs DB 검증에 실패했습니다 · 적용 후 값을 다시 확인해 주세요")
+        # ① NVAPI DRS — 레코드가 없어도 새로 만들어 저장한다 (우선 경로)
+        nvapi = self._nvapi_stairfix()
+        blob = self.live_blob()
+        binary_error: str | None = None
+
+        # ② Drs 파일 패치 — 이미 있는 레코드를 확실히 0x00401241 / AA 모드·설정으로
+        if blob is None or not drs.stairfix_ready(blob):
+            try:
+                source = blob if blob is not None else self.live_blob()
+                if source is None:
+                    raise drs.DrsFormatError("Drs DB를 다시 읽지 못했습니다")
+                patched, _report = drs.set_stairfix(source)
+                targets = [p for p in (self.drs_dir / "nvdrsdb0.bin", self.drs_dir / "nvdrsdb1.bin") if p.exists()]
+                for target in targets:
+                    if target.name == "nvdrsdb1.bin":
+                        try:
+                            mirror, _ = drs.set_stairfix(target.read_bytes())
+                            target.write_bytes(mirror)
+                        except (OSError, drs.DrsFormatError):
+                            continue
+                    else:
+                        target.write_bytes(patched)
+            except PermissionError as exc:
+                binary_error = f"관리자 권한이 필요합니다 · {exc}"
+            except (OSError, drs.DrsFormatError) as exc:
+                binary_error = str(exc)
+
         current = self.live_blob()
-        changes = [{"id": f"0x{drs.SETTING_AA_COMPAT:08X}", "name": "계단현상 끄기",
-                    "en": "Antialiasing compatibility (DX9)",
-                    "before": (f"0x{before:08X}" if before is not None else "없음"),
-                    "after": f"0x{drs.STAIRFIX_VALUE:08X}",
-                    "label_before": drs.value_label(drs.SETTING_AA_COMPAT, before),
-                    "label_after": drs.value_label(drs.SETTING_AA_COMPAT, drs.STAIRFIX_VALUE),
-                    "key": True}]
+        after_values = drs.stairfix_values(current) if current is not None else {}
+        if after_values.get(drs.SETTING_AA_COMPAT) != drs.STAIRFIX_VALUE:
+            reason = binary_error or nvapi.get("message") or "적용 후 값을 확인하지 못했습니다"
+            raise DrsError(f"계단현상 끄기 검증에 실패했습니다 · {reason}")
+
+        changes = [
+            self._stairfix_row(drs.SETTING_AA_COMPAT, before_values, after_values,
+                               "계단현상 끄기", "Antialiasing compatibility (DX9)"),
+            self._stairfix_row(drs.SETTING_AA_MODE, before_values, after_values,
+                               "안티앨리어싱 모드", "Antialiasing - Mode"),
+            self._stairfix_row(drs.SETTING_AA_SETTING, before_values, after_values,
+                               "안티앨리어싱 설정", "Antialiasing - Setting"),
+        ]
+        mode_ok = after_values.get(drs.SETTING_AA_MODE) == 1
+        setting_ok = after_values.get(drs.SETTING_AA_SETTING) == 1
+        notes = []
+        if nvapi.get("ok"):
+            notes.append("NVAPI 로 프로필에 직접 저장")
+        elif nvapi.get("supported") is False:
+            notes.append("NVAPI 없음 · Drs 파일 패치")
+        else:
+            notes.append(f"NVAPI 건너뜀({nvapi.get('message', '실패')}) · Drs 파일 패치")
+        if not mode_ok or not setting_ok:
+            notes.append("⚠ AA 모드/설정 레코드가 없어 일부만 적용됨 · NVIDIA 제어판에서 안티앨리어싱을 한 번 저장하면 레코드가 생깁니다")
         return {
             "ok": True,
             "mode": "stairfix",
             "backup": backup["id"],
-            "changed": report.get("changed", True),
+            "changed": True,
             "value": f"0x{drs.STAIRFIX_VALUE:08X}",
+            "values": {f"0x{k:08X}": v for k, v in after_values.items()},
             "changes": changes,
             "base_changes": [],
             "files": [],
+            "nvapi": nvapi,
             "profile_items": drs.profile_items(current),
             "checklist": drs.checklist_state(current),
-            "message": "계단현상 끄기 적용 완료 · Antialiasing compatibility 0x00401241 (계단현상·타격효과·중세철창 제거)",
+            "message": "계단현상 끄기 적용 완료 · " + " · ".join(notes),
             "applied_at": _now(),
         }
 

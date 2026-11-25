@@ -734,6 +734,7 @@ tr.cur td{background:var(--ac06)}
 .lb-del:hover{background:rgba(239,68,68,.18);color:#FCA5A5}
 .lb-del svg{width:9px;height:9px}
 .lb-del.lock{opacity:.28;cursor:default}
+.lb-del.ghost{visibility:hidden;opacity:1}
 .lb-del.lock:hover{background:none;color:#5F7088}
 .lb-foot{
   display:flex;align-items:center;justify-content:space-between;padding:7px 14px 0;font-size:9.5px;color:#7E8EA5;font-weight:500;
@@ -1599,7 +1600,8 @@ th.sortable.on .ar{opacity:1;color:var(--ac)}
 #changes-mask .modal-bd{max-height:520px;overflow:auto}
 #changes-mask .change-list{max-height:none;overflow:visible}
 #changes-mask .modal{width:780px}
-#change-list > div:not(.change-row){position:sticky;top:0;background:rgba(11,17,28,.96);padding:2px 0;z-index:1}
+/* v1.0.0 — 변경 내역 스크롤 시 상단 div 가 고정돼 겹치던 문제 수정 (sticky 제거) */
+#change-list > div:not(.change-row){background:transparent;padding:2px 0}
 
 /* v1.3.1 · 라이브러리 헤더 — 버튼 5개가 한 줄에 들어오게 */
 #s-recs .head-right{gap:6px;flex-wrap:nowrap}
@@ -2089,7 +2091,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
 .party-col{min-width:0}
 .party-col-hd{display:flex;align-items:center;gap:6px;font-size:9.5px;font-weight:600;color:#6E7889;margin-bottom:3px}
 .party-col-hd b{font-family:var(--num);font-size:9.5px;color:var(--txt2);letter-spacing:.06em}
-.party-list{display:flex;flex-direction:column;gap:3px}
+.party-list{display:flex;flex-direction:column;gap:4px;min-height:132px}
 .party-row{display:flex;align-items:center;gap:8px;height:28px;border-radius:7px;padding:0 7px;
   background:rgba(255,255,255,.022);border:1px solid var(--line)}
 .party-row .mthumb{width:22px;height:22px;flex:0 0 22px;border-radius:4px;overflow:hidden;
@@ -2102,7 +2104,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
 .party-row .gm{font-size:9px;color:#5C6577;font-family:var(--num)}
 .party-row .ex{width:46px;flex:0 0 46px;text-align:right;font-family:var(--num);font-size:11px;font-weight:600;color:var(--ac)}
 .party-row.ban .ex{color:#8A93A3}
-.party-empty{height:28px;display:flex;align-items:center;justify-content:center;border-radius:7px;
+.party-empty{height:100%;min-height:116px;display:flex;align-items:center;justify-content:center;border-radius:7px;
   border:1px dashed var(--line);font-size:9.5px;color:#525C6E}
 .opp-list{display:flex;flex-wrap:wrap;gap:6px;align-content:flex-start}
 .opp-list .opp{display:inline-flex;align-items:center;gap:5px;height:24px;padding:0 9px;border-radius:6px;
@@ -2116,10 +2118,12 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
    v1.5.0 · 설정 팝업 고정 크기 (#27) + 테마·배율 픽커
    ============================================================ */
 #settings-mask .modal{width:820px;height:648px;max-width:96%;display:flex;flex-direction:column}
-#settings-mask .modal-bd{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:12px 14px 10px}
-#settings-mask #set-panes{flex:1;min-height:0;display:flex;flex-direction:column}
-#settings-mask #set-panes>.set-pane.on{flex:1 1 auto;min-height:0;overflow-y:auto;overflow-x:hidden;padding-right:2px}
-#settings-mask #set-data{flex:0 0 auto;margin-top:2px}
+#settings-mask .modal-bd{flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding:12px 14px 10px;display:flex;flex-direction:column}
+#settings-mask #set-panes{display:block;flex:0 0 auto;min-height:0;height:auto}
+#settings-mask .settings-grid{height:auto;overflow:visible}
+#settings-mask #set-panes>.set-pane{display:none!important}
+#settings-mask #set-panes>.set-pane.on{display:block!important;flex:0 0 auto;min-height:0;overflow:visible;padding-right:0}
+#settings-mask #set-data{flex:0 0 auto;margin-top:12px;padding-top:0}
 #settings-mask .settings-grid{height:100%;overflow-y:auto;padding-right:2px}
 #settings-mask .set-pane[data-pane="data"]{grid-column:1 / -1}
 .set-sub{font-size:9.5px;font-weight:700;letter-spacing:.10em;color:#5E6879;margin:2px 0 0}
@@ -2305,6 +2309,100 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
 .tac-sub{font-size:8.5px;font-weight:700;letter-spacing:.06em;color:#5C6577;margin-bottom:6px}
 #util-opp:empty::before{content:'병영수첩 전적을 불러오면 방금 판 상대 5명이 여기에 나옵니다';display:block;font-size:10px;color:#525C6E;padding:6px 0}
 #util-friends:empty::before{content:'같이 뛴 사람이 쌓이면 표시됩니다';display:block;font-size:10px;color:#525C6E;padding:6px 0}
+
+/* ============================================================
+   v1.0.0 — 실기 피드백 반영
+   ============================================================ */
+/* 상단 제목줄 제거 → 브랜드 + NEXON 출처만 */
+.tb-brand{font-size:11.5px;font-weight:800;letter-spacing:.02em;color:#C7D3E4}
+.tb-attr{font-size:9px;font-weight:600;color:#5E6E85;letter-spacing:.02em;margin-left:8px;
+  padding-left:8px;border-left:1px solid rgba(255,255,255,.10);white-space:nowrap}
+
+/* 게스트(미로그인) 홈 — 개인 닉네임이 보이지 않는다 */
+.hm-guest .hm-ava{background:rgba(255,255,255,.05);border:1px dashed rgba(255,255,255,.18)}
+.hm-guest .hm-ava span{color:#7C8DA4}
+.hm-guest .hm-name-row h2{color:#C7D3E4}
+.hm-guest .hm-tier-tx .nm,.hm-guest .hm-tier-tx .rp{color:#5E6E85}
+.hm-guest .hm-sub{color:#7C8DA4}
+
+/* 대시보드 상단 트레이너/무기 토글 위아래 정렬 (v1.0.0) */
+#s-dashboard .head-right{display:flex;align-items:center;gap:8px}
+#s-dashboard .head-right .dash-seg,
+#s-dashboard .head-right .chip,
+#s-dashboard .head-right > .btn{height:32px;box-sizing:border-box;display:inline-flex;align-items:center}
+#s-dashboard .head-right .dash-seg{padding:2px;border:1px solid rgba(255,255,255,.10);border-radius:9px}
+#s-dashboard .head-right .dash-seg .seg-btn{height:26px;line-height:1;display:inline-flex;align-items:center;justify-content:center;padding:0 11px;box-sizing:border-box}
+#s-dashboard .head-right .chip{padding:0 10px}
+#s-dashboard .head-right > .btn{padding:0 14px}
+
+/* 오늘의 추천 — 영역·난이도 배지를 시나리오 이름 왼쪽으로 */
+.rec-titlerow{display:flex;align-items:center;gap:6px;min-width:0}
+.rec-titlerow .rec-name{min-width:0}
+.rec-left{display:flex;align-items:center;gap:4px;flex:0 0 auto;min-width:102px}
+.rec-left .area,.rec-left .rec-diff{height:17px;font-size:8.5px;padding:0 5px;border-radius:5px;line-height:17px;white-space:nowrap}
+.rec-left .rec-diff{background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.10);color:#8FA1B8;font-weight:700}
+.rec-left .rec-diff.lv-high{color:#F7AFAE;border-color:rgba(239,68,68,.25);background:rgba(239,68,68,.08)}
+.rec-left .rec-diff.lv-mid{color:#FCD9A0;border-color:rgba(245,158,11,.25);background:rgba(245,158,11,.08)}
+
+/* 맵·약점 TOP3 — 공식 맵 이미지를 은은한 바탕으로 */
+.weak{position:relative;overflow:hidden;isolation:isolate}
+.weak .weak-bg{position:absolute;inset:0;background-size:cover;background-position:center;opacity:.42;
+  filter:grayscale(.15) brightness(.82) saturate(1.05);z-index:-1;transform:scale(1.02)}
+.weak::after{content:'';position:absolute;inset:0;z-index:-1;
+  background:linear-gradient(90deg,rgba(9,12,18,.92) 0%,rgba(9,12,18,.70) 46%,rgba(9,12,18,.26) 100%)}
+
+/* 전술 도구 — 파티 맵 밴 카드 확장 + 공식 맵 이미지 바탕 */
+#s-utils .tac-party{padding:0 0 10px;flex:0 0 auto}
+#s-utils .tac-party .party-list{min-height:116px}
+.party-res{grid-template-columns:1fr 1fr;gap:16px}
+.party-row{height:40px;padding:0 10px;gap:10px;position:relative;overflow:hidden;isolation:isolate}
+.party-row .party-bg{position:absolute;inset:0;background-size:cover;background-position:center;opacity:.18;
+  filter:grayscale(.4) brightness(.6);z-index:-1}
+.party-row::after{content:'';position:absolute;inset:0;z-index:-1;
+  background:linear-gradient(90deg,rgba(10,13,20,.9),rgba(10,13,20,.55))}
+.party-row .mthumb{width:34px;height:34px;flex:0 0 34px;border-radius:6px}
+.party-row .nm{font-size:12px;font-weight:700}
+.party-row .ex{font-size:13px}
+.party-col-hd{font-size:10.5px;margin-bottom:6px}
+.party-retry{margin:6px 14px 0;display:flex;align-items:center;gap:8px;font-size:9.5px;color:#6E7F95}
+
+/* 자유 1:1 비교 */
+.cmp-open{display:flex;align-items:center;gap:8px;padding:8px 14px 2px;flex-wrap:wrap}
+.cmp-open input{height:26px;border-radius:7px;background:#0F121A;border:1px solid var(--line);color:var(--txt);
+  font-size:10.5px;padding:0 9px;outline:none;min-width:0;flex:1}
+.cmp-open .vs{font-family:var(--num);font-size:10px;font-weight:800;color:var(--ac)}
+.cmp-open .btn{height:26px;font-size:10.5px;padding:0 10px}
+
+/* 설정 — 카드가 좌우 꽉 차게 */
+#settings-mask .settings-grid{display:flex;flex-direction:column;gap:10px}
+#settings-mask .set-card{width:100%;align-self:stretch}
+#settings-mask .set-card .field{width:100%}
+#settings-mask .set-card .field input,#settings-mask .set-card .field select{width:100%}
+#settings-mask .set-row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+#settings-mask .set-row3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.key-input{height:28px;border-radius:7px;background:#0F121A;border:1px solid var(--line);color:var(--txt);
+  font-size:11px;padding:0 9px;outline:none;width:100%;font-family:var(--num)}
+.overlay-note{font-size:9.5px;line-height:1.6;color:#6E7F95;margin-top:6px}
+.preset-line{display:flex;align-items:center;gap:6px;height:26px;font-size:10.5px;color:#C7D3E4}
+.preset-line b{font-weight:800}
+.preset-line .sp{flex:1}
+.preset-line .mini{font-size:9.5px;color:#6E7F95}
+.attr-foot{padding:8px 2px 2px;font-size:9px;color:#4E5B6E;letter-spacing:.02em}
+
+/* 순위표 — 20명 · 한 화면 5명 · 휠 스크롤 */
+#s-leaderboard .lb-table{overflow-y:auto;overflow-x:hidden;scrollbar-width:thin}
+#s-leaderboard .lb-table::-webkit-scrollbar{width:7px}
+#s-leaderboard .lb-table::-webkit-scrollbar-thumb{background:rgba(255,255,255,.16);border-radius:6px}
+#s-leaderboard .lb-table>div>.lb-row{flex:0 0 auto;height:92px;min-height:92px}
+#s-leaderboard .lb-row.hd{height:24px;min-height:24px}
+#s-leaderboard .lb-row .barracks-cell{display:flex;justify-content:flex-end;align-items:center;gap:6px;width:78px;margin-left:auto}
+#s-leaderboard .lb-row.hd>span:first-child{text-align:center}
+#s-leaderboard .lb-row.hd span:last-child{text-align:right;padding-right:6px}
+
+/* 오버레이 안내 */
+.ov-badge{display:inline-flex;align-items:center;gap:5px;height:20px;padding:0 8px;border-radius:999px;
+  font-size:9px;font-weight:800;letter-spacing:.04em;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:#8FA1B8}
+.ov-badge.on{color:#6EE7C0;border-color:rgba(110,231,192,.35);background:rgba(110,231,192,.08)}
 </style>
 </head>
 <body>
@@ -2413,7 +2511,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
 <div class="app">
   <!-- ================= TITLE BAR ================= -->
   <div class="titlebar pywebview-drag-region" id="titlebar" data-drag="win32">
-    <div class="tb-left">
+      <div class="tb-left">
       <svg class="logo" viewBox="0 0 32 32" aria-hidden="true">
         <defs>
           <linearGradient id="lg" x1="0" y1="0" x2="1" y2="1">
@@ -2425,13 +2523,10 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
         <circle cx="16" cy="16" r="1.7" fill="#F6F8FC"/>
         <path d="M16 5.6v4.4M16 22v4.4M5.6 16H10M22 16h4.4" stroke="#A8B1C2" stroke-width="1.4" stroke-linecap="round" opacity=".85"/>
       </svg>
-      <div class="tb-screen" id="tb-screen">
-        <span class="tb-name">SA AIM LABS</span>
-        <span class="sep">//</span>
-        <b id="tb-screen-name">홈</b>
-      </div>
+      <div class="tb-brand">SA AIM LABS</div>
+      <div class="tb-attr" title="모든 서든어택 전적은 NEXON Open API 로 조회합니다">Data based on NEXON Open API</div>
       <div class="tb-mid">
-        <div class="tb-pill" id="tb-pill"><span class="dot"></span> <span id="tb-pill-text">API 키 입력 필요</span></div>
+        <div class="tb-pill" id="tb-pill"><span class="dot"></span> <span id="tb-pill-text">연결 확인 중</span></div>
         <button class="tb-update" id="update-banner" hidden title="새 버전 내려받기">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#i-download"/></svg>
           <span>새 버전</span><b id="update-banner-ver">v1.4.0</b>
@@ -2447,7 +2542,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
   <div class="shell" id="app-shell">
     <!-- ================= SIDEBAR (60px 레일 · v1.5.0) ================= -->
     <aside class="sidebar" id="sidebar">
-      <div class="rail-logo" title="SA AIM LABS">
+      <div class="rail-logo" id="rail-home" title="홈으로" role="button" tabindex="0">
         <svg viewBox="0 0 32 32" aria-hidden="true">
           <path d="M16 2.6l11.6 6.7v13.4L16 29.4 4.4 22.7V9.3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
           <circle cx="16" cy="16" r="5.2" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".55"/>
@@ -2483,18 +2578,18 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
             <div class="hm-ident">
               <div class="hm-ava" id="home-ava">
                 <img id="home-ava-img" alt="" hidden>
-                <span id="home-ava-ini">휴</span>
+                <span id="home-ava-ini">?</span>
                 <i></i>
               </div>
               <div class="hm-who">
                 <div class="hm-name-row">
-                  <h2 id="home-name">휴가중.</h2>
-                  <button class="hm-chip" id="home-clan" title="클랜 홈">리드</button>
+                  <h2 id="home-name">게스트</h2>
+                  <button class="hm-chip" id="home-clan" title="클랜 홈" hidden>클랜</button>
                   <span class="hm-chip ac" id="home-rank-flow" hidden>2연승</span>
                 </div>
                 <div class="hm-sub">
                   <span>서든어택 랭크전</span><span class="s">·</span>
-                  <span id="home-sub-record">최근 100판</span><span class="s">·</span>
+                  <span id="home-sub-record">닉네임을 연결하면 전적이 표시됩니다</span><span class="s">·</span>
                   <span id="home-sub-updated">전적 최신화 —</span>
                 </div>
                 <div class="hm-deltas" id="home-deltas"></div>
@@ -2506,30 +2601,30 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
                 <div class="hm-emb" id="home-solo-emb"><img id="home-solo-img" src="assets/solo_113.png" alt=""></div>
                 <div class="hm-tier-tx">
                   <span class="lb">솔로</span>
-                  <span class="nm" id="home-solo-tier">그랜드마스터 II</span>
-                  <span class="rp" id="home-solo-rp">3,261 RP</span>
+                  <span class="nm" id="home-solo-tier">—</span>
+                  <span class="rp" id="home-solo-rp">—</span>
                 </div>
               </div>
               <div class="hm-tier">
                 <div class="hm-emb" id="home-party-emb"><img id="home-party-img" src="assets/party_10.png" alt=""></div>
                 <div class="hm-tier-tx">
                   <span class="lb">파티</span>
-                  <span class="nm" id="home-party-tier">그랜드마스터 III</span>
-                  <span class="rp" id="home-party-rp">3,435 RP</span>
+                  <span class="nm" id="home-party-tier">—</span>
+                  <span class="rp" id="home-party-rp">—</span>
                 </div>
               </div>
               <div class="hm-vline"></div>
               <div class="hm-aim">
                 <span class="lb">통합 에임</span>
-                <div class="score"><b class="num" id="home-score">2,074</b><i>/ 3,600</i></div>
-                <div class="meta"><span id="home-aim-tier">골드 II</span></div>
+                <div class="score"><b class="num" id="home-score">—</b><i>/ 3,600</i></div>
+                <div class="meta"><span id="home-aim-tier">기록 대기</span></div>
                 <div class="bar"><i id="home-aim-bar"></i></div>
               </div>
             </div>
           </div>
 
           <div class="hm-strip">
-            <div class="cell"><span class="mark"></span><span class="k">오늘 랭크 컨디션</span>
+            <div class="cell"><span class="mark"></span><span class="k">최근 랭크 컨디션</span>
               <span class="v" id="home-strip-cond">보통</span><span class="d" id="home-strip-cond-sub">표본 대기</span></div>
             <div class="cell"><span class="mark"></span><span class="k">최근 폼</span>
               <span class="v" id="home-strip-form">—</span><span class="d" id="home-strip-form-sub">최근 8판</span></div>
@@ -2740,9 +2835,6 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
             <button class="btn btn-ghost" id="kovak-import-head" title="코박스 stats 폴더에서 오늘 점수를 자동으로 가져옵니다 (최신화)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-download"/></svg>코박스 점수
             </button>
-            <button class="btn btn-ghost" id="rec-more-2" title="오늘 목록에 없는 약점 보완 시나리오 3종 추가">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>더 연습하기
-            </button>
             <button class="btn btn-ghost" id="plo-btn" title="오늘 추천 5종을 코박스 플레이리스트로 저장">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-save"/></svg>플레이리스트
             </button>
@@ -2873,7 +2965,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
 
         <div class="br-search-result" id="br-search-result" hidden></div>
         <div class="br-peek-bar" id="br-peek-bar" hidden>
-          <span class="pk-lb">다른 유저 병영수첩을 보고 있습니다</span>
+          <span class="pk-lb">다른 유저 병영수첩</span>
           <b id="br-peek-name">—</b>
           <span class="sp"></span>
           <button class="btn btn-ghost" id="br-peek-add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><use href="#i-plus"/></svg>순위표에 추가</button>
@@ -2953,7 +3045,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
         <div class="head">
           <div>
             <h1>친구 · 클랜 순위표</h1>
-            <div class="sub"><span>서든어택 닉네임 최대 10명</span><span class="sep">/</span><span>솔로·파티 RP · 최근 100판 지표</span><span class="sep">·</span><span id="lb-updated">최신화 —</span></div>
+            <div class="sub"><span>서든어택 닉네임 최대 20명</span><span class="sep">/</span><span>솔로·파티 RP · 최근 100판 지표</span><span class="sep">·</span><span id="lb-updated">최신화 —</span></div>
           </div>
           <div class="head-right">
             <button class="btn btn-primary" id="lb-refresh"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-sync"/></svg>전체 갱신</button>
@@ -2967,7 +3059,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
               <input id="lb-nick" maxlength="12" placeholder="서든어택 닉네임 (최대 12자)" autocomplete="off">
               <button class="add-btn" id="lb-add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><use href="#i-plus"/></svg>등록</button>
             </div>
-            <div class="slots">현재 <b id="lb-count">10</b> / 10명 등록됨</div>
+            <div class="slots">현재 <b id="lb-count">0</b> / 20명 등록됨</div>
             <div class="lb-toast" id="lb-toast"></div>
           </div>
 
@@ -2981,7 +3073,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
               <span data-lbsort="kd" class="sortable r">최근 K/D<span class="lbar">↕</span></span>
               <span data-lbsort="dmg" class="sortable r">평균 딜량<span class="lbar">↕</span></span>
               <span data-lbsort="win" class="sortable r">승률<span class="lbar">↕</span></span>
-              <span></span>
+              <span style="text-align:right;padding-right:6px">병영</span>
             </div>
             <div id="lb-rows" style="display:flex;flex-direction:column"></div>
           </div>
@@ -3082,6 +3174,19 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
             </div>
           </div>
 
+          <div class="card" id="util-compare" style="padding:0 0 10px">
+            <div class="card-hd" style="padding:10px 14px 2px">
+              <div class="card-title" style="font-size:11.5px"><span class="bar"></span>자유 1:1 비교</div>
+              <div class="card-hd-r"><span class="chip" style="height:20px;font-size:9px">나 vs 남 · 타인 vs 타인</span></div>
+            </div>
+            <div class="cmp-open">
+              <input id="cmp-left" placeholder="내 닉네임 (기본값)" autocomplete="off" spellcheck="false">
+              <span class="vs">VS</span>
+              <input id="cmp-right" placeholder="닉네임 또는 병영수첩 주소" autocomplete="off" spellcheck="false">
+              <button class="btn btn-primary" id="cmp-run">비교</button>
+            </div>
+          </div>
+
           <div class="card tac-party">
             <div class="card-hd" style="padding:11px 14px 4px">
               <div class="card-title"><span class="bar"></span>파티랭크 5인 맵 밴·픽</div>
@@ -3091,7 +3196,6 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
               <div class="party-input">
                 <input id="party-names" placeholder="파티원 닉네임 (쉼표로 구분, 최대 5명)">
               </div>
-              <button class="btn btn-ghost" id="party-load">불러오기</button>
               <button class="btn btn-primary" id="party-run">분석</button>
             </div>
             <div class="party-res" id="party-res">
@@ -3139,6 +3243,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
             <div class="card-hd" style="padding-bottom:1px">
               <div>
                 <div class="card-title"><span class="bar"></span>엔비디아 그래픽 최적화</div>
+                <div class="card-sub" style="font-size:9px">서든어택(suddenattack.exe) 전용 적용 · 다른 게임 설정은 그대로</div>
               </div>
               <span class="ustate" id="nv-chip">적용 전</span>
             </div>
@@ -3422,24 +3527,27 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
   <div class="mask" id="settings-mask">
     <div class="modal" style="width:812px;max-width:96%">
       <div class="modal-hd">
-        <div><h3>설정 · API 연동</h3><span>넥슨 API 키 · 서든 닉네임 · 클라우드 · 코박스 폴더 · 점수 초기화</span></div>
+        <div><h3>설정 · API 연동</h3><span>넥슨 API·닉네임 · 인게임 오버레이 · 클라우드 · 코박스 폴더 · 점수 초기화</span></div>
         <button class="x" data-close="settings-mask">✕</button>
       </div>
       <div class="modal-bd" style="padding:12px 14px 10px">
         <div class="mtabs" id="set-tabs">
           <button data-set-tab="api" class="on">계정 · API</button>
+          <button data-set-tab="overlay">오버레이</button>
           <button data-set-tab="run">실행 · 코박스</button>
           <button data-set-tab="cloud">클라우드</button>
           <button data-set-tab="more">앱 · 트레이</button>
         </div>
         <div class="settings-grid" id="set-panes">
           <div class="set-card set-pane on" id="set-api" data-pane="api"></div>
+          <div class="set-card set-pane" id="set-overlay" data-pane="overlay"></div>
           <div class="set-card set-pane" id="set-run" data-pane="run"></div>
           <div class="set-card set-pane" id="set-cloud" data-pane="cloud"></div>
           <div class="set-card set-pane" id="set-more" data-pane="more"></div>
-          <div class="set-card danger-card" id="set-data" data-pane="data"></div>
         </div>
+        <div class="set-card danger-card" id="set-data"></div>
       </div>
+      <div class="attr-foot">Data based on NEXON Open API · 서든어택 전적은 넥슨 오픈 API로 조회합니다 · 훈련 기록·최고 기록·잔디·파티 프리셋은 영구 보관</div>
       <div class="modal-ft" style="justify-content:space-between">
         <span class="settings-foot"><span class="meta" id="set-meta-line">—</span></span>
         <span style="display:flex;gap:7px">
@@ -3799,9 +3907,8 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
           <div class="mnote" id="onb-cloud-note" style="margin-top:7px">로그인 없이도 훈련 기록은 이 PC에 자동 저장됩니다.</div>
         </div>
         <div id="onb-step-1" hidden>
-          <div class="mfield"><label>서든어택 닉네임</label><input id="onb-nick" maxlength="12" placeholder="예: 휴가중." autocomplete="off"></div>
-          <div class="mfield" style="margin-top:7px"><label>NEXON Open API 키 <span style="color:#6E7F95;font-weight:600">(선택)</span></label><input id="onb-key" placeholder="발급 전이면 비워 두세요" autocomplete="off"></div>
-          <div class="mnote" style="margin-top:6px">API 키는 <b>open.api.nexon.com</b> 에서 무료로 발급합니다 · 없이도 훈련 기록은 바로 쓸 수 있습니다.</div>
+          <div class="mfield"><label>서든어택 닉네임</label><input id="onb-nick" maxlength="12" placeholder="서든어택 닉네임" autocomplete="off"></div>
+          <div class="mnote" style="margin-top:6px">서든 전적은 앱에 기본 연결된 <b>NEXON Open API 프록시</b>로 바로 조회합니다 · 키 입력이 필요 없습니다.</div>
         </div>
         <div id="onb-step-2" hidden>
           <div class="mnote" style="margin-bottom:6px;font-weight:800;color:#8B9BB1">주무기</div>
@@ -4062,7 +4169,7 @@ let GOALS = [
 let game='kovak', weapon='sniper';
 const $=(s,r=document)=>r.querySelector(s);
 const $$=(s,r=document)=>[...r.querySelectorAll(s)];
-let ME='휴가중.';
+let ME='';
 
 let TREND={values:[1842,1881,1876,1903,1940,1951,1966],labels:['11.17','11.18','11.19','11.20','11.21','11.22','11.23']};
 let GAME_TREND={labels:['11.17','11.18','11.19','11.20','11.21','11.22','11.23'],
@@ -4343,11 +4450,14 @@ function recRowHtml(r,i,mark){
   return `<div class="rec ${r.done?'done':''}" data-rec="${i}" data-name="${escAttr(r.name)}" data-areakey="${a.key}" title="클릭 → 점수 입력/수정 · 역대 추이 · 게임에서 재생">
     <div class="rec-idx">${mark}</div>
     <div style="min-width:0">
-      <div class="rec-name">${r.name}</div>
-      <div class="rec-meta">
-        <span class="area ${a.cls}" style="height:17px;font-size:9px;padding:0 5px">${a.name}</span>
-        <span class="rec-diff ${diffCls}">${r.diff||'초급'}</span>
-        <span class="dl">최근 ${lastTxt}</span>${delta}
+      <div class="rec-titlerow">
+        <span class="rec-left"><span class="area ${a.cls}">${a.name}</span><span class="rec-diff ${diffCls}">${r.diff||'초급'}</span></span>
+        <div style="min-width:0;flex:1 1 auto">
+          <div class="rec-name">${r.name}</div>
+          <div class="rec-meta">
+            <span class="dl">최근 ${lastTxt}</span>${delta}
+          </div>
+        </div>
       </div>
     </div>
     <div class="rec-stat2">
@@ -4570,10 +4680,11 @@ function drawMaps(){
     const guide=MAP_GUIDES[m.map];
     const hasGuide=!!guide;
     const tip=(guide&&guide.tips&&guide.tips[0])||'전적을 더 쌓으면 이 맵의 승률·K/D 흐름으로 조언이 정확해집니다.';
+    const bg=mapImg(m.map);
     return `
     <div class="weak ${i===1?'r2':i===2?'r3':''}" data-map="${escAttr(m.map)}" title="클릭 → ${m.map} 공략 팁 · 유튜브 영상">
+      ${bg?`<span class="weak-bg" style="background-image:url('${bg}')"></span>`:''}
       <div class="weak-n">${i+1}</div>
-      ${mapChip(m.map,'weak-thumb')}
       <div class="weak-main">
         <div class="weak-map">${m.map} ${hasGuide?'<span class="weak-go">공략</span>':''}</div>
         <div class="weak-meta"><b>${m.games}</b>판 · 승률 <b>${Number(m.win).toFixed(1)}%</b> · K/D <b>${Number(m.kd).toFixed(1)}%</b> · 딜량 <b>${Math.round(m.dmg).toLocaleString()}</b></div>
@@ -4768,9 +4879,9 @@ function drawLeaderboard(){
         <div class="lb-num lb-kd ${lbSort==='kd'?'':'dim'}" data-kd="${m.kd==null?'':Number(m.kd)}">${pct(m.kd)}</div>
         <div class="lb-num ${lbSort==='dmg'?'':'dim'}">${num(m.dmg)}</div>
         <div class="lb-num">${pct(m.win)}</div>
-        <div style="display:flex;align-items:center;gap:4px;justify-content:flex-end">
+        <div class="barracks-cell">
           <button class="lb-site" data-site="${escAttr(m.ouid||'')}" data-site-name="${escAttr(m.name)}" title="${escAttr(m.name)} 병영수첩 홈페이지">병영</button>
-          ${m.me?'':`<button class="lb-del" data-del="${idx}" title="삭제"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#i-x"/></svg></button>`}
+          ${m.me?'<span class="lb-del ghost" aria-hidden="true"></span>':`<button class="lb-del" data-del="${idx}" title="삭제"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><use href="#i-x"/></svg></button>`}
         </div>
       </div>`;
     }).join('');
@@ -4778,10 +4889,10 @@ function drawLeaderboard(){
 
   const n=MEMBERS.length;
   $('#lb-count').textContent=n;
-  $('#lb-count').classList.toggle('full',n>=10);
-  const pips=$('#lb-pips'); if(pips) pips.innerHTML=Array.from({length:10},(_,i)=>`<i class="${i<n?'on':''}"></i>`).join('');
-  $('#lb-add').classList.toggle('is-full',n>=10);
-  $('#lb-add').title = n>=10 ? '10명이 가득 찼습니다 · 한 명을 삭제한 뒤 등록하세요' : '';
+  $('#lb-count').classList.toggle('full',n>=20);
+  const pips=$('#lb-pips'); if(pips) pips.innerHTML=Array.from({length:20},(_,i)=>`<i class="${i<n?'on':''}"></i>`).join('');
+  $('#lb-add').classList.toggle('is-full',n>=20);
+  $('#lb-add').title = n>=20 ? '20명이 가득 찼습니다 · 한 명을 삭제한 뒤 등록하세요' : '';
   const sortName=$('#lb-sort-name'); if(sortName) sortName.textContent=SORT_NAME[lbSort];
   const sorts=$('#lb-sorts'); if(sorts) $$('#lb-sorts .sort-btn').forEach(b=>b.classList.toggle('on',b.dataset.sort===lbSort));
   $$('#lb-head [data-lbsort]').forEach(el=>{
@@ -4827,7 +4938,7 @@ function addMember(){
   const inp=$('#lb-nick');
   const name=inp.value.trim().replace(/\s+/g,' ');
   if(!name) { lbToast('닉네임을 입력해 주세요'); return; }
-  if(MEMBERS.length>=10){ lbToast('10명이 가득 찼습니다 · 한 명을 삭제해 주세요'); return; }
+  if(MEMBERS.length>=20){ lbToast('20명이 가득 찼습니다 · 한 명을 삭제해 주세요'); return; }
   if(MEMBERS.some(m=>m.name===name)){ lbToast('이미 등록된 닉네임입니다'); return; }
   if(window.AL && window.AL.real){ window.AL.addMember(name); inp.value=''; return; }
   // 새로 등록한 친구는 전적을 불러오는 중 → 임시 지표로 채움
@@ -4857,7 +4968,7 @@ $('#lb-rows').addEventListener('click',e=>{
     if(window.AL && window.AL.real){ window.AL.removeMember(m.name); return; }
     MEMBERS=MEMBERS.filter(x=>x!==m);
     drawLeaderboard();
-    lbToast(`'${m.name}' 삭제됨 · ${MEMBERS.length} / 10명`);
+    lbToast(`'${m.name}' 삭제됨 · ${MEMBERS.length} / 20명`);
     return;
   }
   const row=e.target.closest('[data-cmp]');
@@ -5073,7 +5184,7 @@ $('#s-utils').addEventListener('click', e=>{
   }
   if(e.target.closest('#bk-load')){
     $('#bk-restore').textContent=nowStamp();
-    appToast('📂 기록 불러오기 완료 · 훈련 기록 24회 · API 키 · 순위표 10명 복원', true);
+    appToast('📂 기록 불러오기 완료 · 훈련 기록 24회 · API 키 · 순위표 복원', true);
     return;
   }
 });
@@ -6034,7 +6145,7 @@ window.openMemo=openMemo;
       if(self){
         e.preventDefault();
         const ouid=self.dataset.ouid||null;
-        if(window.AL && AL.openBarracks) AL.openBarracks(ouid, '내');
+        if(window.AL && AL.openBarracks) AL.openBarracks(ouid, null);
         else appToast('앱(.exe)에서 병영수첩 홈페이지를 엽니다', false);
       }
     };
@@ -6154,20 +6265,25 @@ function drawHome(){
   const st=(window.AL&&window.AL.state)||null;
   const b=(st&&st.barracks)||{};
   const tier=b.tier||null;
-  const soloRp=tier?Number((tier.solo||{}).rp||0):Number((MEMBERS.find(m=>m.me)||{}).solo||0);
-  const partyRp=tier?Number((tier.party||{}).rp||0):Number((MEMBERS.find(m=>m.me)||{}).party||0);
+  /* v1.0.0 — 미로그인(게스트)이면 개인 닉네임 예시를 절대 보여 주지 않는다 */
+  const guest=!!(st&&st.guest);
+  const soloRp=guest?0:(tier?Number((tier.solo||{}).rp||0):Number((MEMBERS.find(m=>m.me)||{}).solo||0));
+  const partyRp=guest?0:(tier?Number((tier.party||{}).rp||0):Number((MEMBERS.find(m=>m.me)||{}).party||0));
   const set=(id,v)=>{const el=$('#'+id); if(el) el.textContent=v;};
-  const nm=((st&&st.nexon&&st.nexon.nickname)||ME||'휴가중.');
+  const hero=$('.hm-hero');
+  if(hero) hero.classList.toggle('hm-guest',guest);
+  const nm=guest?'게스트':((st&&st.nexon&&st.nexon.nickname)||(st&&st.settings&&st.settings.nickname)||ME||'게스트');
   set('home-name',nm);
 
   /* 아바타 — 병영수첩 프로필 사진이 있으면 사진, 없으면 기본 전술 엠블럼(#2) */
   const links=(st&&st.barracks_links)||{};
   const ava=$('#home-ava'), avaImg=$('#home-ava-img'), avaIni=$('#home-ava-ini');
   if(ava&&avaImg&&avaIni){
-    if(links.photo){ avaImg.src=links.photo; avaImg.hidden=false; avaIni.hidden=true; }
-    else { avaImg.hidden=true; avaImg.removeAttribute('src'); avaIni.hidden=false; }
+    if(guest){ avaImg.hidden=true; avaImg.removeAttribute('src'); avaIni.hidden=false; avaIni.textContent='?'; }
+    else if(links.photo){ avaImg.src=links.photo; avaImg.hidden=false; avaIni.hidden=true; }
+    else { avaImg.hidden=true; avaImg.removeAttribute('src'); avaIni.hidden=false; avaIni.textContent=(nm||'?').slice(0,1); }
   }
-  const clan=(b.basic&&b.basic.clan&&b.basic.clan!=='-')?b.basic.clan:'';
+  const clan=guest?'':((b.basic&&b.basic.clan&&b.basic.clan!=='-')?b.basic.clan:'');
   const clanBtn=$('#home-clan');
   if(clanBtn){ clanBtn.textContent=clan?clan:'클랜 없음'; clanBtn.hidden=!clan; }
   const soloBand=soloRp>0?bandOf(soloRp):UNRANKED;
@@ -6176,8 +6292,8 @@ function drawHome(){
   const pImg=partyRp>0?partyBand.img:'solo_100';
   const sImgEl=$('#home-solo-img'); if(sImgEl) sImgEl.src=`assets/${sImg}.png`;
   const pImgEl=$('#home-party-img'); if(pImgEl) pImgEl.src=`assets/${pImg}.png`;
-  set('home-solo-tier',soloRp>0?(tier?((tier.solo||{}).name||soloBand.n):soloBand.n):'언랭크');
-  set('home-party-tier',partyRp>0?(tier?((tier.party||{}).name||partyBand.n):partyBand.n):'언랭크');
+  set('home-solo-tier',soloRp>0?(tier?((tier.solo||{}).name||soloBand.n):soloBand.n):'—');
+  set('home-party-tier',partyRp>0?(tier?((tier.party||{}).name||partyBand.n):partyBand.n):'—');
   set('home-solo-rp',soloRp>0?`${soloRp.toLocaleString('ko-KR')} RP`:'—');
   set('home-party-rp',partyRp>0?`${partyRp.toLocaleString('ko-KR')} RP`:'—');
 
@@ -6209,7 +6325,7 @@ function drawHome(){
   const weakest=AREAS.map(a=>({a,v:Number(VALUES[a.key]||0)})).sort((x,y)=>x.v-y.v)[0];
   if(weakest){ set('home-strip-weak',`${weakest.a.name} ${Math.round(weakest.v)}`); set('home-strip-weak-sub','오늘 추천 반영'); }
   const stats=(b.stats||{});
-  set('home-sub-record',stats.games?`최근 ${stats.games}판 승률 ${Number(stats.win||0).toFixed(1)}%`:'최근 100판');
+  set('home-sub-record',stats.games?`최근 ${stats.games}판 승률 ${Number(stats.win||0).toFixed(1)}%`:(guest?'닉네임을 연결하면 전적이 표시됩니다':'최근 100판'));
   set('home-sub-updated',b.updated_at?`최신화 ${String(b.updated_at).replace('T',' ').slice(5,16)}`:'전적 최신화 —');
 
   /* 직전 대비 등락 뱃지 (#3 · v1.5.0) */
@@ -6259,22 +6375,22 @@ function drawHome(){
   const sub=$('#home-recs-sub');
   if(sub) sub.textContent=`약점 우선 · ${weapon==='sniper'?'스나':'라플'} 맞춤 · ${game==='kovak'?"KovaaK's":'Aim Lab'} 로테이션`;
 
-  /* 최근 랭크 5판 — 실제 병영수첩 캐시 */
+  /* 최근 랭크 5판 — 실제 병영수첩 캐시 · K/D 는 % 표기 (v1.0.0) */
   const matches=(b.matches||[]).slice(0,5);
   const glist=$('#home-games');
   if(glist){
     glist.innerHTML=matches.length?matches.map(m=>{
       const win=String(m.result||'')==='승';
       const name=String(m.map||'—');
-      const kd=Number(m.k||0)/Math.max(1,Number(m.d||0));
-      const pct=Math.max(6,Math.min(100,(kd/2.2)*100));
+      const k=Number(m.k||0), d=Number(m.d||0);
+      const pct=k+d>0?Math.round(k/(k+d)*100):0;
       return `<div class="hm-game ${win?'win':''}">
         <span class="res ${win?'w':'l'}">${win?'승':'패'}</span>
         ${mapChip(name)}
         <span class="map">${name.replace(/\((심플|폭파)\)/,'')}</span>
-        <span class="track"><i style="width:${pct.toFixed(0)}%"></i></span>
-        <span class="kd">${kd.toFixed(2)}</span>
-        <span class="kdv">${m.k||0} / ${m.d||0}</span>
+        <span class="track"><i style="width:${Math.max(6,Math.min(100,pct))}%"></i></span>
+        <span class="kd">${pct}%</span>
+        <span class="kdv">${k} / ${d}</span>
       </div>`;
     }).join(''):'<div class="empty">병영수첩을 불러오면 최근 5판이 표시됩니다</div>';
   }
@@ -6282,8 +6398,10 @@ function drawHome(){
   if(gsum){
     if(matches.length){
       const w=matches.filter(m=>String(m.result||'')==='승').length;
-      const kdAvg=matches.reduce((s,m)=>s+Number(m.k||0)/Math.max(1,Number(m.d||0)),0)/matches.length;
-      gsum.innerHTML=`${w}승 ${matches.length-w}패 · <b>평균 K/D ${kdAvg.toFixed(2)}</b>`;
+      const tk=matches.reduce((s,m)=>s+Number(m.k||0),0);
+      const td=matches.reduce((s,m)=>s+Number(m.d||0),0);
+      const kdPct=tk+td>0?Math.round(tk/(tk+td)*100):0;
+      gsum.innerHTML=`${w}승 ${matches.length-w}패 · <b>평균 K/D ${kdPct}%</b>`;
     } else gsum.textContent='—';
   }
   const bsub=$('#home-barracks-sub');
@@ -6303,6 +6421,15 @@ function drawHome(){
 }
 window.drawHome=drawHome;
 
+
+/* ---- 레일 로고 → 홈 (v1.0.0) ---- */
+(function(){
+  const logo=$('#rail-home');
+  if(!logo) return;
+  const goHome=()=>{ showScreen('home'); if(window.AL&&AL.onScreen) AL.onScreen('home'); };
+  logo.addEventListener('click',goHome);
+  logo.addEventListener('keydown',(e)=>{ if(e.key==='Enter'||e.key===' '){ e.preventDefault(); goHome(); } });
+})();
 
 /* ---- 레일 아이콘 툴팁 (hover) ---- */
 (function(){

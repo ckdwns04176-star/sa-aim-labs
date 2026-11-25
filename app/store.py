@@ -50,6 +50,18 @@ DEFAULTS: dict[str, Any] = {
         "excluded_scenarios": [],         # 추천에서 빼 둔 시나리오 이름
         "watch_trainers": True,           # 코박스·에임랩 종료 감지 알림
         "auto_cloud": True,               # 로그인 상태면 30분마다 자동 동기화
+        # ── v1.0.0 · 인게임 오버레이 ──
+        "overlay_enabled": True,          # 오버레이 3종 사용
+        "overlay_hotkey_lobby": "F8",    # 대기실 스캔 / 맵 밴
+        "overlay_hotkey_scout": "F9",    # 10초 카운트다운 상대 분석
+        "overlay_mapban_seconds": 12,     # 맵 밴 안전 타이머
+        "overlay_party_seconds": 15,
+        "overlay_scan_x": 0,              # 대기실 OCR 위치 보정 (px)
+        "overlay_scan_y": 0,
+        "overlay_scan_scale": 1.0,
+        "toast_enabled": True,            # 경기 종료 토스트
+        "toast_position": "br",          # br(우하단) / tr(우상단)
+        "toast_auto": True,               # 새 경기 감지 시 자동 표시
     },
     "records": [],
     "leaderboard": [],
@@ -73,6 +85,9 @@ DEFAULTS: dict[str, Any] = {
     },
     "cloud": {"email": None, "user_id": None, "access_token": None, "refresh_token": None, "last_sync": None},
     "cloud_auto": {"last_at": None, "last_reason": None},
+    "party_presets": [],         # 고정 5인 파티 프리셋 [{name, members, created}]
+    "overlay": {"last_scan_at": None, "last_scan": [], "last_team": []},
+    "cache_cleanup_at": None,    # 넥슨 매치 캐시 30일 정리 마지막 시각
 }
 
 
@@ -201,7 +216,7 @@ class Store:
         return self.data.setdefault("leaderboard", [])
 
     def set_leaderboard(self, members: list[dict[str, Any]]) -> None:
-        self.data["leaderboard"] = members[:10]
+        self.data["leaderboard"] = members[:20]
         self.save()
 
     # ------------------------------------------------------------ friend memos (v1.3.1)
@@ -255,6 +270,37 @@ class Store:
     # ------------------------------------------------------------ custom scenarios (v1.5.0)
     def custom_scenarios(self) -> list[dict[str, Any]]:
         return self.data.setdefault("custom_scenarios", [])
+
+    # ------------------------------------------------------------ party presets (v1.0.0)
+    def party_presets(self) -> list[dict[str, Any]]:
+        """고정 5인 파티 프리셋 — 훈련 기록과 같이 영구 보관한다."""
+        return self.data.setdefault("party_presets", [])
+
+    def save_party_preset(self, name: str, members: Any) -> dict[str, Any]:
+        from . import party_lobby
+
+        label = party_lobby.clean_preset_name(name)
+        rows = party_lobby.clean_members(members)
+        presets = [row for row in self.party_presets() if isinstance(row, dict)]
+        presets = [row for row in presets if str(row.get("name") or "") != label]
+        entry = {"name": label, "members": rows, "created": now_iso()}
+        presets.append(entry)
+        self.data["party_presets"] = presets[-20:]
+        self.save()
+        return entry
+
+    def delete_party_preset(self, name: str) -> bool:
+        rows = [row for row in self.party_presets()
+                if str((row or {}).get("name") or "") != str(name or "").strip()]
+        changed = len(rows) != len(self.party_presets())
+        self.data["party_presets"] = rows
+        if changed:
+            self.save()
+        return changed
+
+    # ------------------------------------------------------------ overlay cache (v1.0.0)
+    def overlay_cache(self) -> dict[str, Any]:
+        return self.data.setdefault("overlay", {"last_scan_at": None, "last_scan": [], "last_team": []})
 
     # ------------------------------------------------------------ barracks snapshots (v1.3.0)
     def barracks_history(self) -> list[dict[str, Any]]:

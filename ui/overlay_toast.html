@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>SA Aim Labs · Toast</title>
+<style>
+  html,body{margin:0;padding:0;background:transparent;overflow:hidden;
+    font-family:Pretendard,"Malgun Gothic","Segoe UI",sans-serif;color:#E8EEF8;-webkit-user-select:none;user-select:none}
+  .toast{position:absolute;inset:0;border-radius:11px;overflow:hidden;
+    background:linear-gradient(135deg,#1A1E26 0%,#141820 55%,#11151C 100%);
+    border:1px solid rgba(255,255,255,.10);box-shadow:0 18px 44px rgba(0,0,0,.62);
+    display:flex;flex-direction:column;justify-content:center;padding:0 14px 0 18px;
+    animation:in .28s cubic-bezier(.2,.9,.3,1)}
+  .toast::before{content:'';position:absolute;left:0;top:0;bottom:0;width:4px;
+    background:linear-gradient(180deg,#FF4655,#FB923C)}
+  .toast.win::before{background:linear-gradient(180deg,#FF4655,#FF7A6B)}
+  .toast.lose::before{background:linear-gradient(180deg,#475569,#64748B)}
+  .top{display:flex;align-items:center;gap:8px}
+  .badge{height:19px;padding:0 7px;border-radius:5px;display:inline-flex;align-items:center;
+    font-size:9.5px;font-weight:900;letter-spacing:.08em}
+  .win .badge{background:rgba(52,211,153,.14);color:#6EE7C0;border:1px solid rgba(52,211,153,.36)}
+  .lose .badge{background:rgba(148,163,184,.14);color:#C7D3E4;border:1px solid rgba(148,163,184,.32)}
+  .title{font-size:12.5px;font-weight:900;letter-spacing:-.01em;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sub{margin-top:5px;font-size:11px;color:#C7D3E4;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sub b{color:#FCD9A0;font-family:Chakra,Consolas,monospace;font-weight:800}
+  .foot{position:absolute;right:11px;bottom:5px;font-size:8px;color:#5E6E85;letter-spacing:.02em}
+  @keyframes in{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+  .toast.out{animation:out .5s ease forwards}
+  @keyframes out{to{opacity:0;transform:translateY(6px)}}
+</style>
+</head>
+<body>
+<div class="toast" id="toast">
+  <div class="top">
+    <span class="badge" id="badge">WIN</span>
+    <span class="title" id="title">경기 결과</span>
+  </div>
+  <div class="sub" id="sub">딜량 0 · K/D 0.00</div>
+  <div class="foot">SA Aim Labs · NEXON Open API</div>
+</div>
+<script>
+const OV = {
+  render(payload) {
+    const p = payload || {};
+    const el = document.getElementById('toast');
+    el.classList.toggle('win', !!p.win);
+    el.classList.toggle('lose', !p.win);
+    document.getElementById('badge').textContent = p.badge || (p.win ? 'WIN' : 'LOSE');
+    document.getElementById('title').textContent = p.title || '경기 결과';
+    document.getElementById('sub').innerHTML = String(p.sub || '').replace(/(\d[\d,]*)/g, '<b>$1</b>');
+    const secs = Number(p.seconds || 5);
+    setTimeout(() => el.classList.add('out'), Math.max(1200, (secs - 0.5) * 1000));
+  }
+};
+window.OV = OV;
+(async function(){
+  const load = async () => {
+    try {
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.overlay_payload) {
+        const res = await window.pywebview.api.overlay_payload('toast');
+        if (res && res.payload) OV.render(res.payload);
+      }
+    } catch (e) {}
+  };
+  await load();
+  window.addEventListener('pywebviewready', load);
+})();
+</script>
+</body>
+</html>
