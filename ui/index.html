@@ -6311,7 +6311,7 @@ function drawHome(){
   const flow=$('#home-rank-flow');
   if(flow){
     const stk=(HOME_COND&&HOME_COND.streak)||null;
-    if(stk&&stk.n>=2){ flow.hidden=false; flow.textContent=`${stk.n}연${stk.kind}`; }
+    if(!guest&&stk&&stk.n>=2){ flow.hidden=false; flow.textContent=`${stk.n}연${stk.kind}`; }
     else { flow.hidden=true; }
   }
 
