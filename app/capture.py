@@ -18,7 +18,7 @@ import subprocess
 from typing import Any, Iterable, Sequence
 
 CREATE_NO_WINDOW = 0x08000000
-PS_TIMEOUT = 9.0
+PS_TIMEOUT = 12.0
 
 # ---------------------------------------------------------------- PowerShell
 _AWAIT = r"""

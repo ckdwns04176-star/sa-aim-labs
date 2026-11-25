@@ -136,11 +136,9 @@ def apply_profile_settings(settings: list[tuple[int, int]]) -> dict[str, Any]:
                              ctypes.POINTER(structs["setting"]))
         set_setting = _query(dll, NVAPI_DRS_SET_SETTING, ctypes.c_int,
                              ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(structs["setting"]))
-        try:
-            create_setting = _query(dll, NVAPI_DRS_CREATE_SETTING, ctypes.c_int,
-                                    ctypes.c_void_p, ctypes.c_void_p, ctypes.POINTER(structs["setting"]))
-        except Exception:  # noqa: BLE001 - 구버전 드라이버에는 없을 수 있다
-            create_setting = None
+        # v1.0.0 — CreateSetting 은 오프셋이 드라이버 버전마다 달라 호출하지 않는다.
+        # NvAPI_DRS_SetSetting 이 프로필에 없는 설정을 새로 만드는 것까지 처리한다.
+        create_setting = None
 
         rc = int(init())
         if rc != NVAPI_OK:
@@ -192,14 +190,7 @@ def apply_profile_settings(settings: list[tuple[int, int]]) -> dict[str, Any]:
                     setting.settingId = setting_id
                     setting.settingType = 0          # NVDRS_DWORD_TYPE
                     setting.settingLocation = 0      # NVDRS_CURRENT_PROFILE_LOCATION
-                    if create_setting is not None:
-                        rc = int(create_setting(session, profile, ctypes.byref(setting)))
-                        created = rc == NVAPI_OK
-                    if rc != NVAPI_OK:
-                        setting.version = version
-                        setting.settingId = setting_id
-                        setting.settingType = 0
-                        setting.settingLocation = 0
+                    created = True
                 if rc not in (NVAPI_OK, NVAPI_SETTING_NOT_FOUND):
                     rows.append({"id": f"0x{setting_id:08X}", "value": value, "rc": rc,
                                  "status": status_text(rc)})
