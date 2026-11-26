@@ -299,6 +299,9 @@ WS_EX_NOACTIVATE = 0x08000000
 WS_EX_LAYERED = 0x00080000
 HWND_TOPMOST = -1
 SWP_SHOWWINDOW = 0x0040
+SWP_NOACTIVATE = 0x0010
+SW_HIDE = 0
+SW_SHOWNOACTIVATE = 4
 
 OVERLAY_EX_STYLE = (WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT |
                     WS_EX_TOOLWINDOW | WS_EX_LAYERED)
@@ -309,8 +312,76 @@ def overlay_style(style: int) -> int:
     return int(style) | OVERLAY_EX_STYLE
 
 
+def overlay_style_keeps_focus(style: int) -> bool:
+    """NOACTIVATE 가 실제로 붙었는지 (포커스 비탈취 확인 · 순수 함수)."""
+    return bool(int(style) & WS_EX_NOACTIVATE)
+
+
+def foreground_window() -> int:
+    """현재 포커스를 가진 창 (게임).  실패하면 0."""
+    if os.name != "nt":
+        return 0
+    try:
+        import ctypes
+
+        return int(ctypes.windll.user32.GetForegroundWindow() or 0)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def restore_foreground(hwnd: int) -> bool:
+    """포커스가 오버레이로 넘어갔을 때 원래 창(게임)을 다시 앞으로 — 게임이 내려가지 않게."""
+    if os.name != "nt" or not hwnd:
+        return False
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        if int(user32.GetForegroundWindow() or 0) == int(hwnd):
+            return True
+        user32.ShowWindow(ctypes.c_void_p(hwnd), SW_SHOWNOACTIVATE)
+        user32.SetForegroundWindow(ctypes.c_void_p(hwnd))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def show_no_activate(hwnd: int) -> dict[str, Any]:
+    """포커스를 뺏지 않고 창을 보여 준다 (SW_SHOWNOACTIVATE + TOPMOST·NOACTIVATE).
+
+    pywebview 는 ``hidden=False`` 로 창을 만들 때 곧바로 ShowWindow 를 부르고
+    포커스를 가져간다 — 그 순간 전체화면 게임이 최소화된다(사용자 제보 #1).
+    그래서 창은 hidden 로 만든 뒤 이 함수로만 보이게 한다.
+    """
+    if os.name != "nt" or not hwnd:
+        return {"ok": False, "supported": False}
+    try:
+        import ctypes
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        user32.ShowWindow(ctypes.c_void_p(hwnd), SW_SHOWNOACTIVATE)
+        placed = user32.SetWindowPos(
+            ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST), 0, 0, 0, 0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
+        return {"ok": bool(user32.IsWindowVisible(ctypes.c_void_p(hwnd))),
+                "supported": True, "topmost": bool(placed)}
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "supported": True, "message": str(exc)}
+
+
+def hide_no_activate(hwnd: int) -> None:
+    if os.name != "nt" or not hwnd:
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.user32.ShowWindow(ctypes.c_void_p(hwnd), SW_HIDE)  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def apply_overlay_style(hwnd: int) -> dict[str, Any]:
-    """투명·클릭 통과·항상 위 창으로 만든다 (Windows 전용)."""
+    """투명·클릭 통과·항상 위·포커스 비탈취 창으로 만든다 (Windows 전용)."""
     if os.name != "nt" or not hwnd:
         return {"ok": False, "supported": False}
     try:
@@ -322,9 +393,11 @@ def apply_overlay_style(hwnd: int) -> dict[str, Any]:
         before = int(get_long(ctypes.c_void_p(hwnd), GWL_EXSTYLE))
         target = overlay_style(before)
         set_long(ctypes.c_void_p(hwnd), GWL_EXSTYLE, target)
+        after = int(get_long(ctypes.c_void_p(hwnd), GWL_EXSTYLE))
         user32.SetWindowPos(ctypes.c_void_p(hwnd), ctypes.c_void_p(HWND_TOPMOST), 0, 0, 0, 0,
                             SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
-        return {"ok": True, "supported": True, "before": f"0x{before:08X}", "after": f"0x{target:08X}"}
+        return {"ok": True, "supported": True, "before": f"0x{before:08X}",
+                "after": f"0x{after:08X}", "noactivate": overlay_style_keeps_focus(after)}
     except Exception as exc:  # noqa: BLE001 - 스타일 적용 실패는 앱을 막지 않는다
         return {"ok": False, "supported": True, "message": str(exc)}
 

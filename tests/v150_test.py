@@ -212,7 +212,7 @@ def mock_js(state: dict) -> str:
 def backend() -> None:
     from app import paths, scoring, v150, barracks as barracks_mod, store as store_mod
 
-    check("APP_VERSION 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
+    check("APP_VERSION 1.0.1", paths.APP_VERSION == "1.0.1", paths.APP_VERSION)
 
     # ── 테마 · 배율
     check("기본 테마 = coral", v150.clean_theme(None) == "coral", v150.clean_theme(None))

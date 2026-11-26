@@ -4,105 +4,138 @@
 <meta charset="utf-8">
 <title>SA Aim Labs · Party Scan</title>
 <style>
+  /* v1.0.1 — 창 자체를 5칸 닉네임 줄 바로 아래(클랜명 줄) + 카드 밑 맵 띠에만 맞춘다.
+     좌표는 파이썬(overlay.party_layout)이 %로 내려 주고, 해상도가 달라도 같은 자리에 붙는다.
+     기본값은 2048×945 기준 캡처에서 계산한 값이다. */
   html,body{margin:0;padding:0;background:transparent;overflow:hidden;
     font-family:Pretendard,"Malgun Gothic","Segoe UI",sans-serif;color:#E8EEF8;
     -webkit-user-select:none;user-select:none}
-  .wrap{position:absolute;inset:0;display:flex;flex-direction:column;justify-content:space-between;padding:0 0 6px}
-  .hd{display:flex;align-items:center;gap:8px;height:44px;padding:0 12px;border-radius:10px;
-    background:linear-gradient(180deg,rgba(14,18,27,.94),rgba(14,18,27,.86));
-    border:1px solid rgba(255,255,255,.10);box-shadow:0 8px 26px rgba(0,0,0,.45);
-    margin:0 2px 0 2px}
-  .mark{width:16px;height:16px;border-radius:5px;background:linear-gradient(140deg,#FF4655,#FB923C);
-    box-shadow:0 0 12px rgba(255,70,85,.45);flex:0 0 16px}
-  .ttl{font-size:11.5px;font-weight:900;letter-spacing:.02em}
-  .sub{font-size:9px;color:#8FA1B8;font-weight:700}
-  .sp{flex:1}
-  .pill{height:19px;padding:0 8px;border-radius:999px;font-size:9px;font-weight:800;display:inline-flex;
-    align-items:center;gap:5px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.12);color:#B9C7D9}
-  .pill i{width:5px;height:5px;border-radius:50%;background:#6EE7C0;box-shadow:0 0 8px #6EE7C0}
-  .pill.warn i{background:#FBBF24;box-shadow:0 0 8px #FBBF24}
-  .cards{display:grid;grid-template-columns:repeat(5,1fr);gap:0.9%;margin:0 1px}
-  .chip{height:30px;border-radius:7px;display:flex;align-items:center;gap:6px;padding:0 8px;
-    background:linear-gradient(180deg,rgba(12,16,24,.92),rgba(12,16,24,.78));
-    border:1px solid rgba(120,190,255,.18);box-shadow:0 6px 16px rgba(0,0,0,.4);overflow:hidden}
-  .chip.ok{border-color:rgba(110,231,192,.30)}
-  .chip.corrected{border-color:rgba(251,191,36,.34)}
-  .chip.unknown{border-color:rgba(255,70,85,.30)}
+  .ov{position:absolute;inset:0}
+  .chip{position:absolute;display:flex;align-items:center;gap:5px;padding:0 7px;box-sizing:border-box;
+    border-radius:6px;overflow:hidden;
+    background:linear-gradient(180deg,rgba(10,14,22,.90),rgba(10,14,22,.72));
+    border:1px solid rgba(120,190,255,.22);box-shadow:0 4px 12px rgba(0,0,0,.42)}
+  .chip.ok{border-color:rgba(110,231,192,.36)}
+  .chip.corrected{border-color:rgba(251,191,36,.40)}
+  .chip.unknown{border-color:rgba(255,70,85,.34)}
   .dot{width:6px;height:6px;border-radius:50%;flex:0 0 6px;background:#6EE7C0;box-shadow:0 0 8px rgba(110,231,192,.8)}
   .chip.corrected .dot{background:#FBBF24;box-shadow:0 0 8px rgba(251,191,36,.8)}
   .chip.unknown .dot{background:#FF4655;box-shadow:0 0 8px rgba(255,70,85,.8)}
-  .nm{font-size:11.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
-  .sc{font-family:Chakra,Consolas,monospace;font-size:9px;color:#8FA1B8;margin-left:auto;flex:0 0 auto}
-  .empty{grid-column:1/-1;height:30px;display:flex;align-items:center;justify-content:center;
-    border:1px dashed rgba(255,255,255,.16);border-radius:7px;font-size:10px;color:#7C8DA4;
-    background:rgba(10,13,20,.72)}
-  .foot{display:flex;align-items:center;gap:8px;padding:0 12px;height:18px;font-size:8.5px;color:#5E6E85}
-  .foot b{color:#9FB0C6;font-weight:800}
+  .chip.empty .dot{background:#64748B;box-shadow:none}
+  .nm{font-size:12px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;
+    letter-spacing:-.01em;text-shadow:0 1px 3px rgba(0,0,0,.8)}
+  /* v1.0.1 (#3) — '확인 100' 같은 내부 숫자 대신 상태 문구만 */
+  .bd{margin-left:auto;flex:0 0 auto;font-size:9px;font-weight:900;letter-spacing:.02em;
+    padding:1px 5px;border-radius:4px;color:#6EE7C0;background:rgba(52,211,153,.12);
+    border:1px solid rgba(52,211,153,.30)}
+  .chip.corrected .bd{color:#FBBF24;background:rgba(251,191,36,.12);border-color:rgba(251,191,36,.30)}
+  .chip.unknown .bd{color:#FF8B96;background:rgba(255,70,85,.12);border-color:rgba(255,70,85,.30)}
+  .chip.empty .bd{color:#8FA1B8;background:rgba(148,163,184,.10);border-color:rgba(148,163,184,.24)}
+
+  /* 카드 아래 맵 띠 — 좋은 맵 3 · 안 좋은 맵 3 (공식 맵 사진 포함) */
+  .maps{position:absolute;display:flex;align-items:center;gap:6px;
+    background:linear-gradient(180deg,rgba(10,14,22,.88),rgba(10,14,22,.70));
+    border:1px solid rgba(120,190,255,.16);border-radius:7px;padding:3px 6px;box-sizing:border-box;
+    box-shadow:0 6px 16px rgba(0,0,0,.45)}
+  .grp{display:flex;align-items:center;gap:5px;min-width:0}
+  .grp.good{flex:1 1 0}
+  .grp.bad{flex:1 1 0}
+  .mclist{display:flex;align-items:center;gap:6px;flex:1 1 0;min-width:0;height:100%}
+  .gl{font-size:8.5px;font-weight:900;letter-spacing:.03em;flex:0 0 auto;padding-right:2px}
+  .grp.good .gl{color:#6EE7C0}
+  .grp.bad .gl{color:#FF8B96}
+  .mc{display:flex;align-items:center;gap:6px;min-width:0;flex:1 1 0;
+    background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.02));
+    border:1px solid rgba(255,255,255,.06);border-radius:5px;padding:0 6px 0 0;overflow:hidden;height:100%}
+  .mthumb{width:52px;height:100%;flex:0 0 52px;border-radius:4px 0 0 4px;overflow:hidden;background:rgba(148,163,184,.14)}
+  .mthumb img{width:100%;height:100%;object-fit:cover;display:block}
+  .mname{font-size:10.5px;font-weight:800;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;
+    letter-spacing:-.01em}
+  .mpct{font-size:9.5px;font-weight:900;margin-left:auto;flex:0 0 auto;font-family:Chakra,Consolas,monospace}
+  .good .mpct{color:#8BE9C6}
+  .bad .mpct{color:#FFA9B1}
+  .sep{width:1px;height:70%;background:rgba(255,255,255,.10);flex:0 0 1px}
+  .empty{font-size:9px;color:#7C8DA4;font-weight:700;padding:0 4px;white-space:nowrap}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="hd">
-    <span class="mark"></span>
-    <div>
-      <div class="ttl">파티 대기실 5인 스캔</div>
-      <div class="sub" id="sub">닉네임 윗줄만 읽습니다 · 클랜명 제외</div>
-    </div>
-    <span class="sp"></span>
-    <span class="pill" id="preset"><i></i><span id="preset-t">프리셋 없음</span></span>
-    <span class="pill" id="stat"><i></i><span id="stat-t">대기</span></span>
+<div class="ov" id="ov">
+  <div class="maps" id="maps" style="left:0;top:48.57%;width:100%;height:51.43%;display:none">
+    <div class="grp good"><span class="gl">좋은 맵</span><span class="mclist" id="good"></span></div>
+    <span class="sep"></span>
+    <div class="grp bad"><span class="gl">피할 맵</span><span class="mclist" id="bad"></span></div>
   </div>
-  <div class="cards" id="cards"></div>
-  <div class="foot"><span>Data based on NEXON Open API</span><span class="sp" style="flex:1"></span><span id="hint">F8 닫기 · F9 상대 분석</span></div>
 </div>
 <script>
+const DEFAULTS = {
+  chips: [{left:0,width:17.949},{left:20.513,width:17.949},{left:41.026,width:17.949},
+          {left:61.538,width:17.949},{left:82.051,width:17.949}],
+  chip_top: 0, chip_height: 41.41, maps_top: 48.57, maps_height: 51.43
+};
+const LABELS = {ok: '일치', corrected: '유사', unknown: '미확인', empty: '—'};
+const esc = (v) => String(v == null ? '' : v)
+  .replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
 const OV = {
   render(payload) {
     const p = payload || {};
     const rows = p.rows || [];
-    const cards = document.getElementById('cards');
-    if (!rows.length) {
-      cards.innerHTML = '<div class="empty">대기실 닉네임을 읽지 못했습니다 · F8 로 다시 스캔</div>';
-    } else {
-      cards.innerHTML = rows.map((r, i) => {
-        const status = r.status === 'ok' ? 'ok' : r.status === 'corrected' ? 'corrected' : 'unknown';
-        const name = r.name || r.raw || '—';
-        const score = r.score != null ? Math.round(Number(r.score) * 100) : null;
-        return `<div class="chip ${status}" title="${(r.raw||'')} · ${status}">
-          <span class="dot"></span><span class="nm">${esc(name)}</span>
-          <span class="sc">${status === 'ok' ? '확인' : status === 'corrected' ? '보정' : '?'}${score ? ' ' + score : ''}</span>
-        </div>`;
-      }).join('');
-    }
-    const presets = p.presets || [];
-    const presetT = document.getElementById('preset-t');
-    if (presetT) presetT.textContent = presets.length ? `프리셋 ${presets.length}개` : '프리셋 없음';
-    const okCount = rows.filter((r) => r.status === 'ok' || r.status === 'corrected').length;
-    const statT = document.getElementById('stat-t');
-    if (statT) statT.textContent = rows.length ? `${okCount}/${rows.length} 확인` : '대기';
-    const sub = document.getElementById('sub');
-    if (sub && p.me) sub.textContent = `내 닉네임 ${p.me} · 클랜명 제외`;
-    if (p.mapban && p.mapban.ok && Array.isArray(p.mapban.cards) && p.mapban.cards.length) {
-      const top = p.mapban.cards.filter((c) => c.tone === 'pick')[0];
-      if (top) document.getElementById('hint').textContent = `F8 맵 밴 · 픽 ${top.map} ${top.pct || ''}%`;
+    const box = document.getElementById('ov');
+    const layout = p.layout || DEFAULTS;
+    if (!box) return;
+    box.querySelectorAll('.chip').forEach((el) => el.remove());
+    (layout.chips || DEFAULTS.chips).forEach((cell, i) => {
+      const r = rows[i] || {};
+      const status = ['ok', 'corrected', 'unknown', 'empty'].includes(r.status) ? r.status : (r.name ? 'ok' : 'empty');
+      const el = document.createElement('div');
+      el.className = `chip ${status}`;
+      el.style.left = `${cell.left}%`;
+      el.style.width = `${cell.width}%`;
+      el.style.top = `${layout.chip_top || 0}%`;
+      el.style.height = `${layout.chip_height || DEFAULTS.chip_height}%`;
+      const name = r.name || r.raw || '—';
+      el.innerHTML = `<span class="dot"></span><span class="nm">${esc(name)}</span>`
+        + `<span class="bd">${LABELS[status]}</span>`;
+      el.title = r.raw ? `OCR ${r.raw}` : '';
+      box.appendChild(el);
+    });
+
+    const maps = document.getElementById('maps');
+    if (maps) {
+      maps.style.left = '0%';
+      maps.style.top = `${layout.maps_top || DEFAULTS.maps_top}%`;
+      maps.style.height = `${layout.maps_height || DEFAULTS.maps_height}%`;
+      const plan = p.plan || {};
+      const picks = (plan.picks || []).slice(0, 3);
+      const bans = (plan.bans || []).slice(0, 3);
+      const cell = (row, kind) => {
+        const src = row.image || '';
+        const pct = row.expected == null ? '' : `${Math.round(Number(row.expected))}%`;
+        return `<span class="mc" data-${kind}="${esc(row.map)}">`
+          + `<span class="mthumb">${src ? `<img src="${esc(src)}" alt="">` : ''}</span>`
+          + `<span class="mname">${esc(row.map || '')}</span>`
+          + `<span class="mpct">${pct}</span></span>`;
+      };
+      const good = document.getElementById('good');
+      const bad = document.getElementById('bad');
+      if (good) good.innerHTML = picks.length ? picks.map((r) => cell(r, 'pick')).join('') : '<span class="empty">전적 없음</span>';
+      if (bad) bad.innerHTML = bans.length ? bans.map((r) => cell(r, 'ban')).join('') : '<span class="empty">전적 없음</span>';
+      maps.style.display = (picks.length || bans.length) ? 'flex' : 'none';
     }
   }
 };
 window.OV = OV;
-function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
-(async function(){
-  try {
-    if (window.pywebview && window.pywebview.api && window.pywebview.api.overlay_payload) {
-      const res = await window.pywebview.api.overlay_payload('party');
-      if (res && res.payload) OV.render(res.payload);
-    }
-  } catch (e) {}
-  window.addEventListener('pywebviewready', async () => {
+(async function () {
+  const load = async () => {
     try {
-      const res = await window.pywebview.api.overlay_payload('party');
-      if (res && res.payload) OV.render(res.payload);
+      if (window.pywebview && window.pywebview.api && window.pywebview.api.overlay_payload) {
+        const res = await window.pywebview.api.overlay_payload('party');
+        if (res && res.payload) OV.render(res.payload);
+      }
     } catch (e) {}
-  });
+  };
+  await load();
+  window.addEventListener('pywebviewready', load);
 })();
 </script>
 </body>

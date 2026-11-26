@@ -22,6 +22,8 @@ from .store import Store, now_iso, today_str
 
 GAMES = ("kovak", "aimlab")
 WEAPONS = ("sniper", "rifle")
+# v1.0.1 (#12) — 내 전적 자동 최신화 주기 = 1분 5초
+MATCH_REFRESH_SECONDS = 65
 
 log = logging.getLogger("api")
 
@@ -88,6 +90,12 @@ class Api:
         self._overlay_lock = __import__("threading").Lock()
         self._last_scan: list[dict[str, Any]] = []
         self._cache_cleanup: dict[str, Any] | None = None
+        # v1.0.1 — 내 전적 65초 자동 최신화 상태
+        self._match_refresh: dict[str, Any] = {"checked": False, "at": None, "newest": None,
+                                               "updated": None, "error": None}
+        self._match_interval = MATCH_REFRESH_SECONDS
+        self._match_stop = __import__("threading").Event()
+        self._match_thread: Any = None
         self._cleanup_cache_once()
 
     def set_display(self, width: int = 0, height: int = 0, scale: float = 1.0) -> dict[str, Any]:
@@ -643,6 +651,8 @@ class Api:
             "barracks_links": links,
             "trainer_watch": watch_state,
             "cloud_auto": {**self.store.cloud_auto(), "enabled": bool(settings.get("auto_cloud", True))},
+            "match_refresh": {"interval": self._match_interval, **self._match_refresh},
+            "recency": {"newest_match": (barracks or {}).get("newest_match") or ""},
             "overlay": {**self._overlay.state(), "settings": self._overlay_settings(),
                         "hotkeys": self._hotkeys.state(),
                         "last_scan": list(self.store.overlay_cache().get("last_scan") or [])[:5],
@@ -736,8 +746,9 @@ class Api:
             "url": s.get("url") or cfg["url"],
             "email": cloud.get("email"),
             "user_id": cloud.get("user_id"),
-            "signed_in": bool(cloud.get("access_token")),
+            "signed_in": bool(cloud.get("access_token") or cloud.get("refresh_token")),
             "last_sync": cloud.get("last_sync"),
+            "aim_scores_error": cloud.get("aim_scores_error"),
         }
 
     def _ensure_me(self, barracks: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -957,9 +968,38 @@ class Api:
             self._drop_previous(date, game, weapon, [s["name"] for s in scen_rows])
             saved = self.store.add_record(record)
             self.store.note_attendance(self.store.records())
-            return {"ok": True, "record": saved, "pbs": pbs, "state": self._build_state()}
+            # v1.0.1 (#4) — 점수 저장 직후 바로 클라우드 백업을 예약한다 (30분 주기를 기다리지 않는다).
+            backup = self._queue_cloud_backup("training")
+            return {"ok": True, "record": saved, "pbs": pbs, "backup": backup,
+                    "state": self._build_state()}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
+
+    def _queue_cloud_backup(self, reason: str = "training") -> dict[str, Any]:
+        """저장 직후 백업 — 3초 디바운스로 백그라운드에서 올린다 (화면을 막지 않는다)."""
+        if not self.store.settings.get("auto_cloud", True):
+            return {"ok": False, "skipped": "자동 백업이 꺼져 있습니다"}
+        state = self._cloud_state()
+        if not state.get("signed_in") and not (self.store.cloud().get("refresh_token")):
+            return {"ok": False, "skipped": "클라우드 로그인이 필요합니다"}
+        import threading as _threading
+
+        lock = getattr(self, "_cloud_push_lock", None)
+        if lock is None:
+            lock = self._cloud_push_lock = _threading.Lock()
+
+        def _run() -> None:
+            time.sleep(3.0)
+            with lock:
+                try:
+                    self.cloud_auto_sync(reason)
+                except Exception:  # noqa: BLE001
+                    log.debug("cloud backup after save failed", exc_info=True)
+
+        _threading.Thread(target=_run, daemon=True, name="sa-cloud-save").start()
+        return {"ok": True, "queued": True, "reason": reason}
+
+    _queue_cloud_backup._serializable = False  # type: ignore[attr-defined]
 
     def _drop_previous(self, date: str, game: str, weapon: str, names: list[str]) -> None:
         """같은 날 같은 시나리오를 다시 적으면 '수정' — 이전 기록에서 그 항목을 뺀다.
@@ -1157,6 +1197,11 @@ class Api:
                     self._barracks_resolver().lookup(barracks["nickname"])
             except Exception:  # noqa: BLE001
                 log.debug("barracks link resolve skipped", exc_info=True)
+            # v1.0.1 — 닉네임을 늦게 연결해도 65초 자동 최신화가 돌게 한다 (이미 돌고 있으면 무시)
+            try:
+                self.start_match_auto_refresh()
+            except Exception:  # noqa: BLE001
+                log.debug("match auto refresh not started", exc_info=True)
             return {"ok": True, "barracks": barracks, "state": self._build_state(),
                     "calls": client.calls, "cache": client.cache_stats(),
                     "message": f"{barracks['nickname']} 최신화 완료"}
@@ -1225,6 +1270,62 @@ class Api:
             return {"ok": True, "barracks": barracks, "peek": True, "calls": client.calls}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
+
+    def refresh_leaderboard_names(self, force: bool = False) -> dict[str, Any]:
+        """순위표 멤버의 **현재 닉네임**만 ouid 로 다시 확인해 목록·메모를 최신화한다.
+
+        v1.0.1 (#9) — 닉네임을 바꾼 친구가 예전 이름으로 남아 있던 문제.
+        ouid 가 저장된 멤버는 ``user/basic`` 만 읽어(30분 캐시) 이름·클랜을 갱신하고,
+        메모는 바뀐 이름으로 옮긴다.  ouid 가 없으면 닉네임으로 다시 찾는다.
+        """
+        try:
+            members = self._ensure_me(None)
+            if not members:
+                return {"ok": True, "renamed": [], "message": "순위표가 비어 있습니다"}
+            client = self._client(force=force)
+            renamed: list[dict[str, Any]] = []
+            memos = self.store.memos()
+            changed = False
+            for i, member in enumerate(members):
+                ouid = str(member.get("ouid") or "").strip()
+                old = str(member.get("name") or "").strip()
+                if not ouid and old:
+                    try:
+                        ouid = client.resolve_ouid(old)
+                        member["ouid"] = ouid
+                    except nexon.NexonError:
+                        continue
+                if not ouid:
+                    continue
+                try:
+                    basic = client.user_basic(ouid)
+                except nexon.NexonError:
+                    continue
+                now_name = str(basic.get("user_name") or "").strip()
+                if not now_name or now_name == old:
+                    continue
+                member["name"] = now_name
+                member["renamed_from"] = old
+                if basic.get("clan_name"):
+                    member["clan"] = basic.get("clan_name")
+                members[i] = member
+                changed = True
+                renamed.append({"from": old, "to": now_name, "ouid": ouid})
+                if old in memos:
+                    memos[now_name] = memos.pop(old)
+                barr = self.store.barracks_cache().pop(old, None)
+                if isinstance(barr, dict):
+                    barr["nickname"] = now_name
+                    self.store.barracks_cache()[now_name] = barr
+            if changed:
+                self.store.set_leaderboard(members[:20])
+                self.store.save()
+                self._push_state()
+            return {"ok": True, "renamed": renamed, "state": self._build_state(),
+                    "message": ("닉네임 변경 " + ", ".join(f"{r['from']} → {r['to']}" for r in renamed[:3]))
+                               if renamed else "순위표 닉네임이 최신입니다"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, renamed=[])
 
     def fetch_leaderboard(self, nicknames: list[str] | None = None, api_key: str | None = None,
                           depth: int | None = None) -> dict[str, Any]:
@@ -1446,6 +1547,55 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
 
+    def connect_nickname(self, text: str = "") -> dict[str, Any]:
+        """홈에서 한 번에 내 서든 닉네임 연결 — 닉네임 · 병영수첩 주소 · ouid 모두 (#10).
+
+        v1.0.1 — 설정에 들어가지 않고도 홈 팝업에서 연결할 수 있게 한 경로다.
+        병영수첩 주소(…SA)는 역조회로 닉네임을 얻고, 닉네임을 바꾼 직후 역조회가
+        막히면 ID 만 저장해 두고 닉네임 입력을 다시 받는다.
+        """
+        try:
+            raw = str(text or "").strip().strip("\"'")
+            if not raw:
+                raise ValueError("서든 닉네임 또는 병영수첩 주소를 입력해 주세요")
+            sn = barracks_mod.parse_sn(raw)
+            ouid = ""
+            nick = ""
+            note = ""
+            if sn:
+                row = self._barracks_resolver().lookup_sn(sn)
+                nick = str((row or {}).get("nickname") or "").strip()
+                if not nick:
+                    # 역조회가 막혔어도 ID 는 저장 — 다음 버튼이 실제 주소를 연다
+                    self._barracks_resolver().remember_url(raw)
+                    return {"ok": False, "need_nick": True, "sn": sn,
+                            "message": (row or {}).get("reason") or "주소는 저장했어요 · 닉네임을 직접 입력해 주세요"}
+                note = f"병영수첩 주소로 연결 · {sn}"
+            else:
+                target = v140.normalize_target(raw)
+                if v140.is_ouid(target):
+                    ouid = target
+                    nick = self._client(force=True).user_name_of(ouid) or ""
+                    if not nick:
+                        raise ValueError("이 ID 의 닉네임을 읽지 못했습니다 · 닉네임을 직접 입력해 주세요")
+                else:
+                    nick = target
+            nick = nick[:12]
+            check = self.search_user(nick)
+            if not check.get("ok"):
+                return {**check, "need_nick": True}
+            if not check.get("found"):
+                return {"ok": False, "need_nick": True, "not_found": True,
+                        "message": f"'{nick}' 닉네임을 찾지 못했습니다 · 철자를 확인해 주세요"}
+            real = str(((check.get("user") or {}).get("name")) or nick)
+            result = self.fetch_barracks(real)
+            if not result.get("ok"):
+                return {**result, "need_nick": True}
+            message = f"{real} 연결 완료" + (f" · {note}" if note else "")
+            return {**result, "nickname": real, "message": message, "source": (note or "닉네임")}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
     def party_map_plan(self, names: Any = None, refresh: bool = False) -> dict[str, Any]:
         """파티랭크 5인 맵 밴·픽 추천 — 파티원 맵별 전적 합산 (v1.5.0)."""
         try:
@@ -1663,6 +1813,10 @@ class Api:
             out["cloud"] = self.cloud_auto_sync(reason)
         except Exception:  # noqa: BLE001
             out["cloud"] = {"ok": False}
+        try:
+            self._match_stop.set()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             if self._trainer_watch is not None:
                 self._trainer_watch.stop()
@@ -1896,6 +2050,11 @@ class Api:
             })
             self.store.update_settings({"cloud_email": email})
             self.store.save()
+            # 로그인 직후 백업 1회 — 첫 백업이 30분 뒤로 밀리지 않게 (v1.0.1)
+            try:
+                self._queue_cloud_backup("signin")
+            except Exception:  # noqa: BLE001
+                log.debug("first cloud backup after signin failed", exc_info=True)
             return {"ok": True, "session": {k: session.get(k) for k in ("email", "user_id", "expires_in")},
                     "message": "클라우드 로그인 완료" if action == "signin" else "회원가입 완료 · 로그인되었습니다",
                     "state": self._build_state()}
@@ -1930,7 +2089,22 @@ class Api:
                 "app_version": paths.APP_VERSION,
             }
             client = supabase_sync.SupabaseClient(url, key)
-            client.upsert_profile(token, user_id, payload)
+            try:
+                client.upsert_profile(token, user_id, payload)
+            except supabase_sync.SupabaseError as exc:
+                # v1.0.1 — 1시간짜리 액세스 토큰이 만료되면 401 이 나고, 예전에는
+                # 재시작 전까지 계속 실패했다.  한 번 토큰을 새로 받아 재시도한다.
+                if int(getattr(exc, "status", 0) or 0) not in (401, 403):
+                    raise
+                refreshed = supabase_sync.SupabaseClient(url, key).refresh(cloud.get("refresh_token") or "")
+                token = refreshed.get("access_token")
+                if not token:
+                    cloud.update({"access_token": None})
+                    self.store.save()
+                    raise ValueError("클라우드 로그인이 만료되었습니다 · 다시 로그인해 주세요") from exc
+                cloud.update({"access_token": token, "refresh_token": refreshed.get("refresh_token")})
+                client.upsert_profile(token, user_id, payload)
+            aim_error = None
             try:
                 # 18단계 티어 분포 집계 — 점수·티어 한 줄만 올린다 (기록 payload 는 위 테이블에만)
                 profile = scoring.summary(self.store.records(), "kovak", "sniper")
@@ -1938,11 +2112,18 @@ class Api:
                                         (self.store.settings.get("nickname") or "").strip(),
                                         int(profile.get("score") or 0),
                                         str((profile.get("tier") or {}).get("n") or ""))
-            except Exception:  # noqa: BLE001 - 집계 테이블이 없어도 동기화는 성공
-                log.debug("cloud_push · aim_scores upsert skipped", exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - 집계 테이블이 없어도 동기화는 성공
+                # v1.0.1 — 조용히 삼키면 "백업이 안 된다"는 말만 남는다.  이유를 상태에 남긴다.
+                aim_error = str(exc)
+                log.warning("cloud_push · aim_scores upsert skipped · %s", aim_error)
             cloud["last_sync"] = now_iso()
+            cloud["aim_scores_error"] = aim_error
             self.store.save()
-            return {"ok": True, "message": "☁️ 클라우드에 기록을 올렸습니다", "state": self._build_state()}
+            message = "☁️ 클라우드에 기록을 올렸습니다"
+            if aim_error:
+                message += " · 점수 집계표(aim_scores)는 아직 없습니다"
+            return {"ok": True, "message": message, "aim_scores_error": aim_error,
+                    "state": self._build_state()}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
 
@@ -2211,7 +2392,8 @@ class Api:
                 raise ValueError("설정에서 서든 닉네임과 API 키를 먼저 저장해 주세요")
             client = self._client()
             ouid = client.resolve_ouid(nick)
-            rows = client.recent_matches(ouid, 1)
+            # v1.0.1 (#12·#17) — 10분 목록 캐시를 건너뛰고 지금 바로 최신 판을 본다.
+            rows = client.recent_matches(ouid, 1, fresh=True)
             if not rows:
                 raise ValueError("최근 경기를 찾지 못했습니다 · 전적을 한 번 최신화해 주세요")
             latest = rows[0]
@@ -2849,10 +3031,15 @@ class Api:
 
     def _watcher(self) -> toast.MatchWatcher:
         if self._match_watch is None:
+            # v1.0.1 (#13) — 종료 후 5~30초 안에 뜨도록 18초 간격.  다만 사용자가 직접
+            # 넣은 test_ 키(하루 1,000건)라면 45초로 늘려 한도를 지킨다.
+            key = (self.store.settings.get("api_key") or "").strip()
+            interval = 45.0 if key and key.startswith("test_") else toast.POLL_SECONDS
             self._match_watch = toast.MatchWatcher(
                 client_factory=lambda: self._client(),
                 nick_provider=lambda: (self.store.settings.get("nickname") or ""),
                 on_match=self._on_match_finished,
+                interval=interval,
             )
         return self._match_watch
 
@@ -2863,8 +3050,107 @@ class Api:
         if not (settings.get("toast_enabled") and settings.get("toast_auto")):
             return
         self._show_toast(match)
+        # v1.0.1 — 새 판이 감지되면 내 전적(병영수첩 캐시)도 바로 새로 받아 화면을 맞춘다
+        try:
+            __import__("threading").Thread(target=self.refresh_my_matches, kwargs={"force": True},
+                                           daemon=True, name="sa-match-refresh").start()
+        except Exception:  # noqa: BLE001
+            log.debug("post-toast refresh failed", exc_info=True)
 
     _on_match_finished._serializable = False  # type: ignore[attr-defined]
+
+    # ---------------------------------------------------------- 내 전적 자동 최신화 (65초)
+    def refresh_my_matches(self, force: bool = False) -> dict[str, Any]:
+        """1분 5초마다 내 경기 목록을 새로 읽고, 새 판이면 병영수첩까지 다시 받는다.
+
+        v1.0.1 (#12·#17) — 목록은 ``fresh=True`` 로 캐시를 건너뛰고(2콜),
+        새 match_id 가 생겼을 때만 무거운 병영수첩 재구성을 한다.
+        """
+        nick = (self.store.settings.get("nickname") or "").strip()
+        if not nick:
+            return {"ok": False, "skipped": "닉네임이 없습니다"}
+        try:
+            client = self._client()
+            ouid = client.resolve_ouid(nick)
+            rows = client.recent_matches(ouid, 8, fresh=True)
+        except Exception as exc:  # noqa: BLE001
+            self._match_refresh["error"] = str(exc)
+            return {"ok": False, "message": nexon.friendly_error(str(exc))}
+        newest = str((rows[0] or {}).get("match_id") or "") if rows else ""
+        seen = self._match_refresh.get("newest") or self._newest_stored_match(nick)
+        self._match_refresh.update({"at": now_iso(), "newest": newest or seen, "checked": True,
+                                    "error": None})
+        if not newest or (newest == seen and not force):
+            return {"ok": True, "changed": False, "newest": newest}
+        try:
+            barracks = nexon.build_barracks(self._client(force=True), nick, progress=None)
+            self.store.barracks_cache()[barracks["nickname"]] = barracks
+            self.store.add_barracks_snapshot(barracks)
+            self.store.save()
+            self._upsert_member(self._member_from_barracks(barracks))
+            self._match_refresh["newest"] = newest
+            self._match_refresh["updated"] = now_iso()
+            self._push_state()
+            return {"ok": True, "changed": True, "newest": newest,
+                    "message": f"{barracks['nickname']} 전적 최신화 · {barracks['stats'].get('games')}판"}
+        except Exception as exc:  # noqa: BLE001
+            self._match_refresh["error"] = str(exc)
+            return {"ok": False, "message": nexon.friendly_error(str(exc))}
+
+    refresh_my_matches._serializable = False  # type: ignore[attr-defined]
+
+    def _newest_stored_match(self, nick: str) -> str:
+        try:
+            barracks = self.store.barracks_cache().get(nick) or {}
+            matches = barracks.get("matches") or []
+            return str(barracks.get("newest_match") or (matches[0].get("match_id") if matches else "") or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    _newest_stored_match._serializable = False  # type: ignore[attr-defined]
+
+    def _push_state(self) -> None:
+        """백그라운드 갱신 결과를 화면에 밀어 줌 (실패해도 조용히)."""
+        window = self._win
+        if window is None:
+            return
+        try:
+            window.evaluate_js("window.AL && AL.stateReload ? AL.stateReload() : null")
+        except Exception:  # noqa: BLE001
+            log.debug("state push failed", exc_info=True)
+
+    _push_state._serializable = False  # type: ignore[attr-defined]
+
+    def start_match_auto_refresh(self) -> None:
+        """앱 시작 시 1회 + **65초(1분 5초)** 주기 내 전적 최신화 스레드 (#12)."""
+        import threading
+
+        if self._match_thread and self._match_thread.is_alive():
+            return
+        if not (self.store.settings.get("nickname") or "").strip():
+            return
+        key = (self.store.settings.get("api_key") or "").strip()
+        # 사용자 test_ 키(하루 1,000건)면 5분으로 늘려 한도를 지킨다
+        self._match_interval = 300 if key.startswith("test_") else MATCH_REFRESH_SECONDS
+        self._match_stop.clear()
+
+        def loop() -> None:
+            while not self._match_stop.is_set():
+                try:
+                    self.refresh_my_matches()
+                except Exception:  # noqa: BLE001
+                    log.debug("match auto refresh failed", exc_info=True)
+                if self._match_stop.wait(self._match_interval):
+                    return
+
+        self._match_thread = threading.Thread(target=loop, name="sa-match-auto", daemon=True)
+        self._match_thread.start()
+
+    start_match_auto_refresh._serializable = False  # type: ignore[attr-defined]
+
+    def match_refresh_state(self) -> dict[str, Any]:
+        return {"ok": True, "interval": getattr(self, "_match_interval", MATCH_REFRESH_SECONDS),
+                **self._match_refresh}
 
     def _show_toast(self, match: dict[str, Any]) -> dict[str, Any]:
         settings = self._overlay_settings()
@@ -2910,8 +3196,11 @@ class Api:
                                                  seconds=5.6))
         if kind == "party":
             rows = self.store.overlay_cache().get("last_scan") or []
-            payload = {"rows": rows or _sample_party_rows(self._store_nick()), "presets": self.party_presets()["presets"]}
             area = overlay.game_area()
+            payload = self._party_overlay_payload(rows or _sample_party_rows(self._store_nick()))
+            if not (payload.get("plan") or {}).get("picks"):
+                # 미리보기에는 맵 띠 예시를 보여 준다 (실데이터 없음) — 실제 표시에는 쓰지 않는다
+                payload["plan"] = _sample_plan()
             return self._ok(**self._overlay.show("party", payload, rect=overlay.party_overlay_rect(area),
                                                  seconds=10))
         if kind == "scout":
@@ -2963,6 +3252,40 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             return self._err(exc, rows=[])
 
+    def _party_overlay_payload(self, rows: list[dict[str, Any]]) -> dict[str, Any]:
+        """파티 오버레이 한 화면분 — 배지 5칸 + 카드 밑 맵 띠(픽 3·밴 3)."""
+        area = overlay.game_area()
+        rect = overlay.party_overlay_rect(area)
+        names = [str(r.get("name") or "") for r in rows if r.get("name")]
+        plan: dict[str, Any] = {"picks": [], "bans": []}
+        try:
+            entries = self._map_entries_fast(names)
+            full = v150.party_map_plan(entries)
+            if full.get("available"):
+                plan = {"picks": full.get("picks") or [], "bans": full.get("bans") or [],
+                        "headline": full.get("headline") or ""}
+        except Exception:  # noqa: BLE001 - 맵 띠는 보조 정보
+            log.debug("party overlay map plan failed", exc_info=True)
+        return {"rows": rows, "presets": self.party_presets()["presets"],
+                "plan": plan, "me": self._store_nick(),
+                "layout": overlay.party_layout(rect, area)}
+
+    def _party_autofill(self, rows: list[dict[str, Any]]) -> None:
+        """v1.0.1 (#11) — F8 로 읽은 5인을 전술 도구 파티랭크 맵 밴·픽에 바로 채운다."""
+        names = [str(r.get("name") or "").strip() for r in rows if r.get("name")]
+        if not names:
+            return
+        window = self._win
+        if window is None:
+            return
+        try:
+            window.evaluate_js("window.AL && AL.partyAutoFill ? AL.partyAutoFill(%s) : null"
+                              % json.dumps(names, ensure_ascii=False))
+        except Exception:  # noqa: BLE001 - 화면이 없으면 조용히
+            log.debug("party autofill push failed", exc_info=True)
+
+    _party_autofill._serializable = False  # type: ignore[attr-defined]
+
     def overlay_party_show(self) -> dict[str, Any]:
         settings = self._overlay_settings()
         if not settings.get("enabled"):
@@ -2985,11 +3308,11 @@ class Api:
                 log.debug("party fallback failed", exc_info=True)
         if not rows:
             return {**scan, "message": scan.get("message") or "대기실 닉네임을 읽지 못했습니다"}
-        area = overlay.game_area()
-        payload = {"rows": rows, "presets": self.party_presets()["presets"],
-                   "mapban": scan.get("mapban"), "me": self._store_nick()}
-        shown = self._overlay.show("party", payload, rect=overlay.party_overlay_rect(area),
+        payload = self._party_overlay_payload(rows)
+        shown = self._overlay.show("party", payload, rect=overlay.party_overlay_rect(overlay.game_area()),
                                    seconds=settings.get("party_seconds"))
+        # 5인을 읽었으면 앱 전술 도구 슬롯에도 채우고 분석까지 돌린다 (#11)
+        self._party_autofill(rows)
         return {**scan, **shown, "kind": "party"}
 
     def party_presets(self) -> dict[str, Any]:
@@ -3204,6 +3527,16 @@ def _sample_party_rows(me: str) -> list[dict[str, Any]]:
     names = [me or "게스트", "시티캣", "프로방스", "제5보급", "크로스포트"]
     return [{"slot": i, "name": name, "status": "ok", "score": 1.0}
             for i, name in enumerate(names[:5])]
+
+
+def _sample_plan() -> dict[str, Any]:
+    """미리보기용 맵 띠 (실제 파티 전적이 없을 때만).  실제 표시 경로에는 쓰지 않는다."""
+    names = ["제3보급창고", "프로방스", "시티캣", "크로스포트", "공항", "빅보급창고"]
+    picks = [{"map": n, "expected": e, "games": 9 - i, "image": v150.map_image(n)}
+             for i, (n, e) in enumerate(zip(names[:3], (61.0, 57.0, 54.0)))]
+    bans = [{"map": n, "expected": e, "games": 8 - i, "image": v150.map_image(n)}
+            for i, (n, e) in enumerate(zip(names[3:], (43.0, 41.0, 39.0)))]
+    return {"picks": picks, "bans": bans, "headline": "미리보기"}
 
 
 def _sample_scout_rows() -> list[dict[str, Any]]:

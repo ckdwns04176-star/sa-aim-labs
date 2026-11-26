@@ -247,7 +247,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import webview  # imported late so --serve / --drs-apply work without a GUI
 
-    from app.api import Api
+    from app.api import Api, MATCH_REFRESH_SECONDS
 
     api = Api()
 
@@ -364,6 +364,12 @@ def main(argv: list[str] | None = None) -> int:
         api.start_cloud_auto()
     except Exception:  # noqa: BLE001
         log.debug("cloud auto backup could not start", exc_info=True)
+    # ── v1.0.1 · 내 전적 65초 자동 최신화 (#12) ──
+    try:
+        api.start_match_auto_refresh()
+        log.info("match auto refresh armed · interval=%ss", MATCH_REFRESH_SECONDS)
+    except Exception:  # noqa: BLE001 - 감시 실패가 앱 시작을 막지 않는다
+        log.debug("match auto refresh could not start", exc_info=True)
 
     # ── v1.0.0 · 인게임 오버레이 단축키(F8/F9) · 경기 종료 토스트 감시 ──
     try:

@@ -104,7 +104,7 @@ def backend() -> None:
     from app import drs, nvidia, paths, scoring, winutil
     import shutil
 
-    check("APP_VERSION 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
+    check("APP_VERSION 1.0.1", paths.APP_VERSION == "1.0.1", paths.APP_VERSION)
 
     # ---- 1. 창: 크기만 고정, 위치는 자유 + 드래그 중 감시 pause
     plan = winutil.window_fix_plan((300, 900, 1600, 900), work=(0, 0, 1920, 1040))
@@ -394,8 +394,10 @@ def ui_checks() -> None:
 
         # ---------- 11 · 23. 8개 메뉴 · 설정 팝업
         nav = page.evaluate("""() => [...document.querySelectorAll('.nav-item')].map(b => b.dataset.screen)""")
-        expect = ["home", "dashboard", "recs", "records", "barracks", "maps", "leaderboard", "tiers", "utils"]
-        check("사이드바 9개 메뉴로 세분화", nav == expect, str(nav))
+        # v1.0.1 (#5) — 홈 메뉴는 사이드바에서 빠지고 맨 위 로고가 홈 역할을 한다
+        expect = ["dashboard", "recs", "records", "barracks", "maps", "leaderboard", "tiers", "utils"]
+        check("사이드바 8개 메뉴 (홈 제거 · 로고가 홈)", nav == expect and page.evaluate(
+            "() => !!document.querySelector('#rail-home')"), str(nav))
         check("설정은 메뉴에서 빠짐", "settings" not in nav, str(nav))
         page.click("#settings-btn")
         page.wait_for_timeout(450)
@@ -408,7 +410,8 @@ def ui_checks() -> None:
             trayToggle: !!document.querySelector('[data-switch="tray_background"]')
         })""")
         page.screenshot(path=str(SHOTS / "v130-settings.png"))
-        check("프로필/톱니바퀴 → 설정 팝업", cfg["open"] and cfg["key"] and cfg["nick"], str(cfg["open"]))
+        # v1.0.1 — 프록시 기본 연결로 API 키 입력칸은 없다 (닉네임·클라우드만)
+        check("프로필/톱니바퀴 → 설정 팝업", cfg["open"] and cfg["nick"] and cfg["cloud"], str(cfg))
         check("설정 팝업에 API 키·닉네임·클라우드·코박스 폴더", cfg["cloud"] and cfg["stats"], str(cfg))
         check("설정 팝업에 점수 전체 초기화", cfg["reset"], str(cfg["reset"]))
         check("'닫으면 트레이로 숨기기' 옵션 없음", cfg["trayToggle"] is False, str(cfg["trayToggle"]))

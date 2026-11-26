@@ -64,14 +64,27 @@ def similarity(raw: str, known: str) -> float:
     return min(1.0, ratio)
 
 
-def best_candidate(raw: str, known: Iterable[str], *, minimum: float = 0.62) -> tuple[str, float]:
-    """저장된 이름 중 가장 비슷한 하나 (없으면 원문, 0)."""
+def best_candidate(raw: str, known: Iterable[str], *, minimum: float = 0.78) -> tuple[str, float]:
+    """저장된 이름 중 가장 비슷한 하나 (없으면 원문, 0).
+
+    v1.0.1 — 임계값 0.62 는 너무 관대해서 OCR 이 깨진 이름을 **전혀 다른 사람**으로
+    바꿔 버렸다(사용자 제보 #2).  0.78 로 올리고, 길이 차가 2글자 넘거나
+    앞 두 글자가 다르면 후보로 쓰지 않는다.
+    """
     if isinstance(known, str):
         known = [known]
+    left = nick_key(raw)
+    if len(left) < 2:
+        return raw, 0.0
     best, score = "", 0.0
     for name in known:
         candidate = str(name or "").strip()
         if not candidate:
+            continue
+        right = nick_key(candidate)
+        if not right:
+            continue
+        if left[:2] != right[:2] and abs(len(left) - len(right)) > 1:
             continue
         value = similarity(raw, candidate)
         if value > score:
@@ -123,8 +136,16 @@ def team_of(rows: Sequence[dict[str, Any]], me: str) -> dict[str, Any]:
 
 def validate_names(client: nexon.NexonClient, names: Sequence[str], known: Iterable[str],
                    *, workers: int = 5) -> list[dict[str, Any]]:
-    """OCR 이름 5개를 API 로 검증하고, 실패하면 저장된 이름으로 보정한다."""
+    """OCR 이름 5개를 API 로 검증하고, 실패하면 저장된 이름으로 보정한다.
+
+    v1.0.1 — "전혀 다른 사람이 뜨는" 오매칭 방지:
+     · OCR 원문이 API 에 없을 때만 보정 후보를 쓰고, 그 후보도 유사도가
+       ``CORRECT_MIN`` 이상일 때만 인정한다.
+     · API 가 돌려준 현재 닉네임이 OCR 원문과 너무 다르면(오타 수준이 아님)
+       그 행은 ``unknown`` 으로 남기고 이름을 지어내지 않는다.
+    """
     known_list = [str(n).strip() for n in known if str(n or "").strip()]
+    CORRECT_MIN = 0.80
 
     def _one(entry: tuple[int, str]) -> dict[str, Any]:
         slot, raw = entry
@@ -134,16 +155,22 @@ def validate_names(client: nexon.NexonClient, names: Sequence[str], known: Itera
         for candidate, how in ((raw, "ocr"), (corrected, "corrected")):
             if not candidate:
                 continue
+            if how == "corrected" and score < CORRECT_MIN:
+                continue
             try:
                 ouid = client.resolve_ouid(candidate)
                 basic = client.user_basic(ouid)
                 name = str(basic.get("user_name") or candidate)
-                status = "ok" if how == "ocr" else "corrected"
-                return {"slot": slot, "raw": raw, "name": name, "ouid": ouid,
-                        "status": status, "score": round(score, 2),
-                        "clan": basic.get("clan_name") or ""}
             except nexon.NexonError:
                 continue
+            # API 닉네임이 OCR 원문과 완전히 딴 사람이면 표시하지 않는다
+            if similarity(name, raw) < 0.55 and how == "ocr":
+                return {"slot": slot, "raw": raw, "name": raw, "ouid": None,
+                        "status": "unknown", "score": round(score, 2)}
+            status = "ok" if how == "ocr" else "corrected"
+            return {"slot": slot, "raw": raw, "name": name, "ouid": ouid,
+                    "status": status, "score": round(score, 2),
+                    "clan": basic.get("clan_name") or ""}
         return {"slot": slot, "raw": raw, "name": corrected or raw, "ouid": None,
                 "status": "unknown", "score": round(score, 2)}
 

@@ -336,7 +336,7 @@ def backend_checks() -> None:
     check("솔로/파티 격차 코칭", bool(_gap_hit), str([t["title"] for t in gap]))
 
     # ---- 12. 앱 버전 · API 노출
-    check("APP_VERSION 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
+    check("APP_VERSION 1.0.1", paths.APP_VERSION == "1.0.1", paths.APP_VERSION)
     import main as app_main
 
     exposed = app_main._public_names(api)
@@ -573,7 +573,9 @@ def ui_checks() -> None:
             personal: !!document.getElementById('personal-plo-btn'),
             report: !!document.getElementById('report-btn')}))()""")
         check("대시보드 추천 카드는 2버튼만", not any(dash["btns"][:2]), str(dash["btns"]))
-        check("워밍업·코박스·플레이리스트는 라이브러리로 이동", moved["warm"] and moved["kovak"] and moved["plo"] and moved["personal"], str(moved))
+        # v1.0.1 — 워밍업·플레이리스트 버튼은 라이브러리에서 제거, 코박스·맞춤 .plo 는 유지
+        check("워밍업·플레이리스트 제거 · 코박스·맞춤 .plo 유지", (not moved["warm"]) and (not moved["plo"])
+              and moved["kovak"] and moved["personal"], str(moved))
         page.click(".nav-item[data-screen='dashboard']")
         page.wait_for_timeout(250)
         check("새 버전 배너 표시", dash["updateShown"] and "새 버전" in dash["updateText"], str(dash["updateText"]))
@@ -628,20 +630,13 @@ def ui_checks() -> None:
         page.click("#compare-mask [data-close]")
         page.wait_for_timeout(200)
 
-        # ---------- 5분 워밍업 모달 (v1.4.0 — 시나리오 라이브러리로 이동)
+        # ---------- v1.0.1 — 워밍업 버튼은 라이브러리 헤더에서 제거됐다 (모달 자체는 남아 있음)
         page.click(".nav-item[data-screen='recs']")
         page.wait_for_timeout(250)
-        page.click("#warmup-btn-2")
-        page.wait_for_timeout(600)
-        warm = page.evaluate("""() => {
-            const m = document.getElementById('warmup-mask');
-            return {shown: m.classList.contains('show'), rows: document.querySelectorAll('#warmup-list .warmup-row').length,
-                    sub: (document.getElementById('warmup-sub')||{}).textContent};
-        }""")
-        page.screenshot(path=str(SHOTS / "v120-warmup.png"))
-        check("워밍업 모달 3종", warm["shown"] and warm["rows"] == 3, str(warm))
-        page.click("#warmup-mask [data-close]")
-        page.wait_for_timeout(200)
+        warm = page.evaluate("""() => ({btn: !!document.getElementById('warmup-btn-2'),
+            modal: !!document.getElementById('warmup-mask')})""")
+        check("워밍업 버튼 제거 · 모달은 잔존", (not warm["btn"]) and warm["modal"], str(warm))
+        page.wait_for_timeout(120)
 
         # ---------- 코박스 점수 자동 인식 → 저장
         page.evaluate("() => { window.__CALLS = []; }")
@@ -752,8 +747,10 @@ def ui_checks() -> None:
         page.wait_for_timeout(400)
         recs = page.evaluate("""() => ({warm: !!document.getElementById('warmup-btn-2'),
             imp: !!document.getElementById('kovak-import-head'),
-            head: !!document.getElementById('score-input-btn')})""")
-        check("추천 5종 화면에 워밍업·코박스 버튼", recs["warm"] and recs["imp"] and recs["head"], str(recs))
+            head: !!document.getElementById('score-input-btn'),
+            plo: !!document.getElementById('personal-plo-btn')})""")
+        check("추천 5종 화면에 코박스·맞춤 .plo 버튼 (워밍업·5칸 입력 제거)", (not recs["warm"]) and (not recs["head"])
+              and recs["imp"] and recs["plo"], str(recs))
         page.screenshot(path=str(SHOTS / "v120-recs.png"))
 
         # ---------- 640px 창(최소 크기) 에서도 겹치지 않는지

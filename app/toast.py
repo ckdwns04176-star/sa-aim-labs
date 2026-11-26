@@ -1,7 +1,9 @@
 """한 판 종료 미니 결과 토스트 — 우하단 기본 · 5초 뒤 페이드아웃.
 
-경기 감시는 내 최근 전적 목록(캐시 우선)을 45초 간격으로 읽어 **새 match_id**
-가 생겼을 때만 상세를 받아 문구를 만든다.  토스트 자체는 ``overlay`` 모듈의
+경기 감시는 내 최근 전적 목록을 **18초 간격**으로 읽어 **새 match_id** 가 생겼을
+때만 상세를 받아 문구를 만든다.  v1.0.1 — 예전 45초 폴링 + 10분 목록 캐시 때문에
+토스트가 다음 판 도중에 뜨던 문제를 고쳐, 경기 종료 후 5~30초 안에 뜨게 했다
+(목록은 fresh 로 조회해 캐시를 건너뛴다).  토스트 자체는 ``overlay`` 모듈의
 투명 창이 그린다.  감시는 설정에서 끌 수 있고, 꺼져 있으면 아무 것도 하지
 않는다(수동 미리보기는 항상 가능).
 """
@@ -16,15 +18,19 @@ from . import nexon
 
 log = logging.getLogger("toast")
 
-POLL_SECONDS = 45.0
+POLL_SECONDS = 18.0
 
 
-def last_match(client: nexon.NexonClient, nick: str) -> dict[str, Any] | None:
-    """가장 최근 경기 1건 → 토스트 재료 (맵 · 승패 · K/D · 딜량 · 연승)."""
+def last_match(client: nexon.NexonClient, nick: str, *, fresh: bool = True) -> dict[str, Any] | None:
+    """가장 최근 경기 1건 → 토스트 재료 (맵 · 승패 · K/D · 딜량 · 연승).
+
+    ``fresh=True`` 면 경기 목록 캐시를 건너뛰고 서버에서 다시 받는다 — 방금 끝난
+    판을 즉시 보기 위해서다(경기 상세는 match_id 단위 캐시라 다시 받지 않는다).
+    """
     if not nick:
         return None
     ouid = client.resolve_ouid(nick)
-    rows = client.recent_matches(ouid, 8)
+    rows = client.recent_matches(ouid, 8, fresh=fresh)
     if not rows:
         return None
     latest = rows[0]
@@ -62,10 +68,12 @@ class MatchWatcher:
 
     def __init__(self, client_factory: Callable[[], nexon.NexonClient],
                  nick_provider: Callable[[], str],
-                 on_match: Callable[[dict[str, Any]], None]):
+                 on_match: Callable[[dict[str, Any]], None],
+                 interval: float = POLL_SECONDS):
         self._client_factory = client_factory
         self._nick = nick_provider
         self._on_match = on_match
+        self._interval = max(8.0, float(interval or POLL_SECONDS))
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_seen: str | None = None
@@ -90,12 +98,12 @@ class MatchWatcher:
         self._last_seen = str(match_id or "") or None
 
     def state(self) -> dict[str, Any]:
-        return {"enabled": self.enabled, "last_seen": self._last_seen,
+        return {"enabled": self.enabled, "last_seen": self._last_seen, "interval": self._interval,
                 "running": bool(self._thread and self._thread.is_alive()),
                 "error": self.last_error}
 
     def _loop(self) -> None:
-        while not self._stop.wait(POLL_SECONDS):
+        while not self._stop.wait(self._interval):
             if not self.enabled:
                 continue
             nick = (self._nick() or "").strip()

@@ -30,7 +30,7 @@ def main(with_ui: bool = False) -> int:
     from app.store import Store
 
     # ── 0. 버전 ───────────────────────────────────────────────
-    check("APP_VERSION = 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
+    check("APP_VERSION = 1.0.1", paths.APP_VERSION == "1.0.1", paths.APP_VERSION)
     check("QHD 자동 배율 115%", overlay is not None and __import__("app.v150", fromlist=["v150"]).auto_ui_scale(2560, 1440) == 115)
     check("FHD 자동 배율 100%", __import__("app.v150", fromlist=["v150"]).auto_ui_scale(1920, 1080) == 100)
 
@@ -158,7 +158,8 @@ def main(with_ui: bool = False) -> int:
     names = overlay.mapban_name_rects(game)
     check("맵 이름 줄이 카드 안쪽", names[0]["y"] > cards[0]["y"] and names[0]["y"] + names[0]["h"] <= cards[0]["y"] + cards[0]["h"] + 1)
     party = overlay.party_card_rects(game)
-    check("대기실 5칸", len(party) == 5 and party[0]["w"] == 264, str(party[0]))
+    # v1.0.1 — 2048×945 스크린샷의 게임 클라이언트(폭 1682) 기준 재보정: 1920 에서 x 76 · 폭 320
+    check("대기실 5칸", len(party) == 5 and party[0]["w"] == 320 and party[0]["x"] == 76, str(party[0]))
     toast_rect = overlay.toast_rect((0, 0, 1920, 1080), "br")
     check("토스트 우하단", toast_rect["x"] + toast_rect["w"] == 1920 - 18 and
           toast_rect["y"] + toast_rect["h"] == 1080 - 18, str(toast_rect))

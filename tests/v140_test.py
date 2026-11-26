@@ -276,7 +276,7 @@ def mock_js(state: dict) -> str:
 def backend_checks() -> None:
     from app import paths, scoring, tilt, updates, v140
 
-    check("APP_VERSION 1.0.0", paths.APP_VERSION == "1.0.0", paths.APP_VERSION)
+    check("APP_VERSION 1.0.1", paths.APP_VERSION == "1.0.1", paths.APP_VERSION)
 
     # 위협도: 티어가 압도적이어야 한다 (실버 60% < 불레전드 50%)
     silver = v140.threat_score(1300, 60, 1200, win=55, streak=3)
@@ -531,10 +531,11 @@ def ui() -> None:
             note: !!document.getElementById('rec-grid-note'),
             truncated: [...document.querySelectorAll('.lib-name')].filter(e => e.scrollWidth > e.clientWidth + 1 && e.getBoundingClientRect().height < 20).length,
             cards: document.querySelectorAll('#rec-grid .lib-row').length,
-            btnCount: ['warmup-btn-2','kovak-import-head','rec-more-2','plo-btn','personal-plo-btn','score-input-btn','run-all-btn'].filter(id => !!document.getElementById(id)).length})""")
+            btnCount: ['kovak-import-head','personal-plo-btn','run-all-btn'].filter(id => !!document.getElementById(id)).length,
+            removed: ['warmup-btn-2','plo-btn','score-input-btn'].every(id => !document.getElementById(id))})""")
         check("라이브러리 PB 글자 제거", not lib["pb"], str(lib["pb"]))
         check("라이브러리 안내 문구 삭제", not lib["note"], "")
-        check("라이브러리 상단 버튼 6개 (더 연습하기 제거 · v1.0.0)", lib["btnCount"] == 6, str(lib["btnCount"]))
+        check("라이브러리 상단 버튼 3개 (워밍업·플레이리스트·5칸 입력 제거 · v1.0.1)", lib["btnCount"] == 3 and lib["removed"], str(lib))
         check("라이브러리 행 렌더", lib["cards"] > 20, str(lib["cards"]))
         page.screenshot(path=str(SHOTS / "v140-library.png"))
 
@@ -685,7 +686,7 @@ def ui() -> None:
 
         # 13. 오늘 훈련 시작 → 바로 실행하지 않고 목록 팝업
         page.evaluate("() => { window.__CALLS = []; }")
-        page.click('.nav-item[data-screen="home"]')
+        page.click('#rail-home')   # v1.0.1 — 홈은 사이드바 로고
         page.wait_for_timeout(300)
         page.click("#home-start")
         page.wait_for_timeout(400)

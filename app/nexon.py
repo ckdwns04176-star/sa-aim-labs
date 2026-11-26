@@ -39,6 +39,9 @@ MATCH_MODE = "폭파미션"
 MATCH_TYPES = ("랭크전 솔로", "랭크전 파티")
 RECENT_N = 100
 MATCH_ROWS = 100   # 맵별 매치 히스토리 팝업까지 쓰려면 최근 100판이 필요하다
+# v1.0.1 — 경기 목록 캐시는 2분.  예전 10분은 "방금 판"·토스트가 다음 판에야
+# 뜨는 원인이었다.  즉시 최신이 필요한 호출은 fresh=True 로 캐시를 건너뛴다.
+MATCH_LIST_TTL = 120
 MAP_MIN = 5
 DETAIL_DEPTH = 0   # 순위표는 API 상세 호출 0건 (디스크 캐시에 있는 상세만 사용)
 
@@ -306,17 +309,34 @@ class NexonClient:
         return self._cached(self._cache_api, f"recent:{ouid}", "/suddenattack/v1/user/recent-info",
                             {"ouid": ouid}, ttl=900)
 
-    def matches(self, ouid: str, match_type: str, ttl: int = 600) -> list[dict[str, Any]]:
-        body = self._cached(self._cache_api, f"match:{ouid}:{match_type}", "/suddenattack/v1/match",
-                            {"ouid": ouid, "match_mode": MATCH_MODE, "match_type": match_type}, ttl=ttl)
-        rows = body.get("match") or []
+    def matches(self, ouid: str, match_type: str, ttl: int = MATCH_LIST_TTL,
+                fresh: bool = False) -> list[dict[str, Any]]:
+        """경기 목록.  ``fresh=True`` 면 디스크 캐시를 읽지 않고 서버에서 다시 받는다.
+
+        v1.0.1 — 10분 캐시를 그대로 쓰면 "방금 판"·경기 종료 토스트가 다음 판
+        도중에야 뜬다.  즉시 최신이 필요한 곳(토스트·방금 판·65초 자동 최신화)은
+        fresh 로 호출하고, 받은 값은 그대로 캐시에 덮어써 다른 화면도 같이 최신이 된다.
+        """
+        key = f"match:{ouid}:{match_type}"
+        params = {"ouid": ouid, "match_mode": MATCH_MODE, "match_type": match_type}
+        if fresh:
+            try:
+                body = self._request("/suddenattack/v1/match", params)
+            except NexonError:
+                body = self._cache_api.get(key) or {}
+            else:
+                self._cache_api.put(key, body, ttl)
+        else:
+            body = self._cached(self._cache_api, key, "/suddenattack/v1/match", params, ttl=ttl)
+        rows = (body or {}).get("match") or []
         return rows if isinstance(rows, list) else []
 
-    def recent_matches(self, ouid: str, limit: int = RECENT_N) -> list[dict[str, Any]]:
+    def recent_matches(self, ouid: str, limit: int = RECENT_N,
+                       fresh: bool = False) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         for mtype in MATCH_TYPES:
             try:
-                rows.extend(self.matches(ouid, mtype))
+                rows.extend(self.matches(ouid, mtype, fresh=fresh))
             except NexonError:
                 continue
         rows.sort(key=match_time, reverse=True)
@@ -472,6 +492,7 @@ def _match_rows(rows: Sequence[dict[str, Any]], details: Sequence[dict[str, Any]
         except ValueError:
             date_txt, time_txt = "-", "-"
         out.append({
+            "match_id": str(m.get("match_id") or ""),
             "date": date_txt, "time": time_txt,
             "type": "솔로" if "솔로" in str(m.get("match_type")) else "파티",
             "mode": str(m.get("match_mode") or ""),
@@ -558,6 +579,8 @@ def build_barracks(client: NexonClient, nickname: str, progress: Progress | None
         "maps": agg["maps"],
         "weak": agg["weak"],
         "matches": _match_rows(rows, details, nickname),
+        # v1.0.1 — 65초 자동 최신화가 "새 판이 생겼는지"를 비교하는 기준값
+        "newest_match": str((rows[0] or {}).get("match_id") or "") if rows else "",
         "updated_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     # 🧭 최근 100판 플레이 코칭 — 이미 받은 지표만으로 계산한다(추가 API 0건)

@@ -27,6 +27,84 @@
   AL.ready = false;
   AL.state = null;
 
+  /* v1.0.1 (#7) — 단축키 선택지: F1~F12 + Insert/Delete/Home/End/PgUp/PgDn + 수식키 조합 */
+  const HOTKEY_OPTIONS = ['F6', 'F7', 'F8', 'F9', 'F10', 'F11', 'F12',
+    'Insert', 'Delete', 'Home', 'End', 'PgUp', 'PgDn',
+    'Ctrl+F8', 'Ctrl+F9', 'Alt+F8', 'Alt+F9',
+    'Ctrl+Insert', 'Ctrl+Delete', 'Shift+Insert', 'Shift+Delete',
+    'Alt+Insert', 'Alt+Delete', 'None'];
+
+  /* ------------------------------------------------------------------
+     v1.0.1 (#10) — 로그인 상태인데 서든 닉네임이 없으면 홈에서 바로 연결 팝업
+     · 닉네임 / 병영수첩 주소(…SA) / ouid 모두 connect_nickname 이 처리한다
+     ------------------------------------------------------------------ */
+  function openNickLink(auto) {
+    const mask = $('#nick-mask');
+    if (!mask) return;
+    if (auto) AL.nickAutoShown = true;
+    mask.classList.add('show');
+    const input = $('#nick-input');
+    if (input) setTimeout(() => input.focus(), 60);
+    const box = $('#nick-result');
+    if (box) { box.hidden = true; box.textContent = ''; }
+  }
+
+  function closeNickLink(later) {
+    const mask = $('#nick-mask');
+    if (mask) mask.classList.remove('show');
+    if (later) AL.nickLater = true;
+  }
+
+  async function submitNickLink() {
+    const input = $('#nick-input');
+    const value = input ? String(input.value || '').trim() : '';
+    const box = $('#nick-result');
+    if (!value) { toast('닉네임 또는 병영수첩 주소를 입력해 주세요', false); return; }
+    if (!AL.real) { toast('앱(.exe)에서 연결할 수 있습니다', false); return; }
+    if (box) { box.hidden = false; box.textContent = '조회 중…'; }
+    busy(true, '닉네임을 확인하고 전적을 불러오는 중…');
+    const res = await call('connect_nickname', value);
+    busy(false);
+    if (!res || !res.ok) {
+      if (box) box.textContent = (res && res.message) || '연결하지 못했습니다';
+      toast((res && res.message) || '연결하지 못했습니다', false, 5200);
+      return;
+    }
+    if (res.state) applyState(res.state);
+    if (box) box.textContent = res.message || `${res.nickname || value} 연결 완료`;
+    toast(`🪖 ${res.message || (res.nickname || value) + ' 연결 완료'}`, true, 5200);
+    setTimeout(() => closeNickLink(false), 700);
+  }
+
+  AL.openNickLink = openNickLink;
+  AL.closeNickLink = closeNickLink;
+
+  /* v1.0.1 — 65초 자동 최신화 등 백그라운드 갱신 후 화면 다시 그리기 */
+  async function reloadState() {
+    if (!AL.real) return null;
+    const res = await call('get_state');
+    if (res && res.state) { applyState(res.state); }
+    return res && res.state;
+  }
+  AL.stateReload = reloadState;
+
+  /* v1.0.1 (#11) — F8 로 읽은 5인을 전술 도구 파티랭크 슬롯에 채우고 바로 분석 */
+  AL.partyAutoFill = async function (names) {
+    const list = (Array.isArray(names) ? names : []).map((n) => String(n || '').trim()).filter(Boolean).slice(0, 5);
+    if (!list.length) return;
+    const input = $('#party-names');
+    if (input) input.value = list.join(', ');
+    AL.partyAutoNames = list;
+    /* 같은 5인을 2분 안에 다시 읽었으면 또 돌리지 않는다 (API 한도 보호) */
+    const key = list.join('|').toLowerCase();
+    const now = Date.now();
+    if (AL.partyAutoKey === key && AL.partyAutoAt && now - AL.partyAutoAt < 120000) return;
+    AL.partyAutoKey = key;
+    AL.partyAutoAt = now;
+    if (typeof runPartyMap === 'function') await runPartyMap(true);
+    toast(`파티 ${list.length}명 자동 입력 · 맵 밴·픽 분석 완료`, true, 4200);
+  };
+
   const hasApi = (name) => !!(window.pywebview && window.pywebview.api && typeof window.pywebview.api[name] === 'function');
 
   /* ------------------------------------------------------------------ 스타일 */
@@ -34,6 +112,8 @@
   style.textContent = [
     '.field input.inp{width:100%;outline:none;font-family:var(--num);font-size:11px;color:#CBD8E8}',
     '.field input.inp::placeholder{color:transparent}',
+    /* v1.0.1 — 닉네임 연결 팝업은 라벨 외에 예시가 보여야 한다 */
+    '#nick-input::placeholder{color:#6E7F95;opacity:1;font-family:Pretendard,sans-serif;font-size:10px;text-align:left}',
     '.field input.inp:focus{border-color:rgba(56,189,248,.55);box-shadow:0 0 0 2px rgba(56,189,248,.10)}',
     '.set-card{overflow:auto;min-height:0;gap:7px;padding:11px 13px}',
     '.set-card .rowline{padding:6px 0}',
@@ -226,6 +306,20 @@
   AL.recordScore = recordScore;
 
   let digestShown = false;
+  /* v1.0.1 (#10) — 로그인(앱) 상태인데 내 서든 닉네임이 없으면 홈에서 바로 연결 팝업 */
+  function maybeShowNickLink(st) {
+    if (!AL.real || !st) return;
+    if (AL.nickLater || AL.nickAutoShown) return;
+    if (AL.peek) return;
+    const nick = String(((st.nexon || {}).nickname) || ((st.settings || {}).nickname) || '').trim();
+    const hasBarracks = !!(st.barracks && (st.barracks.nickname || (st.barracks.basic || {}).name));
+    if (nick || hasBarracks) return;
+    if ((st.onboarding || {}).needed) return;   // 첫 실행 온보딩이 먼저다
+    const modalOpen = $$('.mask.show').some((m) => m.id !== 'nick-mask');
+    if (modalOpen) return;
+    setTimeout(() => { if (!AL.nickLater) openNickLink(true); }, 500);
+  }
+
   function maybeShowDigest() {
     const d = AL.state && AL.state.digest;
     if (!d || !d.show || digestShown) return;
@@ -270,7 +364,14 @@
     }
 
     const pillText = $('#tb-pill-text');
-    if (pillText) pillText.textContent = (st.nexon || {}).connected ? 'NEXON API 연결됨' : 'API 키 입력 필요';
+    if (pillText) {
+      /* v1.0.1 (#8) — 내장 프록시로 붙어 있으면 "API 키 입력 필요"를 띄우지 않는다 */
+      const nx = st.nexon || {};
+      const viaProxy = nx.endpoint === 'proxy' || (!nx.connected && !!nx.proxy);
+      pillText.textContent = nx.connected ? 'NEXON API 연결됨'
+        : viaProxy ? 'NEXON API 연결됨 · 프록시'
+        : 'NEXON API 연결 안 됨';
+    }
 
     const sync = $('#sync-line');
     if (sync) {
@@ -512,6 +613,7 @@
     if (typeof drawHome === 'function') drawHome();
     maybeShowOnboarding(st);
     maybeShowUpdateGate(st);
+    maybeShowNickLink(st);
     startTiltPoll();
   }
   AL.applyState = applyState;
@@ -845,8 +947,7 @@
     /* ---------- 카드 1.5 · 인게임 오버레이 (v1.0.0) ---------- */
     const ov = $('#set-overlay');
     if (ov) {
-      const ovSet = ((st && st.overlay) || {}).settings || {};
-      const hot = ((st && st.overlay) || {}).hotkeys || {};
+      const ovSet = ((st && st.overlay) || {}).settings || {};      const hot = ((st && st.overlay) || {}).hotkeys || {};
       const presets = (st && st.party_presets) || [];
       const reg = (hot.registered || []);
       const failed = hot.failed || {};
@@ -860,9 +961,9 @@
         ${switchRow('overlay_enabled', '오버레이 사용', 'F8 대기실·맵 밴 · F9 상대 분석 (게임 화면 위에 클릭 통과로 표시)', ovSet.enabled !== false)}
         <div class="set-row2" style="margin-top:4px">
           <div class="field"><label>대기실 · 맵 밴 단축키</label>
-            <select id="set-ov-hot1" class="inp">${['F6','F7','F8','F9','F10','F11','F12','Ctrl+F8','Ctrl+F9','Alt+F8','Alt+F9','None'].map(k=>`<option value="${k}" ${ovSet.hotkey_lobby===k?'selected':''}>${k}</option>`).join('')}</select></div>
+            <select id="set-ov-hot1" class="inp">${HOTKEY_OPTIONS.map(k=>`<option value="${k}" ${ovSet.hotkey_lobby===k?'selected':''}>${k}</option>`).join('')}</select></div>
           <div class="field"><label>상대 분석 단축키</label>
-            <select id="set-ov-hot2" class="inp">${['F6','F7','F8','F9','F10','F11','F12','Ctrl+F8','Ctrl+F9','Alt+F8','Alt+F9','None'].map(k=>`<option value="${k}" ${ovSet.hotkey_scout===k?'selected':''}>${k}</option>`).join('')}</select></div>
+            <select id="set-ov-hot2" class="inp">${HOTKEY_OPTIONS.map(k=>`<option value="${k}" ${ovSet.hotkey_scout===k?'selected':''}>${k}</option>`).join('')}</select></div>
         </div>
         <div class="set-row2">
           <div class="field"><label>맵 밴 자동 종료 (초)</label>
@@ -871,7 +972,7 @@
             <input id="set-ov-psec" class="inp" type="number" min="3" max="40" value="${Number(ovSet.party_seconds||15)}"></div>
         </div>
         ${switchRow('toast_enabled', '경기 종료 결과 토스트', '한 판이 끝나면 우하단에 승패·K/D·딜량·연승을 5초 표시', ovSet.toast_enabled !== false)}
-        ${switchRow('toast_auto', '새 경기 자동 감지', '최근 전적을 45초마다 확인해 새 판만 띄웁니다', ovSet.toast_auto !== false)}
+        ${switchRow('toast_auto', '새 경기 자동 감지', '최근 전적을 18초마다 확인해 새 판만 띄웁니다 (1분 5초마다 전적 자동 최신화)', ovSet.toast_auto !== false)}
         <div class="field"><label>토스트 위치</label>
           <select id="set-ov-pos" class="inp">
             <option value="br" ${ovSet.toast_position!=='tr'?'selected':''}>우하단 (기본)</option>
@@ -2590,16 +2691,29 @@
     const friends = $('#util-friends');
     const meta = $('#util-recent-meta');
     if (!opp || !friends) return;
-    const matches = ((st || AL.state || {}).barracks || {}).matches || [];
+    const barracks = ((st || AL.state || {}).barracks) || {};
+    const matches = (barracks.matches || []).slice();
+    /* v1.0.1 (#14) — 최신 판이 맨 앞에 오도록 날짜·시간으로 정렬 (캐시 순서에 기대지 않는다) */
+    const stamp = (m) => `${m.date || ''} ${m.time || ''}`;
+    matches.sort((a, b) => String(stamp(b)).localeCompare(String(stamp(a))));
     const first = matches[0] || null;
-    const me = String(((st || AL.state || {}).nexon || {}).nickname || '').trim().toLowerCase();
+    const me = String(((st || AL.state || {}).nexon || {}).nickname ||
+      (((st || AL.state || {}).settings || {}).nickname) || '').trim().toLowerCase();
+    /* v1.0.1 (#14) — 플레이어 항목의 2번째 값이 '팀'/'적' 이다. 상대만 고른다(아군이 섞이던 버그) */
     const names = [];
-    ((first && first.players) || []).forEach((p) => {
+    const detailed = ((first && first.players) || []).filter((p) => String((p && p[1]) || '') === '적');
+    const rowsSource = detailed.length ? detailed : ((first && first.players) || []);
+    rowsSource.forEach((p) => {
       const nm = String((p && p[0]) || '').trim();
-      if (nm && nm.toLowerCase() !== me && !names.includes(nm)) names.push(nm);
+      if (!nm || nm.toLowerCase() === me) return;
+      if (detailed.length === 0 && String((p && p[1]) || '') === '팀') return;
+      if (!names.includes(nm)) names.push(nm);
     });
     const opponents = names.slice(0, 6);
-    if (meta) meta.textContent = first ? `${first.map || '최근 매치'} · ${(first.date || '').slice(5)}` : '최근 매치 없음';
+    if (meta) {
+      const when = first ? `${String(first.date || '').replace(/-/g, '.')} ${first.time || ''}`.trim() : '';
+      meta.textContent = first ? `${first.map || '최근 매치'} · ${first.result || ''} · ${when}` : '최근 매치 없음';
+    }
     opp.innerHTML = opponents.length
       ? opponents.map((n) => `<button class="chip" data-opp="${esc(n)}" style="height:24px;font-size:9.5px;cursor:pointer" title="이 닉네임으로 스카우팅">${n}</button>`).join('')
         + `<button class="ubtn" id="util-opp-run" style="height:24px;padding:0 10px;font-size:9.5px">이 5명 분석</button>`
@@ -2674,17 +2788,22 @@
     toast(`파티원 ${names.length}명을 채웠습니다 · 분석을 누르면 전적을 모읍니다`, true);
   }
 
-  async function runPartyMap() {
+  async function runPartyMap(silent) {
     if (!AL.real) { toast('앱(.exe)에서 파티 전적을 불러옵니다', false); return; }
     const input = $('#party-names');
     const names = String((input && input.value) || '').trim();
+    if (!names) { toast('파티원 닉네임을 입력해 주세요', false); return; }
     busy(true, '파티원 맵 전적을 모으는 중…');
     const res = await call('party_map_plan', names || null, false);
     busy(false);
-    if (!res || res.ok === false) { fail(res, '맵 밴·픽을 계산하지 못했습니다'); renderPartyMap(res || null); return; }
+    if (!res || res.ok === false) {
+      /* v1.0.1 (#11) — 자동 입력 직후에는 실패 토스트를 띄우지 않는다(오버레이가 이미 결과를 보여 줌) */
+      if (!silent) { fail(res, '맵 밴·픽을 계산하지 못했습니다'); renderPartyMap(res || null); }
+      return;
+    }
     AL.partyMap = res;
     renderPartyMap(res);
-    toast(res.message || '파티 맵 밴·픽을 계산했습니다', true, 5000);
+    if (!silent) toast(res.message || '파티 맵 밴·픽을 계산했습니다', true, 5000);
   }
 
   async function runScoutAuto() {
@@ -3124,6 +3243,9 @@
     if (reportBtn) reportBtn.addEventListener('click', (e) => { e.preventDefault(); saveReportCard(); });
     const ploBtn = $('#plo-btn');
     if (ploBtn) ploBtn.addEventListener('click', (e) => { e.preventDefault(); exportPlaylist('recs'); });
+    /* v1.0.1 — 시나리오 라이브러리의 플레이리스트 버튼을 없애면서 기록 화면 버튼만 연결돼 있지 않았다 */
+    const ploBtnRec = $('#plo-btn-2');
+    if (ploBtnRec) ploBtnRec.addEventListener('click', (e) => { e.preventDefault(); exportPlaylist('recs'); });
     const wPlo = $('#warmup-plo');
     if (wPlo) wPlo.addEventListener('click', () => exportPlaylist('warmup'));
     const wRun = $('#warmup-run');
@@ -3442,8 +3564,16 @@
       btn.addEventListener('click', () => {
         const mask = $('#' + btn.dataset.close);
         if (mask) mask.classList.remove('show');
+        if (btn.dataset.close === 'nick-mask') AL.nickLater = true;
       });
     });
+    /* ---------- v1.0.1 · 닉네임 연결 팝업 ---------- */
+    const nickConnect = $('#nick-connect');
+    if (nickConnect) nickConnect.addEventListener('click', submitNickLink);
+    const nickLater = $('#nick-later');
+    if (nickLater) nickLater.addEventListener('click', () => closeNickLink(true));
+    const nickInput = $('#nick-input');
+    if (nickInput) nickInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitNickLink(); } });
     $$('.mask').forEach((mask) => {
       mask.addEventListener('mousedown', (e) => { if (e.target === mask) mask.classList.remove('show'); });
     });
@@ -3762,6 +3892,7 @@
         else if (b) renderMaps(b);
       }
       if (name === 'maps') { renderMaps(AL.peek || AL.state.barracks); }
+      if (name === 'leaderboard') { refreshLeaderboardNames(); }
       if (name === 'records') { if (typeof drawRecords === 'function') drawRecords(); }
       if (name === 'utils') {
         perfRefresh(false);
@@ -3776,6 +3907,29 @@
       if (!AL.state) return;
       applySummaryOnly();
     };
+
+    /* v1.0.1 (#9) — 순위표를 열 때 저장된 ouid 로 현재 닉네임·클랜을 다시 확인한다.
+       user/basic 은 30분 캐시라 화면 전환마다 불러도 호출이 거의 늘지 않는다. */
+    let lbNameBusy = false;
+    async function refreshLeaderboardNames(force) {
+      if (!AL.real || lbNameBusy) return;
+      const lb = (AL.state && AL.state.leaderboard) || [];
+      if (!lb.length) return;
+      const stamp = Date.now();
+      if (!force && AL.lbNamesAt && stamp - AL.lbNamesAt < 5 * 60 * 1000) return;
+      lbNameBusy = true;
+      try {
+        const res = await call('refresh_leaderboard_names', !!force);
+        AL.lbNamesAt = Date.now();
+        if (res && res.state) applyState(res.state);
+        if (res && (res.renamed || []).length) toast(res.message || '닉네임을 최신화했습니다', true, 4600);
+      } catch (err) {
+        AL.lbNamesAt = Date.now();
+      } finally {
+        lbNameBusy = false;
+      }
+    }
+    AL.refreshLeaderboardNames = refreshLeaderboardNames;
     AL.openSettings = function () {
       renderSettings(AL.state || { settings: {}, nexon: {}, cloud: {}, meta: {} });
       renderSettingsTray(AL.tray);
