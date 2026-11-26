@@ -1,6 +1,7 @@
-"""v1.4.0 새 기능 — 클랜전 스카우팅 · 랭크 컨디션 · 듀오 시너지 · 맞춤 플레이리스트.
+"""서든 전술 계산 — 클랜전 스카우팅 · 랭크 컨디션 · 듀오 시너지 · 내전 팀 밸런스.
 
-모두 **이미 저장된 값과 넥슨 캐시를 먼저** 쓰고, 모자란 부분만 API 로 채운다.
+v2.0.0 — 에임 연습 플레이리스트(personal_plan)와 의존성을 걷어냈다.  모두
+**이미 저장된 값과 넥슨 캐시를 먼저** 쓰고, 모자란 부분만 API 로 채운다.
 표준 라이브러리만 사용한다 (추가 패키지 없음).
 """
 from __future__ import annotations
@@ -9,7 +10,7 @@ import datetime as _dt
 import re
 from typing import Any, Iterable, Sequence
 
-from . import nexon, scoring
+from . import nexon
 
 # 서든 병영수첩 URL · ouid 는 32자리 hex, 병영수첩 프로필 ID 는 16자리 hex + SA.
 OUID_RE = re.compile(r"[0-9a-fA-F]{32}")
@@ -953,63 +954,137 @@ def team_synergy(players: Sequence[dict[str, Any]]) -> dict[str, Any]:
             "force": team_power(rows)}
 
 
-# ================================================================ 맞춤 .plo + AI 코칭
-def personal_plan(values: dict[str, float], records: Sequence[dict[str, Any]], *,
-                  game: str = "kovak", weapon: str = "sniper", today: _dt.date | None = None,
-                  count: int = 7) -> dict[str, Any]:
-    """지금 약점 + 주무기에 맞춘 개인화 플레이리스트와 '왜 뽑혔는지' 설명."""
-    today = today or _dt.date.today()
-    areas = list(scoring.AREAS)
-    ranked = sorted(areas, key=lambda a: _num(values.get(a["key"])))
-    weakest = ranked[:2]
-    strongest = ranked[-1]
-    names: list[str] = []
-    reasons: list[dict[str, Any]] = []
-    pool_map = {}
-    for row in scoring.scenarios_for(game, weapon):
-        pool_map.setdefault(row["area_key"], []).append(row["name"])
+# ================================================================ 타인 A + 타인 B 듀오 시너지 (v2.0.0)
+def _row_stats(row: dict[str, Any]) -> dict[str, Any]:
+    """경기 한 줄 → (승리, 킬, 데스, 딜량).  원본 API 행과 병영수첩 행을 모두 받는다."""
+    raw_result = row.get("match_result", row.get("result"))
+    win = str(raw_result) in ("1", "승", "WIN", "win", "True", "true")
+    try:
+        kills = int(row.get("kill", row.get("k", 0)) or 0)
+    except (TypeError, ValueError):
+        kills = 0
+    try:
+        deaths = int(row.get("death", row.get("d", 0)) or 0)
+    except (TypeError, ValueError):
+        deaths = 0
+    try:
+        damage = float(row.get("damage", row.get("dmg", 0)) or 0)
+    except (TypeError, ValueError):
+        damage = 0.0
+    return {"win": win, "k": kills, "d": deaths, "dmg": damage}
 
-    # 1) 오늘 추천 5종(하루 고정 로테이션)을 그대로 기반으로 삼는다
-    base = scoring.build_recs(values=values, records=records, game=game, weapon=weapon, today=today)
-    for r in base:
-        nm = str(r.get("name") or "")
-        if nm and nm not in names:
-            names.append(nm)
-            area_key = r.get("area_key") or (areas[r.get("area", 0)]["key"] if isinstance(r.get("area"), int) else "")
-            area = next((a for a in areas if a["key"] == area_key), None)
-            reasons.append({
-                "name": nm,
-                "area": area["name"] if area else "",
-                "area_key": area_key,
-                "value": round(_num(values.get(area_key))) if area_key else None,
-                "why": (f"{area['name']} {round(_num(values.get(area_key)))} · "
-                        f"{'가장 약한 영역' if area in weakest else '유지 영역'}") if area else "무기 밸런스",
-            })
-    # 2) 가장 약한 두 영역에서 한 종씩 더 (오늘 목록에 없는 것)
-    for area in weakest:
-        for nm in pool_map.get(area["key"], []):
-            if nm in names:
-                continue
-            names.append(nm)
-            reasons.append({
-                "name": nm, "area": area["name"], "area_key": area["key"],
-                "value": round(_num(values.get(area["key"]))),
-                "why": f"{area['name']} {round(_num(values.get(area['key'])))} · 약점 보강",
-            })
-            break
-        if len(names) >= count:
-            break
-    names = names[:count]
-    reasons = reasons[:count]
-    philosophy = scoring.WEAPON_PHILOSOPHY.get(weapon, "")
-    coaching = [
-        f"가장 약한 영역은 {weakest[0]['name']} {round(_num(values.get(weakest[0]['key'])))} — "
-        f"이번 플레이리스트에서 {sum(1 for r in reasons if r.get('area_key') == weakest[0]['key'])}종을 배치했습니다.",
-        f"두 번째 약점 {weakest[1]['name']} {round(_num(values.get(weakest[1]['key'])))} 도 함께 채웁니다.",
-        f"가장 강한 영역 {strongest['name']} {round(_num(values.get(strongest['key'])))} 은 유지용으로만 1종.",
-        f"무기 철학 · {philosophy}",
-    ]
-    return {"names": names, "reasons": reasons, "coaching": coaching,
-            "focus": [a["name"] for a in weakest], "game": game, "weapon": weapon,
-            "count": len(names), "values": {k: round(_num(v)) for k, v in (values or {}).items()},
-            "philosophy": philosophy}
+
+def _metrics_of(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    wins = kills = deaths = 0
+    dmg_sum = 0.0
+    dmg_n = 0
+    for row in rows:
+        st = _row_stats(row)
+        wins += 1 if st["win"] else 0
+        kills += st["k"]
+        deaths += st["d"]
+        if st["dmg"]:
+            dmg_sum += st["dmg"]
+            dmg_n += 1
+    n = len(rows)
+    return {"games": n, "wins": wins,
+            "win": round(wins / n * 100, 1) if n else None,
+            "kd": round(kills / (kills + deaths) * 100, 1) if (kills + deaths) else None,
+            "dmg": int(round(dmg_sum / dmg_n)) if dmg_n else None}
+
+
+def duo_between(matches_a: Sequence[dict[str, Any]], matches_b: Sequence[dict[str, Any]],
+                name_a: str, name_b: str, *, min_games: int = 2,
+                map_lookup: dict[str, str] | None = None) -> dict[str, Any]:
+    """타인 A · 타인 B 가 **함께 플레이한 판**만 모아 공동 승률·K/D·시너지를 낸다.
+
+    두 사람의 최근 경기 목록을 ``match_id`` 로 맞춘다.  같은 판에서 각자 남긴
+    행을 그대로 쓰므로 추가 호출이 필요 없다.
+
+    표본이 ``min_games`` 미만이면 ``available=False`` + 이유를 돌려주고
+    숫자를 지어내지 않는다.
+    """
+    a_name = str(name_a or "").strip() or "A"
+    b_name = str(name_b or "").strip() or "B"
+    if a_name.lower() == b_name.lower():
+        return {"available": False, "reason": "서로 다른 두 사람을 골라 주세요",
+                "a": {"name": a_name}, "b": {"name": b_name}}
+    index_b: dict[str, dict[str, Any]] = {}
+    for row in matches_b or []:
+        key = str(row.get("match_id") or "")
+        if key:
+            index_b[key] = row
+    shared: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for row in matches_a or []:
+        key = str(row.get("match_id") or "")
+        if not key or key in seen or key not in index_b:
+            continue
+        seen.add(key)
+        shared.append({"a": row, "b": index_b[key]})
+
+    all_a = _metrics_of(list(matches_a or []))
+    all_b = _metrics_of(list(matches_b or []))
+    if len(shared) < max(1, int(min_games)):
+        return {
+            "available": False,
+            "reason": (f"최근 경기에서 두 사람이 같은 판을 뛴 기록이 {len(shared)}판뿐입니다 "
+                       f"(최소 {max(1, int(min_games))}판 필요)"),
+            "a": {"name": a_name, **all_a}, "b": {"name": b_name, **all_b},
+            "shared": {"games": len(shared)}, "sample": len(shared),
+        }
+
+    rows_a = [item["a"] for item in shared]
+    rows_b = [item["b"] for item in shared]
+    metrics_a = _metrics_of(rows_a)
+    metrics_b = _metrics_of(rows_b)
+    joint = _metrics_of(rows_a)
+    wins = joint["wins"]
+    # 두 사람의 '평소' 승률 평균과 함께 뛴 판 승률의 차이
+    baseline_parts = [v for v in (all_a.get("win"), all_b.get("win")) if v is not None]
+    baseline = round(sum(baseline_parts) / len(baseline_parts), 1) if baseline_parts else None
+    delta_win = round(joint["win"] - baseline, 1) if (joint["win"] is not None and baseline is not None) else None
+    kd_parts = [v for v in (all_a.get("kd"), all_b.get("kd")) if v is not None]
+    kd_base = round(sum(kd_parts) / len(kd_parts), 1) if kd_parts else None
+    delta_kd = round(joint["kd"] - kd_base, 1) if (joint["kd"] is not None and kd_base is not None) else None
+
+    # 표본이 적을수록 점수를 완만하게 (5판 미만은 최대 60%까지만 반영)
+    confidence = min(1.0, 0.55 + len(shared) / 12.0)
+    score = ((delta_win or 0) * 1.6 + (delta_kd or 0) * 0.8) * confidence
+    if delta_win is None and delta_kd is None:
+        verdict, tone = "표본 부족", "mid"
+        line = f"같은 판 {len(shared)}판 — 평소 승률을 알 수 없어 차이를 계산하지 못했습니다"
+    elif score >= 8:
+        verdict, tone = "찰떡 궁합", "good"
+        line = f"둘이 함께 뛴 {len(shared)}판 승률 {joint['win']}% · 평소보다 {delta_win:+.1f}%p"
+    elif score >= -4:
+        verdict, tone = "무난", "mid"
+        line = f"둘이 함께 뛴 {len(shared)}판 승률 {joint['win']}% · 평소와 비슷합니다"
+    else:
+        verdict, tone = "합이 안 맞음", "warn"
+        line = f"둘이 함께 뛴 {len(shared)}판 승률 {joint['win']}% · 평소보다 {delta_win:+.1f}%p"
+
+    pairs = []
+    for item in shared[:8]:
+        row_a, row_b = item["a"], item["b"]
+        match_id = str(row_a.get("match_id") or "")
+        st_a, st_b = _row_stats(row_a), _row_stats(row_b)
+        pairs.append({
+            "match_id": match_id,
+            "date": str(row_a.get("date") or row_a.get("date_match") or "")[:10],
+            "map": (map_lookup or {}).get(match_id) or row_a.get("map") or "-",
+            "result": "승" if st_a["win"] else "패",
+            "a": {"k": st_a["k"], "d": st_a["d"]}, "b": {"k": st_b["k"], "d": st_b["d"]},
+        })
+    note = (f"두 사람의 최근 경기에서 같은 match_id {len(shared)}판을 골랐습니다"
+            + (" · 표본이 적어 시너지 점수를 완만하게 반영했습니다" if len(shared) < 5 else ""))
+    return {
+        "available": True, "a": {"name": a_name, **metrics_a, "overall": all_a},
+        "b": {"name": b_name, **metrics_b, "overall": all_b},
+        "shared": {"games": len(shared), "wins": wins, "win": joint["win"], "kd": joint["kd"],
+                   "dmg": joint["dmg"], "baseline_win": baseline, "baseline_kd": kd_base},
+        "delta": {"win": delta_win, "kd": delta_kd},
+        "score": round(score, 1), "verdict": verdict, "tone": tone, "label": line,
+        "sample": len(shared), "confidence": round(confidence, 2),
+        "pairs": pairs, "note": note,
+    }

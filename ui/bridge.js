@@ -4,7 +4,6 @@
    index.html 의 정적 화면을 pywebview.api (app/api.py) 에 연결합니다.
 
    · 창 제어 (최소화 / 최대화 / 닫기)
-   · ▶ 스팀 실행 · ▶ 에임랩 실행  → launch_trainer(steam:// / aimlab://)
    · 추천 5종 점수 입력 + 오늘 기록 저장 → save_training_session(...)
    · 병영수첩 전적 불러오기 / 순위표 일괄 갱신 · 닉네임 등록·삭제
    · 최적화 유틸 (Drs 라플·스나·계단현상, 마우스 가속, 백업/복원)
@@ -247,63 +246,14 @@
   };
   const mdLabel = (iso) => String(iso || '').slice(5).replace('-', '.');
 
-  function areaIdx(key) {
-    const i = AREAS.findIndex((a) => a.key === key);
-    return i < 0 ? 0 : i;
-  }
 
-  function currentSummary() {
-    const st = AL.state;
-    if (!st || !st.summaries) return null;
-    return st.summaries[`${game}-${weapon}`] || null;
-  }
 
   /* 서버 rec → 화면 rec (오늘 내 점수 포함) */
-  function mapRecs(rows) {
-    return (rows || []).map((r) => ({
-      name: r.name,
-      area: typeof r.area === 'number' ? r.area : areaIdx(r.area_key),
-      areaKey: r.area_key || (AREAS[typeof r.area === 'number' ? r.area : 0] || AREAS[0]).key,
-      areaName: r.area_name || '',
-      diff: r.diff || '초급',
-      score: r.score === null || r.score === undefined ? null : Math.round(r.score * 10) / 10,
-      today_score: r.today_score === null || r.today_score === undefined ? null : Math.round(r.today_score * 10) / 10,
-      best: r.best === null || r.best === undefined ? null : Math.round(r.best * 10) / 10,
-      avg: r.avg === null || r.avg === undefined ? null : Math.round(r.avg * 10) / 10,
-      attempts: typeof r.attempts === 'number' ? r.attempts : null,
-      next_target: r.next_target === null || r.next_target === undefined ? null : Math.round(r.next_target * 10) / 10,
-      next_tier_cut: r.next_tier_cut === null || r.next_tier_cut === undefined ? null : r.next_tier_cut,
-      history: Array.isArray(r.history) ? r.history.map((h) => ({ date: h.date, score: h.score })) : [],
-      done: !!r.done,
-      extra: !!r.extra,
-      delta: typeof r.delta === 'number' ? r.delta : null
-    }));
-  }
 
-  function applyRecs(summary) {
-    const key = `${game}-${weapon}`;
-    if (AL.state && AL.state.today_scores) TODAY_SCORES = AL.state.today_scores;
-    RECS[key] = mapRecs(summary && summary.recs);
-    RECS_MORE[key] = mapRecs(summary && summary.more);
-    if (AL.state && AL.state.philosophy) PHILOSOPHY = AL.state.philosophy;
-  }
 
   /* v1.3.0 — 기록 한 건의 종합 점수 (0~3,600) · 저장된 원점수를 게임 기준값으로 환산 */
   const GAME_REF = { kovak: 200, aimlab: 100000 };
   const AREA_KEYS = ['precision', 'wide', 'micro', 'track', 'switch'];
-  function recordScore(rec) {
-    const scores = (rec && rec.scores) || {};
-    const ref = GAME_REF[rec && rec.game] || 200;
-    let sum = 0, n = 0;
-    AREA_KEYS.forEach((k) => {
-      const v = Number(scores[k]);
-      if (!isFinite(v) || v <= 0) return;
-      sum += Math.min(100, (v / ref) * 100);
-      n += 1;
-    });
-    return n ? Math.round((sum / n) * 36) : 0;
-  }
-  AL.recordScore = recordScore;
 
   let digestShown = false;
   /* v1.0.1 (#10) — 로그인(앱) 상태인데 내 서든 닉네임이 없으면 홈에서 바로 연결 팝업 */
@@ -349,10 +299,11 @@
     if (st.ui_scale) applyUiScale(st.ui_scale);
     const meta = st.meta || {};
     const set = st.settings || {};
+    const home = st.home || {};
     AL.meta = meta;
 
-    /* ---------- 상단 / 사이드바 ---------- */
-    const nick = ((st.nexon || {}).nickname || set.nickname || '').trim();
+    /* ---------- 상단 · 사이드바 ---------- */
+    const nick = String(home.nickname || (st.nexon || {}).nickname || set.nickname || '').trim();
     if (nick) ME = nick;
     const pfName = $('#pf-name');
     if (pfName) pfName.textContent = nick || '닉네임 미등록';
@@ -362,189 +313,57 @@
       if (avatar.firstChild && avatar.firstChild.nodeType === 3) avatar.firstChild.nodeValue = letter;
       else avatar.insertBefore(document.createTextNode(letter), avatar.firstChild);
     }
-
     const pillText = $('#tb-pill-text');
     if (pillText) {
-      /* v1.0.1 (#8) — 내장 프록시로 붙어 있으면 "API 키 입력 필요"를 띄우지 않는다 */
       const nx = st.nexon || {};
       const viaProxy = nx.endpoint === 'proxy' || (!nx.connected && !!nx.proxy);
       pillText.textContent = nx.connected ? 'NEXON API 연결됨'
         : viaProxy ? 'NEXON API 연결됨 · 프록시'
         : 'NEXON API 연결 안 됨';
     }
-
     const sync = $('#sync-line');
     if (sync) {
       const cloud = st.cloud || {};
       sync.innerHTML = cloud.signed_in
-        ? `<span class="pulse"></span>클라우드 로그인 · ${fmtLabel(cloud.last_sync) === '—' ? '동기화 전' : '마지막 ' + fmtLabel(cloud.last_sync)}`
-        : `<span class="pulse"></span>기록 자동 저장 · ${fmtLabel(meta.now)}`;
+        ? `<span class="pulse"></span>로그인 · ${fmtLabel(cloud.last_sync) === '—' ? '동기화 전' : '마지막 ' + fmtLabel(cloud.last_sync)}`
+        : `<span class="pulse"></span>자동 저장 · ${fmtLabel(meta.now)}`;
     }
-
-    const barracks = st.barracks || null;
-    const tier = (barracks && barracks.tier) || null;
-    const basic = (barracks && barracks.basic) || {};
     const clanEl = $('#pf-clan');
-    if (clanEl) clanEl.textContent = basic.clan && basic.clan !== '-' ? `${basic.clan} 클랜` : '클랜 없음';
-
-    if (tier) {
-      const soloRp = Number(tier.solo.rp || 0);
-      const band = bandOf(soloRp);
-      const nextBand = SOLO_BANDS.find((b) => b.min > band.min);
-      const span = nextBand ? nextBand.min - band.min : 200;
-      const pct = nextBand ? Math.max(0, Math.min(100, ((soloRp - band.min) / span) * 100)) : 100;
-      const rn = $('#pf-rank-name');
-      if (rn) rn.textContent = `솔로 ${tier.solo.name}`;
-      const rp = $('#pf-rp');
-      if (rp) rp.textContent = `${n0(soloRp)} RP`;
-      const bar = $('#pf-bar-i');
-      if (bar) bar.style.width = `${pct.toFixed(1)}%`;
-      const lo = $('#pf-cap-lo');
-      if (lo) lo.textContent = n0(band.min);
-      const hi = $('#pf-cap-hi');
-      if (hi) hi.textContent = nextBand ? n0(nextBand.min) : 'MAX';
+    if (clanEl) clanEl.textContent = ((st.barracks || {}).basic || {}).clan && (st.barracks || {}).basic.clan !== '-'
+      ? `${st.barracks.basic.clan} 클랜` : '클랜 없음';
+    const rank = home.rank || {};
+    const solo = rank.solo || {};
+    if (solo.rp > 0) {
+      const rn = $('#pf-rank-name'); if (rn) rn.textContent = `솔로 ${solo.name || solo.band}`;
+      const rp = $('#pf-rp'); if (rp) rp.textContent = `${n0(solo.rp)} RP`;
+      const bar = $('#pf-bar-i'); if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number((solo.progress || {}).pct || 0))).toFixed(1)}%`;
+      const lo = $('#pf-cap-lo'); if (lo) lo.textContent = n0((solo.progress || {}).start || 0);
+      const hi = $('#pf-cap-hi'); if (hi) hi.textContent = (solo.progress || {}).next ? `${n0((solo.progress || {}).end)}` : 'MAX';
     } else {
-      const rn = $('#pf-rank-name');
-      if (rn) rn.textContent = '전적 미연동';
-      const rp = $('#pf-rp');
-      if (rp) rp.textContent = '언랭크';
+      const rn = $('#pf-rank-name'); if (rn) rn.textContent = '전적 미연동';
+      const rp = $('#pf-rp'); if (rp) rp.textContent = '언랭크';
     }
 
-    /* ---------- 게임 / 무기 요약 ---------- */
-    const summary = st.summaries?.[`${game}-${weapon}`] || null;
-    if (summary) {
-      VALUES = {};
-      VALUES_RAW = {};
-      AREAS.forEach((a) => {
-        VALUES_RAW[a.key] = Number(summary.values?.[a.key] || 0);
-        VALUES[a.key] = Math.round(VALUES_RAW[a.key]);
-      });
-      recalc();
-      if (typeof summary.score === 'number') {
-        score = summary.score;
-        tierIdx = 0;
-        TIERS.forEach((t, k) => { if (score >= t.cut) tierIdx = k; });
-      }
-
-      applyRecs(summary);
-      const daily = summary.daily || [];
-      TREND = {
-        labels: daily.map((d) => mdLabel(d.date)),
-        values: daily.map((d) => (d.score === null ? null : d.score))
-      };
-      const known = daily.filter((d) => d.score !== null).map((d) => d.score);
-      SPARK = known.length ? known.slice(-7) : [0, 0];
-
-      if (summary.style) {
-        TRAIN_COUNT = { sniper: summary.style.sniper || 0, rifle: summary.style.rifle || 0 };
-      }
-
-      /* KPI 3 · 최근 7일 추세 */
-      const delta = summary.week_delta;
-      const dEl = $('#kpi-delta');
-      if (dEl) {
-        dEl.textContent = delta === null || delta === undefined ? '—' : `${delta > 0 ? '+' : ''}${n0(delta)}`;
-        dEl.style.color = delta === null || delta === undefined ? '#8FA1B8' : delta >= 0 ? '#6EE7C0' : '#F7AFAE';
-      }
-      const tp = $('#trend-prev');
-      if (tp) tp.innerHTML = `최근 7일 기록 <b>${known.length}일</b> · 훈련 <b>${summary.records || 0}회</b>`;
-      const tb = $('#trend-best');
-      if (tb) tb.innerHTML = `최고 <b>${known.length ? n0(Math.max(...known)) : '—'}</b>`;
-      const trRange = $('#trend-range');
-      if (trRange) trRange.textContent = daily.length ? `${mdLabel(daily[0].date)} → ${mdLabel(daily[daily.length - 1].date)}` : '—';
-      const tFoot = $('#trend-foot');
-      if (tFoot) {
-        const avg = known.length ? Math.round(known.reduce((a, b) => a + b, 0) / known.length) : 0;
-        tFoot.innerHTML = `일평균 <b>${n0(avg)}</b> · ${known.length}일 기록`;
-      }
-    }
-
-    /* ---------- 연속 훈련 ---------- */
-    const streak = st.streak || {};
-    STREAK_STATE = streak;
-    WEEK_STATE = st.week || null;
-    if (st.condition) HOME_COND = st.condition;
-    const chipStreak = $('#chip-streak');
-    if (chipStreak) chipStreak.textContent = `${streak.current || 0}일`;
-    const kStreak = $('#kpi-streak');
-    if (kStreak) kStreak.textContent = streak.current || 0;
-    const best = $('#streak-best');
-    if (best) best.textContent = `${streak.best || 0}일`;
-    const week = $('#streak-week');
-    if (week) week.textContent = `${streak.week || 0}/7`;
-    const sbar = $('#streak-bar');
-    if (sbar) sbar.style.width = `${Math.min(100, ((streak.week || 0) / 7) * 100).toFixed(1)}%`;
-    const dots = $('#kpi-dots');
-    if (dots && Array.isArray(streak.days7)) {
-      dots.innerHTML = streak.days7.map((v, i) => `<span class="${v ? 'f' : i === 6 ? 't' : ''}"></span>`).join('');
-    }
-    const doneToday = (currentSummary()?.recs || []).filter((r) => r.done).length;
-    const chipToday = $('#chip-today');
-    if (chipToday) chipToday.textContent = doneToday;
-    const dates = new Set((st.records || []).map((r) => r.date));
-    const cumul = $('#hd-cumul');
-    if (cumul) cumul.textContent = `누적 ${dates.size}일 · 연속 ${streak.current || 0}일`;
-    const sbadge = $('#streak-badge');
-    if (sbadge) sbadge.innerHTML = `훈련 <b>${(st.record_count || 0)}회</b>`;
-
-    /* ---------- 인게임 지표 (병영수첩) ---------- */
-    const stats = (barracks && barracks.stats) || {};
-    const kd = $('#kpi-kd');
-    if (kd) kd.textContent = stats.games ? n0(stats.kd, 1) : '—';
-    const kdBar = $('#kd-bar');
-    if (kdBar) kdBar.style.width = `${Math.min(100, Number(stats.kd || 0))}%`;
-    const dmg = $('#kpi-dmg');
-    if (dmg) dmg.textContent = stats.games ? n0(stats.dmg) : '—';
-    const gWin = $('#game-win');
-    if (gWin) gWin.innerHTML = stats.games
-      ? `승률 <b>${n0(stats.win, 1)}%</b> · ${n0(stats.wins)}승 ${n0((stats.games || 0) - (stats.wins || 0))}패`
-      : '전적을 불러오면 표시됩니다';
-    const gDiff = $('#game-diff');
-    if (gDiff) gDiff.textContent = stats.games ? `최근 ${stats.games}판` : '—';
-    const gFoot = $('#game-foot');
-    if (gFoot) gFoot.innerHTML = stats.games ? `K/D <b>${n0(stats.kd, 1)}%</b> · 딜량 <b>${n0(stats.dmg)}</b>` : '—';
-    const gRange = $('#game-range');
-    if (gRange) gRange.textContent = stats.games ? '최근 100판 랭크전' : '전적 미연동';
-
-    /* ---------- 목표 / 맵 ---------- */
+    /* ---------- 공통 데이터 ---------- */
+    const barracks = st.barracks || null;
+    MAPS = (barracks && barracks.maps) || [];
     GOALS = (st.goals || []).map((g) => ({
       label: g.label, target: g.target || '', cur: g.cur, tgt: g.tgt, unit: g.unit || '',
       gap: g.gap, gaptxt: g.gaptxt
     }));
-    MAPS = (barracks && barracks.maps) || [];
-
-    /* ---------- 순위표 ---------- */
-    const members = (st.leaderboard || []).map((m) => ({ ...m }));
-    if (!members.length && nick) {
-      members.push({ name: nick, me: true, clan: basic.clan || '친구', weapon: 'sniper', solo: 0, party: null, kd: null, dmg: null, win: null });
+    MEMBERS = (st.leaderboard || []).map((m) => ({ ...m }));
+    if (!MEMBERS.length && nick) {
+      MEMBERS.push({ name: nick, me: true, clan: ((barracks || {}).basic || {}).clan || '친구', weapon: 'sniper',
+        solo: 0, party: null, kd: null, dmg: null, win: null });
     }
-    MEMBERS = members;
-
-    /* ---------- 인게임 추이 (최근 20판 → 날짜별) ---------- */
-    const matches = (barracks && barracks.matches) || [];
-    if (matches.length) {
-      const byDate = new Map();
-      matches.forEach((m) => {
-        if (!byDate.has(m.date)) byDate.set(m.date, []);
-        byDate.get(m.date).push(m);
-      });
-      const keys = Array.from(byDate.keys()).sort().slice(-7);
-      GAME_TREND = {
-        labels: keys.map((k) => String(k).slice(5).replace('-', '.')),
-        kd: keys.map((k) => {
-          const rows = byDate.get(k);
-          return Math.round((rows.reduce((a, r) => a + Number(r.kd || 0), 0) / rows.length) * 10) / 10;
-        }),
-        dmg: keys.map((k) => {
-          const rows = byDate.get(k).filter((r) => r.damage !== null && r.damage !== undefined);
-          return rows.length ? Math.round(rows.reduce((a, r) => a + Number(r.damage), 0) / rows.length) : null;
-        })
-      };
-    } else {
-      GAME_TREND = { labels: [], kd: [], dmg: [] };
+    if (st.memos) { MEMOS = st.memos; AL.memos = st.memos; }
+    if (Array.isArray(st.map_guides)) {
+      MAP_GUIDES = {};
+      st.map_guides.forEach((g) => { if (g && g.map) MAP_GUIDES[g.map] = g; });
     }
+    if (st.digest) DIGEST = st.digest;
 
-    /* ---------- 유틸 상태 ---------- */
+    /* ---------- 유틸 ---------- */
     const utils = st.utils || {};
     const nv = utils.mode;
     UTIL.rifle = nv === 'rifle';
@@ -553,58 +372,18 @@
     if (typeof utils.accel === 'boolean') UTIL.accel = utils.accel;
     UTIL.backups = (utils.backups || []).length;
     AL.utils = utils;
-
-    const backupCount = $('#util-backup-count');
-    if (backupCount) backupCount.textContent = UTIL.backups;
-    const backupFoot = $('#util-backup-foot');
-    if (backupFoot) backupFoot.textContent = UTIL.backups;
-    const bkRecords = $('#bk-records');
-    if (bkRecords) bkRecords.textContent = `${n0(st.record_count || 0)}회`;
     const bkMembers = $('#bk-members');
     if (bkMembers) bkMembers.textContent = `${n0((st.leaderboard || []).length)}명`;
     const lbMe = $('#lb-me-name');
     if (lbMe) lbMe.textContent = nick || '—';
 
-    /* ---------- v1.3.0 · 티어 분포 · 병영수첩 변화 · 맵 가이드 · 기록 표 ---------- */
-    if (st.tier_distribution) TIER_DIST = st.tier_distribution;
-    if (st.pbs) AL.pbs = st.pbs;
-    if (st.memos) { MEMOS = st.memos; AL.memos = st.memos; }
-    if (Array.isArray(st.tier_details)) TIER_DETAILS = st.tier_details;
-    if (Array.isArray(st.map_guides)) {
-      MAP_GUIDES = {};
-      st.map_guides.forEach((g) => { if (g && g.map) MAP_GUIDES[g.map] = g; });
-    }
-    if (st.digest) DIGEST = st.digest;
-    RECORDS_ROWS = (st.records || []).map((r) => ({
-      ...r,
-      score: recordScore(r)
-    }));
-
     /* ---------- 다시 그리기 ---------- */
-    if (typeof refreshAll === 'function') refreshAll();
-    /* recalc() 는 5영역 평균×36 으로 점수를 다시 계산하므로, 서버가 계산한 점수로 덮어쓴다 */
-    if (summary && typeof summary.score === 'number') {
-      score = summary.score;
-      tierIdx = 0;
-      TIERS.forEach((t, k) => { if (score >= t.cut) tierIdx = k; });
-      drawKpis(); drawRadar(); drawLadder(); drawTierTable();
-    }
-
-    const radarWeak = $('#radar-weak');
-    if (radarWeak && VALUES) {
-      const keys = AREAS.map((a) => a.key);
-      const weakest = keys.reduce((a, b) => (VALUES[a] <= VALUES[b] ? a : b), keys[0]);
-      const area = AREAS.find((a) => a.key === weakest);
-      radarWeak.innerHTML = `가장 약한 영역 · <b>${area.name} ${VALUES[weakest]}</b>`;
-    }
-    paintSummaryExtras(summary);
-
+    refreshAll();
     renderUtilsState(utils);
-    if (AL.peek) renderPeek();
-    else renderBarracks(barracks, st);
+    if (AL.peek) renderPeek(); else renderBarracks(barracks, st);
     renderSettings(st);
+    renderAccount(st);
     renderCloudState(st);
-    renderInsights(st);
     renderUtilRecent(st);
     if (typeof compactGrayNotes === 'function') compactGrayNotes();
     renderUpdate(st.update);
@@ -621,40 +400,6 @@
   /* ==================================================================
      대시보드 · 기타 렌더 보조
      ================================================================== */
-  function paintSummaryExtras(summary) {
-    if (!summary) return;
-    const weak = $('#radar-weak');
-    if (weak) {
-      const keys = AREAS.map((a) => a.key);
-      const w = keys.reduce((a, b) => (VALUES[a] <= VALUES[b] ? a : b), keys[0]);
-      const area = AREAS.find((a) => a.key === w);
-      weak.innerHTML = `가장 약한 영역 · <b>${area.name} ${VALUES[w]}</b>`;
-    }
-    const chipToday = $('#chip-today');
-    if (chipToday) chipToday.textContent = (summary.recs || []).filter((r) => r.done).length;
-    const recChip = $('#rec-delta-chip');
-    if (recChip) {
-      const d = summary.week_delta;
-      recChip.innerHTML = d === null || d === undefined ? '최근 7일 <b>—</b>'
-        : `최근 7일 <b>${d > 0 ? '+' : ''}${n0(d)}</b>`;
-    }
-    const recRange = $('#rec-date-range');
-    if (recRange && (summary.daily || []).length) {
-      const daily = summary.daily;
-      recRange.textContent = `${mdLabel(daily[0].date)} ~ ${mdLabel(daily[daily.length - 1].date)}`;
-    }
-    const delta = summary.week_delta;
-    const dEl = $('#kpi-delta');
-    if (dEl) {
-      dEl.textContent = delta === null || delta === undefined ? '—' : `${delta > 0 ? '+' : ''}${n0(delta)}`;
-      dEl.style.color = delta === null || delta === undefined ? '#8FA1B8' : delta >= 0 ? '#6EE7C0' : '#F7AFAE';
-    }
-    const known = (summary.daily || []).filter((d) => d.score !== null).map((d) => d.score);
-    const tp = $('#trend-prev');
-    if (tp) tp.innerHTML = `최근 7일 기록 <b>${known.length}일</b> · 훈련 <b>${summary.records || 0}회</b>`;
-    const tb = $('#trend-best');
-    if (tb) tb.innerHTML = `최고 <b>${known.length ? n0(Math.max(...known)) : '—'}</b>`;
-  }
 
   function renderUtilsState(utils) {
     if (utils && utils.last_changes) LAST_CHANGES = utils.last_changes;
@@ -765,6 +510,193 @@
     }
   }
   AL.renderCoach = renderCoach;
+
+  /* ==================================================================
+     v2.0.0 · 회원(로그인·회원가입·비밀번호 찾기) · 요금제
+     ================================================================== */
+  function renderAccount(st) {
+    const acc = (st && st.account) || {};
+    const plan = acc.plan || {};
+    const signed = !!acc.signed_in;
+    const btn = $('#home-plan');
+    if (btn) {
+      btn.textContent = signed ? (plan.label || '무료') : '로그인';
+      btn.classList.toggle('pro', plan.plan === 'pro');
+      btn.title = signed ? `${acc.email || ''} · ${plan.plan === 'pro' ? 'PRO' : '무료'}` : '로그인 · 회원가입';
+    }
+    const sub = $('#home-account-sub');
+    if (sub) sub.textContent = signed ? (acc.email || '로그인됨') : '로그인하면 다른 PC에서도 이어집니다';
+    const chip = $('#home-account-st');
+    if (chip) {
+      chip.textContent = signed ? (plan.plan === 'pro' ? 'PRO' : '무료') : '로그인';
+      chip.className = 'st ' + (plan.plan === 'pro' ? 'on' : '');
+    }
+    const quota = acc.quota || {};
+    AL.quota = quota;
+  }
+  AL.renderAccount = renderAccount;
+
+  const AUTH_LABEL = { login: ['로그인', '로그인'], signup: ['회원가입', '회원가입'], recover: ['비밀번호 찾기', '재설정 메일 보내기'] };
+
+  function openAuth(mode) {
+    const mask = $('#auth-mask');
+    if (!mask) return;
+    setAuthMode(mode || 'login');
+    mask.classList.add('show');
+    const email = $('#auth-email');
+    const st = AL.state || {};
+    if (email && !email.value) email.value = ((st.account || {}).email || (st.cloud || {}).email || '');
+    setTimeout(() => (email || {}).focus && email.focus(), 80);
+  }
+  AL.openAuth = openAuth;
+
+  function setAuthMode(mode) {
+    AL.authMode = mode;
+    $$('#auth-tabs [data-auth-tab]').forEach((b) => b.classList.toggle('on', b.dataset.authTab === mode));
+    const labels = AUTH_LABEL[mode] || AUTH_LABEL.login;
+    const title = $('#auth-title'); if (title) title.textContent = labels[0];
+    const submit = $('#auth-submit'); if (submit) submit.textContent = labels[1];
+    const pw = $('#auth-pw-field'); if (pw) pw.hidden = mode === 'recover';
+    const note = $('#auth-note');
+    if (note) {
+      note.innerHTML = mode === 'recover'
+        ? '가입한 이메일로 <b>비밀번호 재설정 링크</b>를 보냅니다 · 링크에서 새 비밀번호를 정하면 됩니다.'
+        : mode === 'signup'
+          ? '이메일 확인이 켜져 있으면 인증 메일이 먼저 옵니다 · 지금은 무료 운영 기간이라 모든 기능을 제한 없이 씁니다.'
+          : '로그인하면 랭크전 전적·설정이 클라우드에 백업됩니다 · 지금은 무료 운영 기간입니다.';
+    }
+  }
+
+  async function submitAuth() {
+    const mode = AL.authMode || 'login';
+    const emailEl = $('#auth-email'), pwEl = $('#auth-password');
+    const email = emailEl ? String(emailEl.value || '').trim() : '';
+    const pw = pwEl ? String(pwEl.value || '') : '';
+    if (!email) { toast('이메일을 입력해 주세요', false); return; }
+    if (mode !== 'recover' && !pw) { toast('비밀번호를 입력해 주세요', false); return; }
+    if (!AL.real) { toast('앱(.exe)에서 로그인합니다', false); return; }
+    busy(true, mode === 'recover' ? '재설정 메일을 보내는 중…' : '로그인하는 중…');
+    const res = mode === 'login' ? await call('auth_login', email, pw)
+      : mode === 'signup' ? await call('auth_signup', email, pw)
+      : await call('auth_recover', email);
+    busy(false);
+    if (!res || !res.ok) { toast((res && res.message) || '요청을 처리하지 못했습니다', false, 5200); return; }
+    if (res.state) applyState(res.state);
+    toast(res.message || '완료했습니다', true, 4200);
+    if (mode !== 'recover') {
+      const mask = $('#auth-mask');
+      if (mask) mask.classList.remove('show');
+      if (pwEl) pwEl.value = '';
+    }
+  }
+  AL.submitAuth = submitAuth;
+
+  /* ==================================================================
+     v2.0.0 · 타인 A + 타인 B 듀오 시너지 (자유 1:1 비교 대체)
+     ================================================================== */
+  function duoBar(label, value, unit) {
+    const v = value === null || value === undefined ? null : Number(value);
+    return `<span class="duo-stat"><i>${label}</i><b>${v === null || Number.isNaN(v) ? '—' : `${v.toFixed(1)}${unit || ''}`}</b></span>`;
+  }
+  function renderDuoBetween(res) {
+    const box = $('#cmp-result');
+    if (!box) return;
+    if (!res || !res.ok) {
+      box.innerHTML = `<div class="mnote" style="display:block">${esc((res && res.message) || '시너지를 계산하지 못했습니다')}</div>`;
+      return;
+    }
+    const tone = res.tone === 'good' ? 'good' : res.tone === 'warn' ? 'warn' : 'mid';
+    const a = res.a || {}, b = res.b || {}, sh = res.shared || {}, d = res.delta || {};
+    box.innerHTML = `
+      <div class="duo-verdict ${tone}">
+        <b>${esc(res.verdict || '')}</b><span>${esc(res.label || '')}</span>
+      </div>
+      <div class="duo-grid">
+        <div class="duo-card"><div class="nm">${esc(a.name || 'A')}</div>
+          <div class="row">${duoBar('공동 승률', a.win, '%')}${duoBar('K/D', a.kd, '%')}</div>
+          <div class="m">함께 ${n0(sh.games)}판 · 평소 승률 ${a.overall && a.overall.win != null ? `${a.overall.win}%` : '—'}</div></div>
+        <div class="duo-card"><div class="nm">${esc(b.name || 'B')}</div>
+          <div class="row">${duoBar('공동 승률', b.win, '%')}${duoBar('K/D', b.kd, '%')}</div>
+          <div class="m">함께 ${n0(sh.games)}판 · 평소 승률 ${b.overall && b.overall.win != null ? `${b.overall.win}%` : '—'}</div></div>
+      </div>
+      <div class="duo-sum">
+        <div><i>같은 판</i><b>${n0(sh.games)}</b></div>
+        <div><i>공동 승률</i><b>${sh.win == null ? '—' : `${sh.win}%`}</b></div>
+        <div><i>공동 K/D</i><b>${sh.kd == null ? '—' : `${sh.kd}%`}</b></div>
+        <div><i>평소 대비</i><b class="${(d.win || 0) > 0 ? 'up' : (d.win || 0) < 0 ? 'down' : ''}">${d.win == null ? '—' : `${d.win > 0 ? '+' : ''}${d.win}%p`}</b></div>
+      </div>
+      <div class="mnote" style="display:block">${esc(res.note || '')}</div>
+      ${(res.pairs || []).length ? `<div class="duo-pairs">${res.pairs.map((p) => `<div class="row"><span>${esc(p.date || '')}</span><span class="map">${esc(p.map || '')}</span><b class="${p.result === '승' ? 'up' : 'down'}">${esc(p.result || '')}</b><span>${p.a.k}/${p.a.d} · ${p.b.k}/${p.b.d}</span></div>`).join('')}</div>` : ''}`;
+  }
+
+  async function runDuoBetween() {
+    const left = $('#cmp-left'), right = $('#cmp-right');
+    const a = left ? String(left.value || '').trim() : '';
+    const b = right ? String(right.value || '').trim() : '';
+    if (!a || !b) { toast('두 사람의 닉네임을 모두 입력해 주세요', false); return; }
+    if (!AL.real) { toast('앱(.exe)에서 계산합니다', false); return; }
+    busy(true, '두 사람의 공동 경기를 찾는 중…');
+    const res = await call('duo_between', a, b);
+    busy(false);
+    renderDuoBetween(res);
+  }
+  AL.openDuoBetween = function (a, b) {
+    const mask = $('#compare-mask');
+    if (mask) mask.classList.add('show');
+    const left = $('#cmp-left'), right = $('#cmp-right');
+    if (left && a) left.value = a;
+    if (right && b) right.value = b;
+    if (a && b) runDuoBetween();
+  };
+  AL.renderDuoBetween = renderDuoBetween;
+
+  /* ==================================================================
+     v2.0.0 · 최근 상대 팀 (서버 최신 조회 · stale 구분)
+     ================================================================== */
+  function renderRecentOpp(res) {
+    const box = $('#util-opp');
+    const meta = $('#util-recent-meta');
+    if (!box) return;
+    AL.recentOpp = res || null;
+    const rows = ((res && res.opponents) || []);
+    if (meta) {
+      const m = (res && res.match) || {};
+      const stamp = m.at || '';
+      meta.textContent = res && res.stale
+        ? `저장된 판 ${stamp} · 최신 조회 실패${res.error ? ` (${res.error})` : ''}`
+        : (m.map ? `${m.map} · ${m.result || ''} · ${stamp}` : '최근 매치');
+      meta.classList.toggle('warn', !!(res && res.stale));
+    }
+    if (!rows.length) {
+      box.innerHTML = `<span style="font-size:10px;color:#6E7F95;font-weight:600">${esc((res && res.message) || '상대 5명을 찾지 못했습니다')}</span>`;
+      return;
+    }
+    box.innerHTML = rows.map((n) => `<button class="chip" data-opp="${escAttr(n)}" style="height:24px;font-size:9.5px;cursor:pointer" title="이 닉네임으로 스카우팅">${esc(n)}</button>`).join('')
+      + `<button class="ubtn" id="util-opp-run" style="height:24px;padding:0 10px;font-size:9.5px">이 ${rows.length}명 분석</button>`;
+    const run = $('#util-opp-run');
+    if (run) run.addEventListener('click', () => { AL.pendingScout = rows; runScoutAuto(); });
+    box.querySelectorAll('[data-opp]').forEach((btn) => btn.addEventListener('click', () => {
+      const input = $('#scout-nicks');
+      if (input) input.value = btn.dataset.opp;
+      openScout();
+    }));
+  }
+
+  async function loadRecentOpponents(force) {
+    if (!AL.real) return null;
+    const res = await call('recent_opponents', force !== false);
+    renderRecentOpp(res);
+    return res;
+  }
+  AL.loadRecentOpponents = loadRecentOpponents;
+  AL.refreshBarracks = async function () {
+    if (!AL.real) { toast('앱(.exe)에서 전적을 최신화합니다', false); return; }
+    const res = await call('fetch_barracks', null, null);
+    if (res && res.state) applyState(res.state);
+    toast((res && res.message) || '전적을 최신화했습니다', !!(res && res.ok), 4200);
+    if (window.drawHome) drawHome();
+  };
+  AL.openWeakMap = function (name) { if (typeof openMapGuide === 'function') openMapGuide(name); };
 
   function renderBarracks(barracks, st) {
     try { renderCoach(barracks || null); } catch (err) { /* 코칭은 보조 정보 */ }
@@ -913,215 +845,181 @@
     const set = (st && st.settings) || {};
     const nexon = (st && st.nexon) || {};
     const cloud = (st && st.cloud) || {};
-    const goals = set.goals || {};
     const meta = (st && st.meta) || {};
-    const count = (st && st.record_count) || 0;
+    const goals = set.goals || {};
+    const account = (st && st.account) || {};
+    const plan = account.plan || {};
+    const ovSet = ((st && st.overlay) || {}).settings || {};
+    const hot = ((st && st.overlay) || {}).hotkeys || {};
+    const presets = (st && st.party_presets) || [];
+    const reg = (hot.registered || []);
 
-    /* ---------- 카드 1 · NEXON API · 병영수첩 ---------- */
+    /* ---------- 계정 · 화면 ---------- */
     const api = $('#set-api');
     if (api) {
       api.innerHTML = `
         <div class="card-hd" style="padding:0">
-          <div><div class="card-title"><span class="bar"></span>서든 닉네임 · 목표</div>
-            <div class="card-sub">병영수첩 · 친구 순위표 · 목표 4종</div></div>
+          <div><div class="card-title"><span class="bar"></span>서든 닉네임 · 화면</div>
+            <div class="card-sub">병영수첩 · 친구 순위표 · 테마 · 배율</div></div>
         </div>
         ${inputRow('set-nick', '서든어택 닉네임', set.nickname || '', { maxlength: 12 })}
-        
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px">
-          ${inputRow('set-goal-win', '승률 %', goals.win ?? 55, { type: 'number' })}
-          ${inputRow('set-goal-kd', 'K/D %', goals.kd ?? 60, { type: 'number' })}
-          ${inputRow('set-goal-dmg', '딜량', goals.dmg ?? 1400, { type: 'number' })}
-          ${inputRow('set-goal-rp', '솔로 RP', goals.rp ?? 4000, { type: 'number' })}
+        <div class="set-row2" style="margin-top:2px">
+          <div class="field"><label>테마</label><select id="set-theme" class="inp">
+            ${(st.themes || []).map((t) => `<option value="${t.key}" ${st.theme === t.key ? 'selected' : ''}>${t.name}</option>`).join('')}
+          </select></div>
+          <div class="field"><label>화면 배율</label><select id="set-scale" class="inp">
+            ${(st.ui_scales || [90, 100, 115, 125]).map((v) => `<option value="${v}" ${Number(st.ui_scale_setting) === Number(v) ? 'selected' : ''}>${v}%</option>`).join('')}
+          </select></div>
         </div>
-        <div class="set-note" style="margin-top:9px">
-          서든 전적은 앱에 기본 연결된 <b>NEXON Open API 프록시</b>로 조회합니다 · 키 입력이 필요 없습니다.<br>
+        ${switchRow('ui_scale_auto', '화면 배율 자동', 'QHD(2560×1440) 이상이면 115%로 자동', !!st.ui_scale_auto)}
+        <div class="set-note" style="margin-top:8px">
           마지막 병영수첩 최신화 <b>${nexon.last_barracks_at ? String(nexon.last_barracks_at).replace('T', ' ').slice(0, 16) : '—'}</b> · 출처 Data based on NEXON Open API
         </div>
         <div class="set-actions">
-          <button class="btn btn-primary" id="set-api-save">저장</button>
-          <button class="btn btn-ghost" id="set-api-test">저장 · 조회</button>
-          <button class="btn btn-ghost" id="set-goal-save">목표 저장</button>
+          <button class="btn btn-primary" data-act="save-nick">저장 · 조회</button>
+          <button class="btn btn-ghost" data-act="save-goals">목표 저장</button>
         </div>`;
     }
 
-    /* ---------- 카드 1.5 · 인게임 오버레이 (v1.0.0) ---------- */
+    /* ---------- 오버레이 ---------- */
     const ov = $('#set-overlay');
     if (ov) {
-      const ovSet = ((st && st.overlay) || {}).settings || {};      const hot = ((st && st.overlay) || {}).hotkeys || {};
-      const presets = (st && st.party_presets) || [];
-      const reg = (hot.registered || []);
-      const failed = hot.failed || {};
-      const failTxt = Object.entries(failed).filter(([, v]) => v && v !== '사용 안 함').map(([k, v]) => `${k}: ${v}`).join(' · ');
+      const failTxt = Object.entries(hot.failed || {}).filter(([, v]) => v && v !== '사용 안 함').map(([k, v]) => `${k}: ${v}`).join(' · ');
       ov.innerHTML = `
         <div class="card-hd" style="padding:0">
           <div><div class="card-title"><span class="bar"></span>인게임 오버레이 · 결과 토스트</div>
-            <div class="card-sub">파티 대기실 OCR · 맵 밴 PICK/BAN · 상대 5명 스카우팅</div></div>
+            <div class="card-sub">Win32 레이어드 창 · 클릭 통과 · 포커스 비탈취</div></div>
           <span class="ustate ${reg.length ? 'on' : 'warn'}">${reg.length ? '단축키 작동' : '대기'}</span>
         </div>
-        ${switchRow('overlay_enabled', '오버레이 사용', 'F8 대기실·맵 밴 · F9 상대 분석 (게임 화면 위에 클릭 통과로 표시)', ovSet.enabled !== false)}
+        ${switchRow('overlay_enabled', '오버레이 사용', 'F8 대기실·맵 밴 · F9 상대 분석 (게임 화면 위에 표시)', ovSet.enabled !== false)}
         <div class="set-row2" style="margin-top:4px">
           <div class="field"><label>대기실 · 맵 밴 단축키</label>
-            <select id="set-ov-hot1" class="inp">${HOTKEY_OPTIONS.map(k=>`<option value="${k}" ${ovSet.hotkey_lobby===k?'selected':''}>${k}</option>`).join('')}</select></div>
+            <select id="set-ov-hot1" class="inp">${HOTKEY_OPTIONS.map((k) => `<option value="${k}" ${ovSet.hotkey_lobby === k ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
           <div class="field"><label>상대 분석 단축키</label>
-            <select id="set-ov-hot2" class="inp">${HOTKEY_OPTIONS.map(k=>`<option value="${k}" ${ovSet.hotkey_scout===k?'selected':''}>${k}</option>`).join('')}</select></div>
+            <select id="set-ov-hot2" class="inp">${HOTKEY_OPTIONS.map((k) => `<option value="${k}" ${ovSet.hotkey_scout === k ? 'selected' : ''}>${k}</option>`).join('')}</select></div>
         </div>
         <div class="set-row2">
           <div class="field"><label>맵 밴 자동 종료 (초)</label>
-            <input id="set-ov-sec" class="inp" type="number" min="3" max="40" value="${Number(ovSet.mapban_seconds||12)}"></div>
+            <input id="set-ov-sec" class="inp" type="number" min="3" max="40" value="${Number(ovSet.mapban_seconds || 12)}"></div>
           <div class="field"><label>파티 배지 유지 (초)</label>
-            <input id="set-ov-psec" class="inp" type="number" min="3" max="40" value="${Number(ovSet.party_seconds||15)}"></div>
+            <input id="set-ov-psec" class="inp" type="number" min="3" max="40" value="${Number(ovSet.party_seconds || 15)}"></div>
         </div>
-        ${switchRow('toast_enabled', '경기 종료 결과 토스트', '한 판이 끝나면 우하단에 승패·K/D·딜량·연승을 5초 표시', ovSet.toast_enabled !== false)}
-        ${switchRow('toast_auto', '새 경기 자동 감지', '최근 전적을 18초마다 확인해 새 판만 띄웁니다 (1분 5초마다 전적 자동 최신화)', ovSet.toast_auto !== false)}
+        ${switchRow('toast_enabled', '경기 종료 결과 토스트', '한 판이 끝나면 승패·K/D·딜량·연승을 5초 표시', ovSet.toast_enabled !== false)}
+        ${switchRow('toast_auto', '새 경기 자동 감지', '최근 전적을 확인해 새 판만 띄웁니다 (1분 5초마다 전적 최신화)', ovSet.toast_auto !== false)}
         <div class="field"><label>토스트 위치</label>
           <select id="set-ov-pos" class="inp">
-            <option value="br" ${ovSet.toast_position!=='tr'?'selected':''}>우하단 (기본)</option>
-            <option value="tr" ${ovSet.toast_position==='tr'?'selected':''}>우상단</option>
+            <option value="br" ${ovSet.toast_position !== 'tr' ? 'selected' : ''}>우하단 (기본)</option>
+            <option value="tr" ${ovSet.toast_position === 'tr' ? 'selected' : ''}>우상단</option>
           </select></div>
         <div class="set-actions">
-          <button class="btn btn-primary" id="ov-save">오버레이 설정 저장</button>
-          <button class="btn btn-ghost" id="ov-toast-preview">토스트 미리보기</button>
-          <button class="btn btn-ghost" id="ov-party-preview">파티 배지 미리보기</button>
-          <button class="btn btn-ghost" id="ov-scout-preview">상대 분석 미리보기</button>
-          <button class="btn btn-ghost" id="ov-hide">오버레이 끄기</button>
+          <button class="btn btn-primary" data-act="ov-save">오버레이 설정 저장</button>
+          <button class="btn btn-ghost" data-act="ov-toast-preview">토스트 미리보기</button>
+          <button class="btn btn-ghost" data-act="ov-party-preview">파티 배지 미리보기</button>
+          <button class="btn btn-ghost" data-act="ov-scout-preview">상대 분석 미리보기</button>
+          <button class="btn btn-ghost" data-act="ov-hide">오버레이 끄기</button>
         </div>
         <div class="set-sub">고정 5인 파티 프리셋</div>
         <div class="set-row2">
           <input id="ov-preset-name" class="key-input" maxlength="20" placeholder="프리셋 이름 (예: 새벽 고정팟)">
-          <button class="btn btn-cyan" id="ov-preset-save">현재 5명 저장</button>
+          <button class="btn btn-cyan" data-act="preset-save">현재 5명 저장</button>
         </div>
         <div style="display:flex;flex-direction:column;gap:4px;margin-top:6px">
-          ${presets.length ? presets.map(p=>`<div class="preset-line"><b>${esc(p.name)}</b><span class="mini">${p.count}명 · ${esc((p.members||[]).join(', '))}</span><span class="sp"></span>
+          ${presets.length ? presets.map((p) => `<div class="preset-line"><b>${esc(p.name)}</b><span class="mini">${p.count}명 · ${esc((p.members || []).join(', '))}</span><span class="sp"></span>
             <button class="btn btn-ghost" data-preset-load="${escAttr(p.name)}" style="height:22px;font-size:9.5px;padding:0 7px">불러오기</button>
             <button class="btn btn-ghost" data-preset-del="${escAttr(p.name)}" style="height:22px;font-size:9.5px;padding:0 7px">삭제</button></div>`).join('')
             : '<div class="preset-line"><span class="mini">저장된 프리셋이 없습니다 · 대기실을 스캔한 뒤 저장하면 5명이 그대로 담깁니다</span></div>'}
         </div>
-        <div class="set-sub">대기실 OCR 위치 보정</div>
-        <div class="set-row3">
-          <div class="field"><label>X 보정 (px)</label><input id="set-ov-x" class="inp" type="number" value="${Number(ovSet.scan_calib && ovSet.scan_calib.offset_x || 0)}"></div>
-          <div class="field"><label>Y 보정 (px)</label><input id="set-ov-y" class="inp" type="number" value="${Number(ovSet.scan_calib && ovSet.scan_calib.offset_y || 0)}"></div>
-          <div class="field"><label>배율</label><input id="set-ov-scale" class="inp" type="number" step="0.01" min="0.7" max="1.4" value="${Number(ovSet.scan_calib && ovSet.scan_calib.scale || 1)}"></div>
-        </div>
         <div class="overlay-note">
           ${reg.length ? `등록된 단축키 · <b>${reg.join(', ')}</b>` : '단축키가 아직 등록되지 않았습니다 (Windows · 다른 프로그램이 키를 쓰는 중이면 바꿔 주세요)'}${failTxt ? `<br>${esc(failTxt)}` : ''}<br>
-          오버레이는 <b>DLL 주입·후킹 없이</b> 클릭 통과 투명 창으로만 그립니다 · 맵 밴은 화면이 바뀌면 1초 안에 스스로 꺼집니다 (12초 안전 타이머).
+          오버레이는 <b>DLL 주입·후킹 없이</b> Win32 레이어드 창으로만 그립니다 · 맵 밴은 화면이 바뀌면 1초 안에 스스로 꺼집니다.
         </div>`;
     }
 
-    /* ---------- 카드 2 · 실행 · 코박스 폴더 ---------- */
+    /* ---------- 전적 · 알림 ---------- */
     const run = $('#set-run');
     if (run) {
       run.innerHTML = `
         <div class="card-hd" style="padding:0">
-          <div><div class="card-title"><span class="bar"></span>실행 · 코박스 점수</div>
-            <div class="card-sub">트레이너 실행 경로 · stats 폴더</div></div>
-          <span class="chip" style="height:20px;font-size:9.5px">${meta.steam ? 'Steam 감지' : 'Steam 미감지'}</span>
+          <div><div class="card-title"><span class="bar"></span>전적 최신화 · 알림</div>
+            <div class="card-sub">65초 자동 최신화 · 연패 브레이크 · 목표</div></div>
         </div>
-        ${inputRow('set-kovak', "KovaaK's 경로", set.kovak_path || '')}
-        ${inputRow('set-aimlab', 'Aim Lab 경로', set.aimlab_path || '')}
-        ${inputRow('set-kovak-stats', '코박스 stats 폴더 (선택)', set.kovak_stats_path || '')}
-        <div class="set-note">비워 두면 <b>Steam 기본 경로</b>로 실행하고, 코박스 통계는 <b>자동 탐색</b>합니다 · 📥 코박스 점수 인식에 사용</div>
-        ${switchRow('auto_launch', '추천 시나리오 자동 실행', '▶ 버튼으로 Steam 원클릭 실행', !!set.auto_launch)}
-        ${switchRow('autosave', '점수 자동 저장', '입력 후 저장 버튼 없이 기록', !!set.autosave)}
-        ${switchRow('kovak_autofill', '코박스 점수 자동 채움', '앱으로 돌아올 때 오늘 플레이 기록을 자동 저장', !!set.kovak_autofill)}
-        ${switchRow('tilt_watch', '연패 브레이크 알림', '서든 실행 중 3연패(주의) · 5연패(위험) 감지', set.tilt_watch !== false)}
+        <div class="set-note" style="margin-top:2px">
+          최근 전적을 <b>${n0((st.match_refresh || {}).interval || 65)}초</b>마다 새로 읽습니다 · 마지막 확인 ${((st.match_refresh || {}).at ? String(st.match_refresh.at).replace('T', ' ').slice(5, 16) : '—')}
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:7px">
+          ${inputRow('set-goal-win', '승률 %', goals.win != null ? goals.win : 55, { type: 'number' })}
+          ${inputRow('set-goal-kd', 'K/D %', goals.kd != null ? goals.kd : 60, { type: 'number' })}
+          ${inputRow('set-goal-dmg', '딜량', goals.dmg != null ? goals.dmg : 1400, { type: 'number' })}
+          ${inputRow('set-goal-rp', '솔로 RP', goals.rp != null ? goals.rp : 4000, { type: 'number' })}
+        </div>
+        ${switchRow('tilt_watch', '연패 브레이크 알림', '2~3연패면 잠깐 쉬라는 알림을 띄웁니다', set.tilt_watch !== false)}
+        <div class="field"><label>알림 확인 주기 (초)</label>
+          <input id="set-tilt-int" class="inp" type="number" min="60" max="1800" value="${Number(set.tilt_interval || 240)}"></div>
+        ${switchRow('notify', '트레이 알림', '백그라운드에서 새 소식을 알려 줍니다', set.notify !== false)}
         <div class="set-actions">
-          <button class="btn btn-primary" id="set-run-save">저장</button>
-          <button class="btn btn-ghost" id="set-open-folder">기록 폴더 열기</button>
+          <button class="btn btn-primary" data-act="save-run">저장</button>
+          <button class="btn btn-ghost" data-act="refresh-now">지금 전적 최신화</button>
         </div>`;
     }
 
-    /* ---------- 카드 3 · 클라우드 ---------- */
+    /* ---------- 클라우드 ---------- */
     const cl = $('#set-cloud');
     if (cl) {
-      const useDefault = !(set.supabase || {}).url || (set.supabase || {}).url === (cloud.url || '');
       cl.innerHTML = `
         <div class="card-hd" style="padding:0">
-          <div><div class="card-title"><span class="bar"></span>클라우드 저장소</div>
-            <div class="card-sub">다른 PC 에서도 기록이 이어집니다</div></div>
-          <span class="ustate ${cloud.signed_in ? 'on' : cloud.configured ? 'warn' : ''}">${cloud.signed_in ? '로그인됨' : cloud.configured ? '로그인 전' : '설정 준비됨'}</span>
+          <div><div class="card-title"><span class="bar"></span>계정 · 클라우드</div>
+            <div class="card-sub">${cloud.signed_in ? '로그인됨' : '로그인하면 다른 PC 와 이어집니다'}</div></div>
+          <span class="ustate ${cloud.signed_in ? 'on' : 'warn'}">${cloud.signed_in ? (plan.label || '무료') : '로그아웃'}</span>
         </div>
-        <div class="set-note" style="margin:0">
-          어디서나 <b>내 에임 기록과 순위표</b>를 이어서 쓰는 저장소입니다.
-          ${cloud.signed_in ? `☁️ ${cloud.email || ''} · 마지막 동기화 ${fmtLabel(cloud.last_sync)}` : '로그인 전 · 이 PC 에는 기록이 자동 저장되고 있습니다'}
+        <div class="set-note" style="margin-top:2px">
+          ${cloud.signed_in
+            ? `<b>${esc(cloud.email || account.email || '')}</b> · ${plan.plan === 'pro' ? `PRO (${plan.pro_until_local || '기간제'})` : '무료'} · 지금은 무료 운영 기간이라 모든 기능을 제한 없이 씁니다.`
+            : '이메일 하나로 로그인하면 순위표·설정·플레이 잔디가 계정에 백업됩니다.'}
+          <br>마지막 동기화 <b>${cloud.last_sync ? String(cloud.last_sync).replace('T', ' ').slice(0, 16) : '—'}</b>
         </div>
         <div class="set-actions">
-          ${cloud.signed_in
-            ? '<button class="btn btn-ghost" id="set-cloud-out">로그아웃</button>'
-            : '<button class="btn btn-primary" id="set-cloud-login">로그인</button>'}
-          <button class="btn btn-cyan" id="set-cloud-push">☁️ 올리기</button>
-          <button class="btn btn-ghost" id="set-cloud-pull">내려받기</button>
+          ${cloud.signed_in ? '<button class="btn btn-ghost" data-act="auth-open">계정 · 비밀번호</button><button class="btn btn-ghost" data-act="auth-out">로그아웃</button>'
+            : '<button class="btn btn-primary" data-act="auth-open">로그인 · 회원가입</button>'}
+          <button class="btn btn-ghost" data-act="cloud-push">지금 올리기</button>
+          <button class="btn btn-ghost" data-act="cloud-pull">내려받기</button>
         </div>
-        <details id="set-cloud-adv" style="margin-top:2px">
-          <summary style="cursor:pointer;font-size:10px;font-weight:700;color:#7E8FA6;list-style:none;outline:none">
-            ⚙ 고급 서버 설정 ${useDefault ? '· 기본 서버 사용 중' : '· 직접 입력됨'}
-          </summary>
-          <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
-            ${inputRow('set-sb-url', '프로젝트 URL', cloud.url || '')}
-            ${inputRow('set-sb-key', '공개 키 (publishable / anon)', '', { type: 'password' })}
-            <button class="btn btn-ghost" id="set-cloud-check" style="align-self:flex-start;height:24px;font-size:10px">서버 연결 확인</button>
-          </div>
-        </details>`;
+        ${switchRow('auto_cloud', '자동 백업', '로그인 상태면 전적을 불러올 때마다 클라우드에 백업합니다', set.auto_cloud !== false)}`;
     }
 
-    /* ---------- 카드 4 · 트레이 · 업데이트 ---------- */
+    /* ---------- 앱 · 데이터 ---------- */
     const more = $('#set-more');
     if (more) {
       more.innerHTML = `
         <div class="card-hd" style="padding:0">
-          <div><div class="card-title"><span class="bar"></span>앱 · 트레이 · 업데이트</div>
-            <div class="card-sub">단축키 · 새 버전</div></div>
-          <span class="chip" style="height:20px;font-size:9.5px">v${meta.version || '1.3.1'}</span>
+          <div><div class="card-title"><span class="bar"></span>앱 · 데이터</div>
+            <div class="card-sub">v${meta.version || '2.0.0'} · ${esc(meta.platform || '')}</div></div>
         </div>
-        ${switchRow('hotkey_enabled', 'Ctrl+Shift+A 창 부르기', '어디서든 단축키로 창을 숨기기/보이기', set.hotkey_enabled !== false)}
-        ${switchRow('tilt_watch', '연패 브레이크 알림', '3연패(주의) · 5연패(위험) 트레이 알림', set.tilt_watch !== false)}
-        <div class="set-sub">화면 테마</div>
-        <div class="theme-pick" id="set-theme">
-          ${(st.themes || []).map((t) => `<button class="theme-btn ${t.key === (st.theme || 'coral') ? 'on' : ''}"
-            data-theme-key="${t.key}" title="${esc(t.label || '')}">
-            <i style="background:${t.hex}"></i><span>${esc(t.name)}</span></button>`).join('')}
-        </div>
-        <div class="set-sub">화면 배율</div>
-        <div class="scale-pick" id="set-scale">
-          ${(st.ui_scales || [100, 115]).map((s) => `<button class="scale-btn ${st.ui_scale === s ? 'on' : ''}"
-            data-scale="${s}">${s}%</button>`).join('')}
-        </div>
-        ${switchRow('watch_trainers', '트레이너 종료 감지', 'KovaaK\'s·Aim Lab 이 꺼지면 점수 입력 안내', set.watch_trainers !== false)}
-        ${switchRow('auto_cloud', '클라우드 자동 백업', '로그인 시 30분 주기 + 시작·종료', set.auto_cloud !== false)}
-        <div class="set-note">창 닫기(<b>X</b>·작업표시줄 ✕·Alt+F4)는 항상 <b>트레이로 이동 / 완전 종료</b> 확인창을 띄웁니다.</div>
-        <div class="set-status" id="set-tray-state" style="font-size:9.5px">트레이 상태 확인 중…</div>
-        <div class="set-status" id="set-update-info" style="font-size:9.5px">현재 v${meta.version || '1.5.0'} · 업데이트를 확인해 보세요</div>
+        <div class="set-note" style="margin-top:2px">데이터 폴더<br><b style="word-break:break-all">${esc(meta.data_dir || '')}</b></div>
         <div class="set-actions">
-          <button class="btn btn-primary" id="set-update-check">업데이트 확인</button>
-          <button class="btn btn-ghost" id="set-tray-hide">트레이로</button>
-          <button class="btn btn-ghost" id="set-backup">백업</button>
+          <button class="btn btn-ghost" data-act="open-folder">데이터 폴더 열기</button>
+          <button class="btn btn-ghost" data-act="backup">백업 저장</button>
+          <button class="btn btn-ghost" data-act="restore">백업 복원</button>
         </div>
-        <div class="set-note" title="${meta.data_file || ''}" style="font-size:9px;color:#5E6E85">데이터 <b>${meta.data_file || '—'}</b>${meta.is_admin ? ' · 관리자' : ''}${meta.load_error ? ' · ' + meta.load_error : ''}</div>`;
+        ${switchRow('hotkey_enabled', '단축키 Ctrl+Shift+A', '앱 창 숨기기 / 다시 열기', set.hotkey_enabled !== false)}
+        <div class="set-note" style="margin-top:8px">백업 파일에는 API 키 · 로그인 토큰 · 비밀번호가 <b>포함되지 않습니다</b>.</div>`;
     }
 
-    /* ---------- 카드 5 · 점수 전체 초기화 (위험 구역) ---------- */
     const data = $('#set-data');
     if (data) {
       data.innerHTML = `
         <div class="card-hd" style="padding:0">
-          <div><div class="card-title"><span class="bar" style="background:linear-gradient(180deg,#F87171,#DC2626)"></span>점수 전체 초기화 · <span style="color:#F7AFAE;font-size:10px">되돌릴 수 없음</span></div>
-            <div class="card-sub">에임 연습 점수 · 시나리오 PB 만 지웁니다</div></div>
+          <div><div class="card-title"><span class="bar"></span>데이터 보관</div>
+            <div class="card-sub">순위표 · 파티 프리셋 · 플레이 잔디는 계속 보관됩니다</div></div>
         </div>
-        <div class="set-note">
-          훈련 기록 <b>${n0(count)}</b>건과 시나리오 PB 가 사라집니다. 훈련 잔디(출석·훈련 일수) · API 키 · 닉네임 · 친구 목록 · 유틸 설정은 <b>그대로 유지</b>됩니다.
+        <div class="set-note" style="margin-top:2px">
+          백업은 <b>설정 · 순위표 · 병영수첩 캐시 · 파티 프리셋 · 플레이 잔디</b>를 한 파일로 저장합니다.
+          민감정보(API 키 · Supabase 토큰 · 비밀번호)는 빠집니다.
         </div>
-        <button class="danger-btn" id="set-reset-scores" style="padding:0 16px;flex:0 0 auto">점수 전체 초기화</button>`;
+        <button class="danger-btn" data-act="backup" style="padding:0 16px;flex:0 0 auto">지금 백업</button>`;
     }
 
     const metaLine = $('#set-meta-line');
-    if (metaLine) {
-      metaLine.textContent = `v${meta.version || '1.4.0'} · 훈련 기록 ${n0(count)}회`;
-    }
-    /* v1.0.0 — 자유 1:1 비교 왼쪽 기본값 = 내 닉네임 */
-    const cmpLeft = $('#cmp-left');
-    if (cmpLeft && !cmpLeft.value) {
-      cmpLeft.value = set.nickname || (nexon.nickname || '');
-    }
+    if (metaLine) metaLine.textContent = `v${meta.version || '2.0.0'} · 순위표 ${n0((st.leaderboard || []).length)}명`;
   }
 
   function switchRow(key, title, desc, on) {
@@ -1143,236 +1041,36 @@
   }
 
   function collectSettings() {
-    const read = (id) => {
-      const el = $('#' + id);
-      return el ? String(el.value || '').trim() : '';
-    };
+    const read = (id) => { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; };
+    const num = (id) => { const el = $('#' + id); return el && String(el.value).trim() !== '' ? Number(el.value) : undefined; };
     const patch = {};
-    const nick = read('set-nick');
-    const kovak = read('set-kovak');
-    const aim = read('set-aimlab');
-    if (nick) patch.nickname = nick;
-    if (kovak !== '') patch.kovak_path = kovak;
-    if (aim !== '') patch.aimlab_path = aim;
-    const statsEl = $('#set-kovak-stats');
-    if (statsEl) patch.kovak_stats_path = String(statsEl.value || '').trim();
-    /* v1.0.0 — 오버레이 설정 */
-    const readNum = (id) => { const el = $('#' + id); return el && String(el.value).trim() !== '' ? Number(el.value) : undefined; };
+    const nick = read('set-nick'); if (nick) patch.nickname = nick;
+    const theme = read('set-theme'); if (theme) patch.theme = theme;
+    const scale = read('set-scale'); if (scale) patch.ui_scale = Number(scale);
     const hot1 = $('#set-ov-hot1'), hot2 = $('#set-ov-hot2'), pos = $('#set-ov-pos');
     if (hot1) patch.overlay_hotkey_lobby = hot1.value;
     if (hot2) patch.overlay_hotkey_scout = hot2.value;
     if (pos) patch.toast_position = pos.value;
-    const sec = readNum('set-ov-sec'); if (sec !== undefined) patch.overlay_mapban_seconds = sec;
-    const psec = readNum('set-ov-psec'); if (psec !== undefined) patch.overlay_party_seconds = psec;
-    const ox = readNum('set-ov-x'); if (ox !== undefined) patch.overlay_scan_x = ox;
-    const oy = readNum('set-ov-y'); if (oy !== undefined) patch.overlay_scan_y = oy;
-    const osc = readNum('set-ov-scale'); if (osc !== undefined) patch.overlay_scan_scale = osc;
+    const sec = num('set-ov-sec'); if (sec !== undefined) patch.overlay_mapban_seconds = sec;
+    const psec = num('set-ov-psec'); if (psec !== undefined) patch.overlay_party_seconds = psec;
+    const tiltInt = num('set-tilt-int'); if (tiltInt !== undefined) patch.tilt_interval = tiltInt;
+    const goals = {};
+    ['win', 'kd', 'dmg', 'rp'].forEach((k) => {
+      const v = num('set-goal-' + k);
+      if (v !== undefined && !Number.isNaN(v)) goals[k] = v;
+    });
+    if (Object.keys(goals).length) patch.goals = goals;
+    /* 스위치 상태 (set-panes 안의 data-switch) */
+    $$('#set-panes [data-switch]').forEach((el) => {
+      const key = el.dataset.switch;
+      patch[key] = el.classList.contains('on');
+    });
     return patch;
   }
 
   /* ==================================================================
-     점수 입력 모달
+     병영수첩 · 순위표
      ================================================================== */
-  function openScoreModal() {
-    const mask = $('#score-mask');
-    const body = $('#score-body');
-    const summary = currentSummary();
-    if (!mask || !body) return;
-    const recs = (summary && summary.recs) || [];
-    if (!recs.length) {
-      toast('추천 시나리오를 먼저 불러와 주세요', false);
-      return;
-    }
-    body.innerHTML = recs.map((r, i) => `
-      <div class="score-row" data-row="${i}">
-        <div><div class="nm">${i + 1}. ${r.name}</div><div class="ar">${(AREAS[r.area] || AREAS[0]).name} · ${r.diff || '초급'}</div></div>
-        <input type="number" min="0" step="any" inputmode="decimal" value=""
-          placeholder="${r.score === null || r.score === undefined ? '' : '최근 ' + r.score}"
-          data-name="${String(r.name).replace(/"/g, '&quot;')}" data-area="${(AREAS[r.area] || AREAS[0]).key}">
-        <div class="unit">점</div>
-      </div>`).join('');
-    const title = $('#score-title');
-    if (title) title.textContent = `${game === 'kovak' ? "KovaaK's" : 'Aim Lab'} · ${weapon === 'sniper' ? '스나' : '라플'} 오늘의 5칸 점수`;
-    mask.classList.add('show');
-    const first = body.querySelector('input');
-    if (first) setTimeout(() => first.focus(), 60);
-  }
-
-  async function saveScores() {
-    const rows = $$('#score-body .score-row');
-    const scenarios = [];
-    for (const row of rows) {
-      const input = row.querySelector('input');
-      if (!input) continue;
-      const raw = String(input.value || '').trim();
-      if (raw === '') continue;
-      const value = Number(raw.replace(/,/g, ''));
-      if (Number.isNaN(value) || value < 0) {
-        toast(`${input.dataset.name} 점수는 0 이상의 숫자로 입력해 주세요`, false);
-        input.focus();
-        return;
-      }
-      scenarios.push({ name: input.dataset.name, area_key: input.dataset.area, score: value });
-    }
-    if (!scenarios.length) {
-      toast('점수를 1개 이상 입력해 주세요', false);
-      return;
-    }
-    const btn = $('#score-save');
-    if (btn) { btn.disabled = true; btn.textContent = '저장 중…'; }
-    busy(true, '훈련 기록을 저장하는 중…');
-    const result = await call('save_training_session', {
-      game, weapon,
-      date: (AL.meta && AL.meta.today) || null,
-      scenarios
-    });
-    busy(false);
-    if (btn) { btn.disabled = false; btn.textContent = '기록 저장'; }
-    if (!result || !result.ok) return fail(result, '기록을 저장하지 못했습니다');
-    const mask = $('#score-mask');
-    if (mask) mask.classList.remove('show');
-    if (result.state) applyState(result.state);
-    const sm = currentSummary();
-    toast(`✅ 기록 저장 · 종합 ${n0(sm ? sm.score : 0)}점 · ${scenarios.length}개 시나리오`, true);
-  }
-
-  /* ==================================================================
-     시나리오 모달 — 내 점수 입력/수정 + 게임에서 재생 (한 곳에서)
-     ================================================================== */
-  let SCEN = null;
-
-  function findRec(name) {
-    const key = `${game}-${weapon}`;
-    return (RECS[key] || []).find((r) => r.name === name)
-        || (RECS_MORE[key] || []).find((r) => r.name === name)
-        || null;
-  }
-
-  function openScenario(name, areaKey) {
-    if (!name) return;
-    const rec = findRec(name) || AL.findScenario(name);
-    SCEN = {
-      name,
-      areaKey: (rec && rec.areaKey) || areaKey || 'precision',
-      trainer: game,
-      weapon
-    };
-    const area = AREAS.find((a) => a.key === SCEN.areaKey) || AREAS[0];
-    const title = $('#scen-title');
-    if (title) title.textContent = name;
-    const areaEl = $('#scen-area');
-    if (areaEl) { areaEl.textContent = area.name; areaEl.className = `area ${area.cls}`; }
-    const diff = $('#scen-diff');
-    if (diff) diff.textContent = (rec && rec.diff) || '초급';
-    const trainer = $('#scen-trainer');
-    if (trainer) trainer.textContent = `${game === 'kovak' ? "KovaaK's" : 'Aim Lab'} · ${weapon === 'sniper' ? '스나' : '라플'}`;
-    const today = rec ? rec.today_score : null;
-    const setText = (id, value) => { const el = $('#' + id); if (el) el.textContent = value; };
-    setText('scen-today', today === null || today === undefined ? '미기록' : n0(today));
-    setText('scen-last', rec && rec.score !== null && rec.score !== undefined ? n0(rec.score) : '—');
-    setText('scen-best', rec && rec.best !== null && rec.best !== undefined ? n0(rec.best) : '—');
-    if (typeof window.drawScenarioHistory === 'function') {
-      window.drawScenarioHistory((rec && rec.history && rec.history.length) ? rec : null);
-    }
-    const note = $('#scen-note');
-    if (note) {
-      note.innerHTML = today === null || today === undefined
-        ? '<b>통합 점수 · 5영역 · 티어</b>에 저장 즉시 반영됩니다'
-        : `오늘 이미 <b>${n0(today)}점</b> · 값을 고쳐 저장하면 오늘 기록이 갱신됩니다`;
-    }
-    const input = $('#scen-score');
-    if (input) {
-      input.value = today === null || today === undefined ? '' : String(today);
-      input.classList.remove('bad');
-    }
-    const mask = $('#scen-mask');
-    if (mask) mask.classList.add('show');
-    if (input) setTimeout(() => { input.focus(); try { input.select(); } catch (e) {} }, 70);
-  }
-  AL.openScenario = openScenario;
-
-  /* 레코드에 없는(라이브러리에서 직접 누른) 시나리오도 열 수 있게 */
-  AL.findScenario = function (name) {
-    const st = AL.state;
-    const rows = st && st.scenarios && st.scenarios[`${game}-${weapon}`];
-    const hit = (rows || []).find((r) => r.name === name);
-    if (!hit) return null;
-    return { name, areaKey: hit.area_key || hit.area, diff: '초급', today_score: null, score: null, best: null };
-  };
-
-  async function saveScenario() {
-    if (!SCEN) return;
-    const input = $('#scen-score');
-    const raw = String((input && input.value) || '').trim().replace(/,/g, '');
-    if (raw === '') { if (input) input.focus(); return toast('점수를 입력해 주세요', false); }
-    const value = Number(raw);
-    if (Number.isNaN(value) || value < 0) {
-      if (input) { input.classList.add('bad'); input.focus(); }
-      return toast('0 이상의 숫자로 입력해 주세요', false);
-    }
-    if (!AL.real) return toast('앱(.exe)에서 실행하면 저장됩니다', false);
-    const btn = $('#scen-save');
-    if (btn) { btn.disabled = true; btn.textContent = '저장 중…'; }
-    busy(true, `${SCEN.name} 점수를 저장하는 중…`);
-    const result = await call('save_training_session', {
-      game: SCEN.trainer,
-      weapon: SCEN.weapon,
-      date: (AL.meta && AL.meta.today) || null,
-      scenarios: [{ name: SCEN.name, area_key: SCEN.areaKey, score: value }]
-    });
-    busy(false);
-    if (btn) { btn.disabled = false; btn.textContent = '점수 저장'; }
-    if (!result || !result.ok) return fail(result, '점수를 저장하지 못했습니다');
-    if (result.state) applyState(result.state);
-    const s = currentSummary();
-    toast(`✅ ${SCEN.name} ${n0(value)}점 저장 · 통합 ${n0(s ? s.score : 0)}점`, true);
-    const mask = $('#scen-mask');
-    if (mask) mask.classList.remove('show');
-  }
-
-  async function morePractice() {
-    const label = `${game === 'kovak' ? "KovaaK's" : 'Aim Lab'} · ${weapon === 'sniper' ? '스나' : '라플'}`;
-    if (!AL.real) return toast('앱(.exe)에서 실행하면 더 연습하기가 열립니다', false);
-    busy(true, `${label} 약점 보완 시나리오를 고르는 중…`);
-    const result = await call('recommend_more', game, weapon, 3);
-    busy(false);
-    if (!result || !result.ok) return fail(result, '더 연습할 시나리오를 가져오지 못했습니다');
-    if (result.state) applyState(result.state);
-    const count = (result.recs || []).length;
-    if (!count) return toast(result.message || '더 추천할 시나리오가 없습니다', false);
-    /* 추가된 시나리오가 바로 보이게 목록을 살짝 내린다 */
-    const list = $('#rec-list');
-    const sep = list && list.querySelector('.rec-sep');
-    if (list && sep) list.scrollTop = Math.max(0, sep.offsetTop - list.offsetTop - 2);
-    toast(`➕ ${label} 약점 보완 ${count}종 추가 · 클릭해서 점수 기록`, true);
-  }
-
-  /* ==================================================================
-     실행 (Steam · Aim Lab)
-     ================================================================== */
-  function scenarioUrl(name) {
-    if (game === 'aimlab') return name ? `aimlab://scenario/${encodeURIComponent(name)}` : 'steam://run/714010';
-    return name ? `steam://run/824270/?action=jump-to-scenario;name=${name}` : 'steam://run/824270';
-  }
-
-  async function launch(name, opts) {
-    const url = scenarioUrl(name);
-    const result = await call('launch_trainer', url);
-    if (!result || !result.ok) return fail(result, '실행 앱을 찾지 못했습니다 · Steam 설치를 확인해 주세요');
-    if (!(opts && opts.quiet)) toast(`▶ ${name ? name : (game === 'kovak' ? "KovaaK's" : 'Aim Lab')} 실행`, true);
-    return result;
-  }
-
-  async function launchAll() {
-    const recs = (currentSummary() && currentSummary().recs) || [];
-    if (!recs.length) return toast('추천 시나리오가 없습니다', false);
-    const ordered = recs.filter((r) => !r.done).concat(recs.filter((r) => r.done));
-    toast(`▶ ${ordered.length}종 연속 실행 · Steam 이 순서대로 열립니다`, true);
-    for (const r of ordered) {
-      await launch(r.name, { quiet: true });
-      await new Promise((res) => setTimeout(res, 1200));
-    }
-  }
 
   async function fetchBarracks(andTest) {
     if (!AL.real) return notReady();
@@ -1747,17 +1445,9 @@
   }
 
   /* ==================================================================
-     v1.2.0 — 인사이트(잔디·주간목표·훈련 전후) · 업데이트 · 트레이 · 코박스 인식
+     v1.2.0 — 인사이트(잔디·최근 폼) · 업데이트 · 트레이
      · 5분 워밍업 · 리포트 카드 · 1:1 비교 · 전원/게임 모드 · 플레이리스트
      ================================================================== */
-  function renderInsights(st) {
-    try {
-      if (st.heatmap && typeof window.drawHeatmap === 'function') window.drawHeatmap(st.heatmap);
-      else if (typeof window.drawHeatmap === 'function' && !AL.real) window.drawHeatmap(sampleHeatmap());
-      if (st.week && typeof window.drawWeek === 'function') window.drawWeek(st.week);
-      if (st.impact && typeof window.drawImpact === 'function') window.drawImpact(st.impact);
-    } catch (err) { /* 인사이트는 화면 장식 — 실패해도 앱은 정상 동작 */ }
-  }
 
   function renderUpdate(update) {
     if (update) AL.update = update;
@@ -1827,166 +1517,19 @@
     box.textContent = bits.join(' · ') + (t.error ? ` · ${t.error}` : '');
   }
 
-  /* ------------------------------------------------------------ 코박스 점수 인식 */
-  function fillScoreFromKovak(matched) {
-    let filled = 0;
-    (matched || []).forEach((m) => {
-      const input = Array.from(document.querySelectorAll('#score-body .score-row input'))
-        .find((el) => el.dataset.name === m.name);
-      if (input) { input.value = String(m.score); filled += 1; }
-    });
-    return filled;
-  }
+  /* ------------------------------------------------------------ 백그라운드 상태 갱신 */
 
-  async function saveKovakMatches(matched, auto) {
-    const scenarios = (matched || []).map((m) => {
-      const rec = findRec(m.name) || AL.findScenario(m.name) || {};
-      return { name: m.name, area_key: rec.areaKey || 'precision', score: m.score };
-    });
-    if (!scenarios.length) return;
-    busy(true, '코박스 점수를 저장하는 중…');
-    const result = await call('save_training_session', {
-      game, weapon, date: (AL.meta && AL.meta.today) || null, scenarios,
-      note: auto ? '코박스 stats 자동 인식' : '코박스 stats 불러오기'
-    });
-    busy(false);
-    if (!result || !result.ok) return fail(result, '코박스 점수를 저장하지 못했습니다');
-    if (result.state) applyState(result.state);
-    const base = `📥 코박스 점수 ${scenarios.length}종 저장 완료`;
-    if (result.pbs && result.pbs.length) toastPbs(result.pbs, base);
-    else toast(base, true);
-  }
 
-  async function importKovak(auto) {
-    if (!AL.real) return toast('앱(.exe)에서 코박스 점수를 읽을 수 있습니다', false);
-    const summary = currentSummary() || {};
-    const names = []
-      .concat((summary.recs || []).map((r) => r.name))
-      .concat((summary.more || []).map((r) => r.name));
-    if (!names.length) return toast('오늘 추천 5종을 먼저 불러와 주세요', false);
-    const result = await call('import_kovak_scores', names, 1);
-    if (!result || !result.ok) {
-      if (!auto) fail(result, '코박스 점수를 읽지 못했습니다');
-      return;
-    }
-    const matched = result.matched || [];
-    if (!matched.length) {
-      if (!auto) toast(result.message || '오늘 추천 과제와 겹치는 코박스 기록이 없습니다', false, 5200);
-      return;
-    }
-    const mask = $('#score-mask');
-    if (mask && mask.classList.contains('show')) {
-      const filled = fillScoreFromKovak(matched);
-      return toast(`📥 코박스 점수 ${filled}칸을 채웠습니다 · 저장을 눌러 주세요`, true);
-    }
-    await saveKovakMatches(matched, !!auto);
-  }
 
-  function toastPbs(pbs, base) {
-    const list = pbs || [];
-    if (!list.length) { if (base) toast(base, true); return; }
-    const first = list[0];
-    const prev = (first.prev === null || first.prev === undefined) ? '첫 기록' : n0(first.prev);
-    const more = list.length > 1 ? ` 외 ${list.length - 1}종` : '';
-    toast(`🏆 NEW PB! ${first.name} ${n0(first.score)}점 (이전 ${prev})${more}`, true, 5000);
-  }
 
   /* ------------------------------------------------------------ 5분 워밍업 */
   /* ---------- 오늘 훈련 시작 팝업 (바로 Steam 을 켜지 않는다) ---------- */
-  function openToday() {
-    const mask = $('#today-mask');
-    const list = $('#today-list');
-    const rows = (typeof RECS !== 'undefined' && RECS[`${game}-${weapon}`]) || [];
-    if (list) {
-      if (!rows.length) {
-        list.innerHTML = '<div class="empty">추천을 계산하려면 훈련 기록이 필요합니다 · 시나리오에서 첫 점수를 남겨 주세요</div>';
-      } else {
-        list.innerHTML = rows.map((r, i) => {
-          const area = (typeof AREAS !== 'undefined' ? AREAS[r.area] : null) || { name: '', cls: '' };
-          const today = recTodayScore(r);
-          return `<div style="display:grid;grid-template-columns:20px minmax(0,1fr) 74px 54px 54px;gap:8px;align-items:center;padding:7px 9px;border-radius:8px;background:${r.done ? 'rgba(52,211,153,.07)' : 'rgba(7,11,19,.5)'};border:1px solid ${r.done ? 'rgba(52,211,153,.26)' : 'rgba(148,163,184,.12)'}">
-            <div class="num" style="color:${r.done ? '#34D399' : '#F59E0B'};font-weight:800;font-size:11px;text-align:center">${r.done ? '✓' : i + 1}</div>
-            <div style="min-width:0"><div style="font-size:11.5px;font-weight:700;color:#EAF1FB;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</div>
-              <div style="font-size:8.5px;color:#8496AE;font-weight:600">${area.name} · ${r.diff || '초급'}</div></div>
-            <div style="font-family:var(--num);font-size:10.5px;text-align:right;color:${today == null ? '#5E6E85' : '#FDE8BD'}">${today == null ? '미기록' : Number(today).toLocaleString('ko-KR')}</div>
-            <button class="btn-tiny" data-today-score="${esc(r.name)}" title="이 시나리오 점수 입력">점수</button>
-            <button class="btn-tiny" data-today-run="${esc(r.name)}" style="color:#BFE9F7;border-color:rgba(56,189,248,.3);background:rgba(56,189,248,.12)">▶ 실행</button>
-          </div>`;
-        }).join('');
-      }
-    }
-    const sub = $('#today-sub');
-    if (sub) sub.textContent = `${game === 'kovak' ? "KovaaK's" : 'Aim Lab'} · ${weapon === 'sniper' ? '스나' : '라플'} · 추천 ${rows.length}종 · 개별 실행 또는 연속 실행`;
-    if (mask) mask.classList.add('show');
-  }
 
-  function openTodayScore(name) {
-    const mask = $('#today-mask');
-    if (mask) mask.classList.remove('show');
-    if (name && typeof openScenario === 'function') { openScenario(name); return; }
-    openScoreModal();
-  }
 
-  async function openWarmup() {
-    if (!AL.real) return toast('앱(.exe)에서 실행하면 워밍업이 열립니다', false);
-    busy(true, '워밍업 3종을 고르는 중…');
-    const result = await call('warmup_plan', game, weapon);
-    busy(false);
-    if (!result || !result.ok) return fail(result, '워밍업을 준비하지 못했습니다');
-    AL.warmup = result.recs || [];
-    const list = $('#warmup-list');
-    if (list) {
-      list.innerHTML = AL.warmup.map((r, i) => `
-        <div class="warmup-row">
-          <span class="ix">${i + 1}</span>
-          <span class="nm">${esc(r.name)}</span>
-          <span class="ar">${(AREAS[r.area] || AREAS[0]).name}${r.done ? ' · 오늘 완료' : ''}</span>
-          <button class="go" data-warm-run="${i}">▶ 실행</button>
-        </div>`).join('');
-    }
-    const sub = $('#warmup-sub');
-    if (sub) sub.textContent = `${game === 'kovak' ? "KovaaK's" : 'Aim Lab'} · ${weapon === 'sniper' ? '스나' : '라플'} · 짧은 핵심 3종`;
-    const note = $('#warmup-note');
-    if (note) note.textContent = result.message || '감각을 깨우고 랭크전으로 들어가세요';
-    const mask = $('#warmup-mask');
-    if (mask) mask.classList.add('show');
-  }
 
-  async function runWarmupAll() {
-    const rows = AL.warmup || [];
-    if (!rows.length) return toast('워밍업 시나리오가 없습니다', false);
-    toast(`⚡ 워밍업 ${rows.length}종 연속 실행 · Steam 이 순서대로 열립니다`, true);
-    for (const r of rows) {
-      await launch(r.name, { quiet: true });
-      await new Promise((res) => setTimeout(res, 1200));
-    }
-  }
 
-  async function exportPlaylist(kind) {
-    if (!AL.real) return toast('앱(.exe)에서 플레이리스트를 저장합니다', false);
-    const result = await call('export_playlist', kind || 'recs', game, weapon);
-    if (!result || !result.ok) return fail(result, '플레이리스트를 저장하지 못했습니다');
-    toast(result.message || '.plo 저장 완료', true, 5600);
-  }
 
   /* ------------------------------------------------------------ 1:1 전적 비교 */
-  function compareRowHtml(r) {
-    const unit = r.unit || '';
-    const fmt = (v) => {
-      if (v === null || v === undefined || v === '') return '—';
-      if (r.text) return String(v);
-      return unit === '%' ? Number(v).toFixed(1) + '%' : Number(v).toLocaleString() + (unit === 'RP' ? ' RP' : '');
-    };
-    const a = Number(r.me), b = Number(r.friend);
-    let wa = 50;
-    if (!r.text && isFinite(a) && isFinite(b) && (a + b) > 0) wa = Math.max(2, Math.min(98, a / (a + b) * 100));
-    return `<div class="cmp-row">
-      <span class="lb">${esc(r.label)}</span>
-      <span class="cmp-val ${r.better === 'me' ? 'win' : ''}">${fmt(r.me)}</span>
-      <div class="cmp-bar" style="${r.text ? 'opacity:.35' : ''}"><i class="a" style="width:${r.text ? 50 : wa}%"></i><i class="b" style="width:${r.text ? 50 : 100 - wa}%"></i></div>
-      <span class="cmp-val left ${r.better === 'friend' ? 'win' : ''}">${fmt(r.friend)}</span>
-    </div>`;
-  }
 
   async function compareFriend(name) {
     if (!AL.real) return toast('앱(.exe)에서 1:1 비교를 볼 수 있습니다', false);
@@ -1995,70 +1538,11 @@
     showCompare(result.compare);
   }
 
-  function showCompare(cmp) {
-    const body = $('#cmp-body');
-    const title = $('#cmp-title');
-    if (title) title.textContent = `${cmp.me.name} vs ${cmp.friend.name}`;
-    if (body) {
-      body.innerHTML = `
-        <div class="cmp-hero">
-          <div class="cmp-card me">
-            <div class="nm">${esc(cmp.me.name)}</div>
-            <div class="cl">${esc(cmp.me.clan)}</div>
-            <div class="rp">${esc(cmp.me.solo_tier)}</div>
-            <div class="rp">${esc(cmp.me.party_tier)}</div>
-          </div>
-          <div class="cmp-vs">VS<br><span style="font-size:9px;color:#7E8FA6;font-family:Pretendard">${cmp.score.me} : ${cmp.score.friend}</span></div>
-          <div class="cmp-card">
-            <div class="nm">${esc(cmp.friend.name)}</div>
-            <div class="cl">${esc(cmp.friend.clan)}</div>
-            <div class="rp">${esc(cmp.friend.solo_tier)}</div>
-            <div class="rp">${esc(cmp.friend.party_tier)}</div>
-          </div>
-        </div>
-        <div class="cmp-rows">${(cmp.rows || []).map(compareRowHtml).join('')}</div>
-        <div class="mnote">${esc(cmp.verdict)} · ${esc(cmp.note)}</div>`;
-    }
-    const mask = $('#compare-mask');
-    if (mask) mask.classList.add('show');
-  }
 
-  async function comparePlayers(left, right) {
-    if (!AL.real) return toast('앱(.exe)에서 1:1 비교를 볼 수 있습니다', false);
-    if (!String(right || '').trim()) return toast('오른쪽에 비교할 닉네임을 입력해 주세요', false);
-    busy(true, '두 사람 전적을 모으는 중…');
-    const result = await call('compare_players', String(left || ''), String(right || ''));
-    busy(false);
-    if (!result || !result.ok) return fail(result, '비교할 전적을 찾지 못했습니다');
-    showCompare(result.compare);
-  }
-  AL.comparePlayers = comparePlayers;
   AL.compareFriend = compareFriend;
 
   /* ------------------------------------------------------------ 주간 목표 수정 */
-  function openWeekGoals() {
-    const week = (AL.state && AL.state.week) || {};
-    const daysEl = $('#week-days');
-    const gamesEl = $('#week-games');
-    if (daysEl) daysEl.value = week.days || 5;
-    if (gamesEl) gamesEl.value = week.games || 25;
-    const mask = $('#week-mask');
-    if (mask) mask.classList.add('show');
-    if (daysEl) setTimeout(() => { daysEl.focus(); daysEl.select(); }, 60);
-  }
 
-  async function saveWeekGoals() {
-    const days = Math.round(Number(($('#week-days') || {}).value || 0));
-    const games = Math.round(Number(($('#week-games') || {}).value || 0));
-    if (!days || !games) return toast('주 N일 · N판을 숫자로 입력해 주세요', false);
-    if (!AL.real) return toast('앱(.exe)에서 저장할 수 있습니다', false);
-    const result = await call('save_settings', { week_goals: { days, games } });
-    if (!result || !result.ok) return fail(result, '목표를 저장하지 못했습니다');
-    if (result.state) applyState(result.state);
-    const mask = $('#week-mask');
-    if (mask) mask.classList.remove('show');
-    toast(`🎯 주간 목표 저장 · 주 ${days}일 · ${games}판`, true);
-  }
 
   /* ------------------------------------------------------------ 전원 · 게임 모드 */
   function renderPerf(perf) {
@@ -2148,207 +1632,7 @@
     g.closePath();
   }
 
-  function reportCardCanvas() {
-    const summary = currentSummary() || {};
-    const st = AL.state || {};
-    const values = summary.values || VALUES || {};
-    const tier = summary.tier || (typeof TIERS !== 'undefined' ? TIERS[tierIdx] : null) || { n: '기록 대기', c: '#F59E0B' };
-    const tierColor = tier.c || '#F59E0B';
-    const scoreVal = typeof summary.score === 'number' ? summary.score : (typeof score === 'number' ? score : 0);
-    const barracks = st.barracks || null;
-    const soloTier = ((barracks || {}).tier || {}).solo || null;
-    const partyTier = ((barracks || {}).tier || {}).party || null;
-    const meta = st.meta || {};
-    const streak = st.streak || {};
-    const nextTier = summary.next_tier || null;
-    const left = nextTier ? Math.max(0, (nextTier.cut || 0) - scoreVal) : 0;
-    const now = new Date();
-    const dateLabel = `${now.getFullYear()}.${String(now.getMonth() + 1).padStart(2, '0')}.${String(now.getDate()).padStart(2, '0')} (${'일월화수목금토'[now.getDay()]})`;
-    const F = '"Malgun Gothic", "Apple SD Gothic Neo", Pretendard, sans-serif';
-    const FN = '"Chakra Petch", "Malgun Gothic", Pretendard, sans-serif';
 
-    const W = 900, H = 1180, P = 62;
-    const c = document.createElement('canvas');
-    c.width = W; c.height = H;
-    const g = c.getContext('2d');
-
-    const bg = g.createLinearGradient(0, 0, W, H);
-    bg.addColorStop(0, '#0D1524'); bg.addColorStop(0.55, '#0A101C'); bg.addColorStop(1, '#070B13');
-    g.fillStyle = bg; g.fillRect(0, 0, W, H);
-    const glow = g.createRadialGradient(W / 2, 110, 20, W / 2, 110, 620);
-    glow.addColorStop(0, 'rgba(245,158,11,0.20)'); glow.addColorStop(1, 'rgba(245,158,11,0)');
-    g.fillStyle = glow; g.fillRect(0, 0, W, 720);
-    g.strokeStyle = 'rgba(148,163,184,0.16)'; g.lineWidth = 2; g.strokeRect(1, 1, W - 2, H - 2);
-
-    g.fillStyle = '#F59E0B'; g.fillRect(P, 56, 44, 5);
-    g.textAlign = 'left';
-    g.fillStyle = '#F8FAFC'; g.font = `800 30px ${FN}`;
-    g.fillText('SA AIM LABS', P, 112);
-    g.fillStyle = '#7E8FA6'; g.font = `600 18px ${F}`;
-    g.fillText('오늘의 에임 리포트', P + 236, 112);
-    g.textAlign = 'right';
-    g.fillStyle = '#C7D3E4'; g.font = `700 21px ${FN}`;
-    g.fillText(dateLabel, W - P, 84);
-    g.fillStyle = '#5F7088'; g.font = `600 15px ${FN}`;
-    g.fillText(`v${meta.version || '1.2.0'}`, W - P, 112);
-    g.textAlign = 'left';
-
-    /* 점수 */
-    g.fillStyle = '#7E8FA6'; g.font = `700 16px ${F}`;
-    g.fillText('종합 에임 점수', P, 196);
-    g.fillStyle = '#F8FAFC'; g.font = `800 100px ${FN}`;
-    g.fillText(scoreVal.toLocaleString('ko-KR'), P, 300);
-    const tierName = tier.n || '기록 대기';
-    g.fillStyle = tierColor; g.font = `800 32px ${F}`;
-    g.fillText(tierName, P, 352);
-    const tw = g.measureText(tierName).width;
-    g.fillStyle = '#7E8FA6'; g.font = `600 16px ${F}`;
-    g.fillText(`/ 3,600${nextTier ? ` · ${nextTier.n}까지 ${left}점` : ' · 최고 단계'}`, P + tw + 14, 352);
-
-    /* 티어 메달 */
-    const cx = W - P - 92, cy = 258, R = 92;
-    const ring = g.createLinearGradient(cx - R, cy - R, cx + R, cy + R);
-    ring.addColorStop(0, tierColor); ring.addColorStop(1, 'rgba(255,255,255,0.35)');
-    g.beginPath(); g.arc(cx, cy, R, 0, Math.PI * 2);
-    g.fillStyle = 'rgba(7,11,19,0.9)'; g.fill();
-    g.lineWidth = 7; g.strokeStyle = ring; g.stroke();
-    g.beginPath(); g.arc(cx, cy, R - 17, 0, Math.PI * 2);
-    g.lineWidth = 2; g.strokeStyle = 'rgba(148,163,184,0.28)'; g.stroke();
-    g.textAlign = 'center';
-    g.fillStyle = tierColor; g.font = `800 44px ${FN}`;
-    g.fillText(String((summary.tier_index || 0) + 1), cx, cy + 6);
-    g.fillStyle = '#7E8FA6'; g.font = `700 14px ${F}`;
-    g.fillText('/ 18', cx, cy + 30);
-    g.textAlign = 'left';
-
-    /* 5영역 */
-    g.strokeStyle = 'rgba(148,163,184,0.14)'; g.lineWidth = 1;
-    g.beginPath(); g.moveTo(P, 400); g.lineTo(W - P, 400); g.stroke();
-    g.fillStyle = '#C7D3E4'; g.font = `800 19px ${F}`;
-    g.fillText('5영역 에임 밸런스', P, 438);
-    g.fillStyle = '#5F7088'; g.font = `600 14px ${F}`;
-    g.textAlign = 'right'; g.fillText('최근 기록 평균 · 0~100', W - P, 438); g.textAlign = 'left';
-    AREAS.forEach((a, i) => {
-      const y = 484 + i * 52;
-      const v = Math.max(0, Math.min(100, Number(values[a.key] || 0)));
-      g.fillStyle = '#C7D3E4'; g.font = `700 18px ${F}`;
-      g.fillText(a.name, P, y + 6);
-      const bx = P + 196, bw = 468;
-      g.fillStyle = 'rgba(148,163,184,0.16)'; rr(g, bx, y - 8, bw, 15, 7); g.fill();
-      const grad = g.createLinearGradient(bx, 0, bx + bw, 0);
-      grad.addColorStop(0, a.color); grad.addColorStop(1, a.color);
-      g.fillStyle = grad; rr(g, bx, y - 8, Math.max(10, bw * v / 100), 15, 7); g.fill();
-      g.textAlign = 'right'; g.fillStyle = '#E4ECF8'; g.font = `800 20px ${FN}`;
-      g.fillText(Math.round(v), W - P, y + 7); g.textAlign = 'left';
-    });
-
-    /* 인게임 랭크 */
-    const ry = 760;
-    g.beginPath(); g.moveTo(P, ry - 20); g.lineTo(W - P, ry - 20); g.stroke();
-    g.fillStyle = '#C7D3E4'; g.font = `800 19px ${F}`;
-    g.fillText('인게임 랭크전', P, ry + 18);
-    const brStats = (barracks || {}).stats || {};
-    const brName = (barracks || {}).nickname || ((st.nexon || {}).nickname || '');
-    if (brName) {
-      g.textAlign = 'right';
-      g.fillStyle = '#FDE8BD'; g.font = `800 18px ${F}`;
-      g.fillText(brName, W - P, ry + 18);
-      g.fillStyle = '#7E8FA6'; g.font = `600 14px ${F}`;
-      g.fillText(brStats.games ? `최근 ${brStats.games}판 · 승률 ${Number(brStats.win || 0).toFixed(1)}% · K/D ${Number(brStats.kd || 0).toFixed(1)}% · 딜량 ${Number(brStats.dmg || 0).toLocaleString('ko-KR')}` : '전적 미연동', W - P, ry + 40);
-      g.textAlign = 'left';
-    }
-    const boxes = [
-      { label: '솔로', tier: soloTier },
-      { label: '파티', tier: partyTier }
-    ];
-    const bw2 = (W - P * 2 - 18) / 2;
-    boxes.forEach((b, i) => {
-      const bx = P + i * (bw2 + 18), by = ry + 40;
-      g.fillStyle = 'rgba(7,11,19,0.6)'; rr(g, bx, by, bw2, 104, 14); g.fill();
-      g.strokeStyle = 'rgba(148,163,184,0.18)'; g.lineWidth = 1; g.stroke();
-      g.fillStyle = '#7E8FA6'; g.font = `700 15px ${F}`;
-      g.fillText(b.label, bx + 22, by + 32);
-      g.fillStyle = '#E4ECF8'; g.font = `800 26px ${F}`;
-      g.fillText((b.tier || {}).name || '언랭크', bx + 22, by + 68);
-      g.fillStyle = '#A9E5F8'; g.font = `700 19px ${FN}`;
-      g.fillText(b.tier && b.tier.rp ? `${Number(b.tier.rp).toLocaleString('ko-KR')} RP` : '—', bx + 22, by + 92);
-    });
-
-    /* 오늘 · 연속 · 누적 */
-    const sy = 968;
-    const stats = [
-      { k: '오늘 시나리오', v: `${(summary.today_scenarios !== undefined ? summary.today_scenarios : ((summary.recs || []).filter((r) => r.done).length))}종` },
-      { k: '연속 훈련', v: `${streak.current || 0}일` },
-      { k: '누적 훈련', v: `${summary.days || (st.profile || {}).days || 0}일` }
-    ];
-    const bw3 = (W - P * 2 - 24) / 3;
-    stats.forEach((s, i) => {
-      const bx = P + i * (bw3 + 12);
-      g.fillStyle = 'rgba(7,11,19,0.55)'; rr(g, bx, sy, bw3, 92, 14); g.fill();
-      g.strokeStyle = 'rgba(148,163,184,0.14)'; g.stroke();
-      g.fillStyle = '#7E8FA6'; g.font = `700 14px ${F}`;
-      g.textAlign = 'center'; g.fillText(s.k, bx + bw3 / 2, sy + 34);
-      g.fillStyle = '#F8FAFC'; g.font = `800 30px ${FN}`;
-      g.fillText(s.v, bx + bw3 / 2, sy + 72);
-      g.textAlign = 'left';
-    });
-
-    /* 워터마크 */
-    g.save();
-    g.globalAlpha = 0.055;
-    g.fillStyle = '#F8FAFC'; g.font = `800 64px ${FN}`;
-    g.textAlign = 'center';
-    g.fillText('SA AIM LABS', W / 2, 1084);
-    g.restore();
-    g.textAlign = 'left';
-
-    /* 푸터 */
-    g.beginPath(); g.moveTo(P, 1112); g.lineTo(W - P, 1112); g.stroke();
-    g.fillStyle = '#5F7088'; g.font = `600 14px ${F}`;
-    g.fillText('SA AIM LABS · 코박스·에임랩 통합 트레이너', P, 1144);
-    g.textAlign = 'right';
-    g.fillText(`${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')} 생성`, W - P, 1144);
-    g.textAlign = 'left';
-    return c;
-  }
-
-  async function saveReportCard() {
-    let canvas;
-    try {
-      canvas = reportCardCanvas();
-    } catch (err) {
-      return toast('리포트 카드를 그리지 못했습니다 · ' + String((err && err.message) || err), false);
-    }
-    let dataUrl = '';
-    try {
-      dataUrl = canvas.toDataURL('image/png');
-    } catch (err) {
-      return toast('이미지로 변환하지 못했습니다', false);
-    }
-    if (!AL.real) {
-      // 브라우저 미리보기: 다운로드로 저장
-      const a = document.createElement('a');
-      a.href = dataUrl;
-      a.download = 'sa_aim_report.png';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      return toast('📸 리포트 카드를 내려받았습니다', true);
-    }
-    busy(true, '리포트 카드를 저장하는 중…');
-    const result = await call('save_report_card', dataUrl, (AL.state && AL.state.meta && AL.state.meta.today) || '');
-    busy(false);
-    if (!result || !result.ok) return fail(result, '리포트 카드를 저장하지 못했습니다');
-    /* v1.3.1 — 저장 토스트에 '폴더 열기' 버튼 (자동 사라짐 시간은 그대로) */
-    toast(result.message || '📸 리포트 카드 저장 완료', true, 5600, {
-      label: '폴더 열기',
-      onClick: async () => {
-        const opened = await call('open_reports_folder');
-        if (opened && opened.ok) toast('📂 리포트 폴더를 열었습니다', true);
-        else toast((opened && opened.message) || (result.folder ? '폴더: ' + result.folder : '폴더를 열지 못했습니다'), false, 6000);
-      }
-    });
-  }
 
   /* ------------------------------------------------------------ 트레이로 */
   async function trayHide() {
@@ -2358,17 +1642,8 @@
     toast(result.message || '트레이로 숨겼습니다', true, 5200);
   }
 
-  /* 창을 다시 열면: 설정이 켜져 있으면 코박스 점수를 조용히 확인한다 */
+  /* 창을 다시 열면: 저장된 state 로 화면을 다시 그린다 */
   let lastAutoFill = 0;
-  function maybeAutoFill() {
-    if (!AL.real || !AL.state) return;
-    const set = (AL.state.settings || {});
-    if (!set.kovak_autofill) return;
-    if (Date.now() - lastAutoFill < 60000) return;
-    if (document.querySelector('.mask.show')) return;
-    lastAutoFill = Date.now();
-    importKovak(true);
-  }
 
   /* ==================================================================
      이벤트 연결
@@ -2380,31 +1655,7 @@
      ================================================================== */
   const thCls = (v) => (Number(v) >= 75 ? 'hot' : Number(v) >= 55 ? 'mid' : 'low');
 
-  function openScout() {
-    const mask = $('#scout-mask');
-    if (mask) mask.classList.add('show');
-    const input = $('#scout-nicks');
-    if (input && !input.value) {
-      const names = (MEMBERS || []).filter((m) => !m.me && m.name).slice(0, 3).map((m) => m.name);
-      if (names.length) input.value = names.join(', ');
-    }
-  }
 
-  async function runScout() {
-    const input = $('#scout-nicks');
-    const raw = input ? input.value : '';
-    const names = raw.split(/[,，\n\t ]+/).map((s) => s.trim()).filter(Boolean).slice(0, 12);
-    if (!names.length) { toast('상대 닉네임을 1명 이상 입력해 주세요', false); return; }
-    if (!AL.real) { toast('앱(.exe)에서 상대 전적을 조회합니다', false); return; }
-    AL.scoutRoles = {};
-    busy(true, '상대 전적을 확인하는 중…');
-    const res = await call('scout_team', names.slice(0, 6));
-    busy(false);
-    if (!res || res.ok === false && !(res.rows || []).length) { fail(res, '스카우팅에 실패했습니다'); renderScout(res || {}); return; }
-    AL.scout = res;
-    renderScout(res);
-    if (res.message) toast(res.message, res.ok !== false);
-  }
 
   function rolesApplied(rows) {
     const roles = AL.scoutRoles || {};
@@ -2824,17 +2075,6 @@
 
   /* ---------- 내전 팀 자동 짜기 ---------- */
   let balanceShown = false;
-  async function openBalance() {
-    const mask = $('#balance-mask');
-    if (mask) mask.classList.add('show');
-    if (!AL.real || balanceShown) return;
-    balanceShown = true;
-    const box = $('#balance-members');
-    if (box) box.innerHTML = '<div class="mnote">순위표 · 최근 동반 플레이어를 불러오는 중…</div>';
-    const res = await call('balance_candidates');
-    AL.balanceCands = res || {};
-    renderBalanceCandidates();
-  }
 
   function renderBalanceCandidates() {
     const box = $('#balance-members');
@@ -2865,19 +2105,6 @@
     return $$('#balance-members input[data-bal-name]:checked').map((el) => el.dataset.balName);
   }
 
-  async function runBalance() {
-    if (!AL.real) { toast('앱(.exe)에서 팀을 나눕니다', false); return; }
-    const names = balanceNames();
-    if (!names.length) { toast('내전 인원을 체크해 주세요', false); return; }
-    if (names.length < 2) { toast('내전 인원을 2명 이상 체크해 주세요', false); return; }
-    const box = $('#balance-result');
-    if (box) box.innerHTML = '<div class="mnote">균형을 계산하는 중…</div>';
-    const roles = {};
-    names.forEach((n) => { if ((AL.balanceRoles || {})[n]) roles[n] = AL.balanceRoles[n]; });
-    const res = await call('balance_teams', names, 0, roles);
-    AL.balanceResult = res || {};
-    renderBalance(res || {});
-  }
 
   function renderBalance(res) {
     const box = $('#balance-result');
@@ -2939,64 +2166,8 @@
       </div>`).join('');
   }
 
-  async function openPersonalPlo() {
-    const mask = $('#plo-mask');
-    if (mask) mask.classList.add('show');
-    /* v1.5.0 (#6·#22) — 코박스는 .plo 저장 + 폴더 열기, 에임랩은 실행 가이드 */
-    const isAimlab = game === 'aimlab';
-    const saveBtn = $('#plo-save');
-    const aimBtn = $('#plo-save-aimlab');
-    const folderBtn = $('#plo-folder');
-    if (saveBtn) { saveBtn.hidden = isAimlab; saveBtn.textContent = '.plo 저장'; }
-    if (aimBtn) aimBtn.hidden = !isAimlab;
-    if (folderBtn) folderBtn.hidden = isAimlab;
-    const guide = $('#plo-guide');
-    if (guide) {
-      guide.hidden = false;
-      guide.innerHTML = isAimlab
-        ? `<b>에임랩은 .plo 파일을 쓰지 않습니다.</b> 아래 순서대로 실행하세요.
-           <div class="row"><i>1</i><span>Aim Lab 실행 → <b>Play → Custom</b></span></div>
-           <div class="row"><i>2</i><span>목록의 시나리오를 검색해 <b>즐겨찾기(★)</b>에 담기</span></div>
-           <div class="row"><i>3</i><span><b>에임랩 열기</b>를 누르면 앱이 실행됩니다 (Steam 필요)</span></div>`
-        : `<b>.plo 파일</b>은 KovaaK's 플레이리스트 파일입니다.
-           <div class="row"><i>1</i><span><b>.plo 저장</b>을 누르면 코박스 Playlists 폴더에 바로 저장됩니다</span></div>
-           <div class="row"><i>2</i><span>KovaaK's 실행 → <b>PLAY → PLAYLIST</b> 에서 방금 만든 목록 선택</span></div>
-           <div class="row"><i>3</i><span>저장 위치를 직접 보려면 <b>폴더 열기</b></span></div>`;
-    }
-    if (!AL.real) { toast('앱(.exe)에서 약점·무기 기준으로 만듭니다', false); return; }
-    busy(true, '약점 + 주무기로 플레이리스트를 고르는 중…');
-    const res = await call('personal_playlist', game, weapon, false);
-    busy(false);
-    if (!res || res.ok === false) { fail(res, '플레이리스트를 만들지 못했습니다'); return; }
-    AL.plan = res;
-    renderPlan(res);
-  }
 
-  function renderPlan(plan) {
-    const coach = $('#plo-coaching');
-    if (coach) {
-      coach.innerHTML = (plan.coaching || []).map((t) => `<div class="coach-row"><div class="ic">🤖</div><div class="tx"><div class="d" style="font-size:9.5px">${t}</div></div></div>`).join('');
-    }
-    const list = $('#plo-list');
-    if (list) {
-      list.innerHTML = (plan.reasons || []).map((r, i) => `
-        <div style="display:grid;grid-template-columns:20px minmax(0,1fr) auto;gap:8px;align-items:center;padding:6px 9px;border-radius:8px;background:rgba(7,11,19,.5);border:1px solid rgba(148,163,184,.12)">
-          <div class="num" style="color:#F59E0B;font-weight:800;font-size:11px">${i + 1}</div>
-          <div style="min-width:0"><div style="font-size:11px;font-weight:700;color:#EAF1FB;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</div>
-            <div style="font-size:8.8px;color:#8496AE;font-weight:600;margin-top:1px">${r.why || ''}</div></div>
-          <span class="area" style="height:18px;font-size:8.5px">${r.area || ''}</span>
-        </div>`).join('');
-    }
-    const sub = $('#plo-sub');
-    if (sub) sub.textContent = `약점 ${(plan.focus || []).join(' · ')} 우선 · ${plan.count}종 · ${plan.philosophy || ''}`;
-  }
 
-  async function savePersonalPlo() {
-    if (!AL.real) { toast('앱(.exe)에서 플레이리스트 파일을 저장합니다', false); return; }
-    const res = await call('personal_playlist', game, weapon, true);
-    if (!res || res.ok === false) { fail(res, '저장에 실패했습니다'); return; }
-    toast(res.message || '맞춤 플레이리스트를 저장했습니다', true, 5200);
-  }
 
   /* ---------- 온보딩 ---------- */
   let onbShown = false;
@@ -3169,6 +2340,74 @@
     if (AL.real) call('ack_tilt', a.id || '').catch(() => {});
   }
 
+  function openScout() {
+    const mask = $('#scout-mask');
+    if (mask) mask.classList.add('show');
+    const input = $('#scout-nicks');
+    if (input && !input.value) {
+      const names = (MEMBERS || []).filter((m) => !m.me && m.name).slice(0, 3).map((m) => m.name);
+      if (names.length) input.value = names.join(', ');
+    }
+  }
+
+  async function runScout() {
+    const input = $('#scout-nicks');
+    const raw = input ? input.value : '';
+    const names = raw.split(/[,，\n\t ]+/).map((s) => s.trim()).filter(Boolean).slice(0, 12);
+    if (!names.length) { toast('상대 닉네임을 1명 이상 입력해 주세요', false); return; }
+    if (!AL.real) { toast('앱(.exe)에서 상대 전적을 조회합니다', false); return; }
+    AL.scoutRoles = {};
+    busy(true, '상대 전적을 확인하는 중…');
+    const res = await call('scout_team', names.slice(0, 6));
+    busy(false);
+    if (!res || res.ok === false && !(res.rows || []).length) { fail(res, '스카우팅에 실패했습니다'); renderScout(res || {}); return; }
+    AL.scout = res;
+    renderScout(res);
+    if (res.message) toast(res.message, res.ok !== false);
+  }
+
+  async function runScoutAuto() {
+    if (!AL.real) { toast('앱(.exe)에서 방금 끝난 판 상대를 불러옵니다', false); return; }
+    busy(true, '방금 끝난 판 상대를 불러오는 중…');
+    const res = await call('scout_last_match');
+    busy(false);
+    if (!res || res.ok === false) { fail(res, '상대를 불러오지 못했습니다'); return; }
+    AL.scout = res;
+    AL.scoutRoles = {};
+    const input = $('#scout-nicks');
+    if (input && (res.opponents || []).length) input.value = res.opponents.join(', ');
+    const mask = $('#scout-mask');
+    if (mask) mask.classList.add('show');
+    renderScout(res);
+    toast(res.message || '방금 끝난 판 상대를 분석했습니다', true, 5000);
+  }
+
+  async function openBalance() {
+    const mask = $('#balance-mask');
+    if (mask) mask.classList.add('show');
+    if (!AL.real || balanceShown) return;
+    balanceShown = true;
+    const box = $('#balance-members');
+    if (box) box.innerHTML = '<div class="mnote">순위표 · 최근 동반 플레이어를 불러오는 중…</div>';
+    const res = await call('balance_candidates');
+    AL.balanceCands = res || {};
+    renderBalanceCandidates();
+  }
+
+  async function runBalance() {
+    if (!AL.real) { toast('앱(.exe)에서 팀을 나눕니다', false); return; }
+    const names = balanceNames();
+    if (!names.length) { toast('내전 인원을 체크해 주세요', false); return; }
+    if (names.length < 2) { toast('내전 인원을 2명 이상 체크해 주세요', false); return; }
+    const box = $('#balance-result');
+    if (box) box.innerHTML = '<div class="mnote">균형을 계산하는 중…</div>';
+    const roles = {};
+    names.forEach((n) => { if ((AL.balanceRoles || {})[n]) roles[n] = AL.balanceRoles[n]; });
+    const res = await call('balance_teams', names, 0, roles);
+    AL.balanceResult = res || {};
+    renderBalance(res || {});
+  }
+
   function bind() {
     if (bound) return;
     bound = true;
@@ -3216,6 +2455,25 @@
       });
     }
 
+    /* ---------- v2.0.0 · 회원 로그인 · 듀오 시너지 ---------- */
+    const authTabs = $('#auth-tabs');
+    if (authTabs) authTabs.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-auth-tab]');
+      if (b) setAuthMode(b.dataset.authTab);
+    });
+    const authSubmit = $('#auth-submit');
+    if (authSubmit) authSubmit.addEventListener('click', submitAuth);
+    ['#auth-email', '#auth-password'].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitAuth(); } });
+    });
+    const cmpRun = $('#cmp-run');
+    if (cmpRun) cmpRun.addEventListener('click', runDuoBetween);
+    ['#cmp-left', '#cmp-right'].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runDuoBetween(); } });
+    });
+
     /* ---------- 창 제어 ---------- */
     const winMin = $('#win-min');
     if (winMin) winMin.addEventListener('click', (e) => { e.stopPropagation(); if (AL.real) call('minimize_window'); });
@@ -3228,42 +2486,6 @@
       else if (AL.real) call('close_window');
     });
 
-    /* ---------- v1.2.0 빠른 실행 · 워밍업 · 리포트 카드 ---------- */
-    ['#warmup-btn', '#warmup-btn-2'].forEach((sel) => {
-      const b = $(sel);
-      if (b) b.addEventListener('click', (e) => { e.preventDefault(); openWarmup(); });
-    });
-    ['#kovak-import-btn', '#kovak-import-2', '#kovak-import-head', '#score-kovak'].forEach((sel) => {
-      const b = $(sel);
-      if (b) b.addEventListener('click', (e) => { e.preventDefault(); importKovak(false); });
-    });
-    const reportBtnBr = $('#br-report');
-    if (reportBtnBr) reportBtnBr.addEventListener('click', (e) => { e.preventDefault(); saveReportCard(); });
-    const reportBtn = $('#report-btn');
-    if (reportBtn) reportBtn.addEventListener('click', (e) => { e.preventDefault(); saveReportCard(); });
-    const ploBtn = $('#plo-btn');
-    if (ploBtn) ploBtn.addEventListener('click', (e) => { e.preventDefault(); exportPlaylist('recs'); });
-    /* v1.0.1 — 시나리오 라이브러리의 플레이리스트 버튼을 없애면서 기록 화면 버튼만 연결돼 있지 않았다 */
-    const ploBtnRec = $('#plo-btn-2');
-    if (ploBtnRec) ploBtnRec.addEventListener('click', (e) => { e.preventDefault(); exportPlaylist('recs'); });
-    const wPlo = $('#warmup-plo');
-    if (wPlo) wPlo.addEventListener('click', () => exportPlaylist('warmup'));
-    const wRun = $('#warmup-run');
-    if (wRun) wRun.addEventListener('click', () => runWarmupAll());
-    const wList = $('#warmup-list');
-    if (wList) {
-      wList.addEventListener('click', (e) => {
-        const btn = e.target.closest('[data-warm-run]');
-        if (!btn) return;
-        const row = (AL.warmup || [])[Number(btn.dataset.warmRun)];
-        if (row && AL.real) launch(row.name);
-        else toast('앱(.exe)에서 실행하면 Steam 이 열립니다', false);
-      });
-    }
-    const weekEdit = $('#week-goal-edit');
-    if (weekEdit) weekEdit.addEventListener('click', openWeekGoals);
-    const weekSave = $('#week-save');
-    if (weekSave) weekSave.addEventListener('click', (e) => { e.preventDefault(); saveWeekGoals(); });
     const updateBar = $('#update-banner');
     if (updateBar) {
       updateBar.addEventListener('click', () => {
@@ -3337,13 +2559,10 @@
     $('#util-pane-tactics') && renderPartyMap(AL.partyMap || null);
 
     /* ---------- v1.0.0 · 자유 1:1 비교 (양쪽 아무 닉네임) ---------- */
-    const cmpLeft = $('#cmp-left'), cmpRight = $('#cmp-right'), cmpRun = $('#cmp-run');
+    const cmpLeft2 = $('#cmp-left'), cmpRight2 = $('#cmp-right');
     const myNick = ((AL.state && AL.state.settings && AL.state.settings.nickname) ||
                     (AL.state && AL.state.nexon && AL.state.nexon.nickname) || '');
-    if (cmpLeft && !cmpLeft.value) cmpLeft.value = myNick;
-    const runCompare = () => { if (AL.comparePlayers) AL.comparePlayers(cmpLeft ? cmpLeft.value : '', cmpRight ? cmpRight.value : ''); };
-    if (cmpRun) cmpRun.addEventListener('click', runCompare);
-    [cmpLeft, cmpRight].forEach((el) => { if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runCompare(); } }); });
+    if (cmpLeft2 && !cmpLeft2.value) cmpLeft2.value = myNick;
     const utilBalance = $('#util-balance');
     if (utilBalance) utilBalance.addEventListener('click', () => openBalance());
     const balBox = $('#balance-members');
@@ -3460,7 +2679,6 @@
       $$('#balance-members input[data-bal-name]').forEach((el) => { el.checked = names.includes(el.dataset.balName); });
       toast(`${names.length}명을 후보에 반영했습니다`, true);
     });
-    AL.openToday = openToday;
     const todayList = $('#today-list');
     if (todayList) todayList.addEventListener('click', (e) => {
       const run = e.target.closest('[data-today-run]');
@@ -3487,37 +2705,6 @@
       const guide = $('#plo-guide');
       if (guide) guide.hidden = !guide.hidden;
     });
-    const ploFolder = $('#plo-folder');
-    if (ploFolder) ploFolder.addEventListener('click', async () => {
-      if (!AL.real) { toast('앱(.exe)에서 폴더를 엽니다', false); return; }
-      const res = await call('open_playlists_folder');
-      toast((res && res.message) || (res && res.folder) || '플레이리스트 폴더를 열었습니다', !!(res && res.ok));
-    });
-    const ploAim = $('#plo-save-aimlab');
-    if (ploAim) ploAim.addEventListener('click', async () => {
-      if (!AL.real) { toast('앱(.exe)에서 에임랩을 실행합니다', false); return; }
-      const res = await call('launch_trainer', 'steam://run/714010');
-      toast((res && res.message) || 'Aim Lab 을 실행했습니다', !!(res && res.ok));
-    });
-    /* v1.5.0 (#5) — 내 시나리오 추가 */
-    const recAdd = $('#rec-add');
-    if (recAdd) recAdd.addEventListener('click', (e) => { e.preventDefault(); AL.openScenarioForm(); });
-    const cscenSave = $('#cscen-save');
-    if (cscenSave) cscenSave.addEventListener('click', async () => {
-      const val = (id) => { const el = $('#' + id); return el ? String(el.value || '').trim() : ''; };
-      const name = val('cscen-name');
-      if (!name) return toast('시나리오 이름을 입력해 주세요', false);
-      await AL.addScenario({
-        name,
-        play_url: val('cscen-play'),
-        stats_url: val('cscen-stats'),
-        area: val('cscen-area') || 'precision',
-        diff: val('cscen-diff') || '초급',
-        memo: val('cscen-memo'),
-        game: (AL.state && AL.state.settings && AL.state.settings.game) || 'kovak',
-      });
-    });
-
     /* ---------- v1.4.0 · 온보딩 ---------- */
     const onbLogin = $('#onb-login');
     if (onbLogin) onbLogin.addEventListener('click', () => onbCloud(false));
@@ -3580,78 +2767,6 @@
     $$('#cloud-tabs button').forEach((b) => b.addEventListener('click', () => setCloudMode(b.dataset.tab)));
     const cloudSubmit = $('#cloud-submit');
     if (cloudSubmit) cloudSubmit.addEventListener('click', submitCloud);
-
-    /* ---------- 점수 저장 ---------- */
-    const scoreSave = $('#score-save');
-    if (scoreSave) scoreSave.addEventListener('click', (e) => { e.preventDefault(); saveScores(); });
-    const scoreBtn = $('#score-input-btn');
-    if (scoreBtn) scoreBtn.addEventListener('click', openScoreModal);
-    const recSave = $('#rec-save');
-    if (recSave) recSave.addEventListener('click', openScoreModal);
-
-    /* ---------- 시나리오 모달 (점수 + 재생) ---------- */
-    const scenSave = $('#scen-save');
-    if (scenSave) scenSave.addEventListener('click', (e) => { e.preventDefault(); saveScenario(); });
-    const scenScore = $('#scen-score');
-    if (scenScore) scenScore.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); saveScenario(); }
-    });
-    const scenPlay = $('#scen-play');
-    if (scenPlay) scenPlay.addEventListener('click', () => {
-      if (!SCEN) return;
-      if (!AL.real) return toast('앱(.exe)에서 실행하면 Steam 이 열립니다', false);
-      launch(SCEN.name);
-    });
-
-    /* ---------- + 더 연습하기 ---------- */
-    ['#rec-more', '#rec-more-2'].forEach((sel) => {
-      const btn = $(sel);
-      if (btn) btn.addEventListener('click', (e) => { e.preventDefault(); morePractice(); });
-    });
-
-    /* ---------- 추천 목록 · 실행 ---------- */
-    const recList = $('#rec-list');
-    if (recList) {
-      recList.addEventListener('click', (e) => {
-        const row = e.target.closest('[data-rec]');
-        if (!row) return;
-        const name = row.dataset.name;
-        if (e.target.closest('[data-run]')) {
-          if (!AL.real) return toast('앱(.exe)에서 실행하면 Steam 이 열립니다', false);
-          e.preventDefault();
-          launch(name);
-          return;
-        }
-        openScenario(name, row.dataset.areakey);
-      });
-    }
-    const recGrid = $('#rec-grid');
-    if (recGrid) {
-      recGrid.addEventListener('click', (e) => {
-        const item = e.target.closest('[data-scen]');
-        if (!item) return;
-        openScenario(item.dataset.scen, item.dataset.scenArea);
-      });
-    }
-    const startBtn = $('#start-train-btn');
-    if (startBtn) {
-      startBtn.addEventListener('click', () => {
-        if (!AL.real) return toast('앱(.exe)에서 실행하면 Steam 이 열립니다', false);
-        const recs = (currentSummary() && currentSummary().recs) || [];
-        const next = recs.find((r) => !r.done) || recs[0];
-        if (next) launch(next.name);
-        else toast('추천 시나리오가 없습니다', false);
-      });
-    }
-    const runAll = $('#run-all-btn');
-    if (runAll) {
-      runAll.addEventListener('click', () => {
-        if (!AL.real) return toast('앱(.exe)에서 실행하면 Steam 이 열립니다', false);
-        /* v1.3.1 — 5종을 순서대로 실행하면서, 바로 점수를 적을 수 있게 5칸 입력창도 함께 연다 */
-        launchAll();
-        setTimeout(() => { try { openScoreModal(); } catch (err) { /* 점수 창은 보조 */ } }, 700);
-      });
-    }
 
     /* ---------- 병영수첩 ---------- */
     const brRefresh = $('#br-refresh');
@@ -3735,6 +2850,73 @@
         const target = e.target.closest('button, [data-switch]');
         if (!target) return;
 
+        const actBtn = target.closest('[data-act]');
+        if (actBtn) {
+          const key = actBtn.dataset.act;
+          if (key === 'save-nick' || key === 'save-run') {
+            if (!AL.real) return toast('앱(.exe)에서 저장할 수 있습니다', false);
+            const patch = collectSettings();
+            if (key === 'save-nick' && !patch.nickname) return toast('서든어택 닉네임을 입력해 주세요', false);
+            const saved = await call('save_settings', patch);
+            if (!saved || !saved.ok) return fail(saved, '저장하지 못했습니다');
+            if (saved.state) applyState(saved.state);
+            if (key === 'save-nick') { toast('✅ 저장했습니다 · 전적을 불러옵니다', true); return AL.refreshBarracks(); }
+            return toast('✅ 저장했습니다', true);
+          }
+          if (key === 'save-goals') {
+            if (!AL.real) return toast('앱(.exe)에서 저장할 수 있습니다', false);
+            const goals = {};
+            ['win', 'kd', 'dmg', 'rp'].forEach((k) => {
+              const el = $('#set-goal-' + k);
+              if (el && String(el.value).trim() !== '') goals[k] = Number(el.value);
+            });
+            const result = await call('save_settings', { goals });
+            if (result && result.state) applyState(result.state);
+            return toast('🎯 목표를 저장했습니다', true);
+          }
+          if (key === 'ov-save') {
+            if (!AL.real) return toast('앱(.exe)에서 저장할 수 있습니다', false);
+            const saved = await call('save_settings', collectSettings());
+            if (!saved || !saved.ok) return fail(saved, '오버레이 설정을 저장하지 못했습니다');
+            if (saved.state) applyState(saved.state);
+            const hot = ((saved.state || {}).overlay || {}).hotkeys || {};
+            return toast(hot.registered && hot.registered.length
+              ? `✅ 오버레이 저장 · 단축키 ${hot.registered.join(', ')}`
+              : '✅ 저장했지만 단축키 등록이 안 됐습니다 (Windows · 키 선점 확인)', true, 4600);
+          }
+          if (key === 'ov-toast-preview' || key === 'ov-party-preview' || key === 'ov-scout-preview') {
+            if (!AL.real) return toast('앱(.exe)에서 실제 오버레이로 보여 줍니다', false);
+            const kind = key === 'ov-toast-preview' ? 'toast' : key === 'ov-party-preview' ? 'party' : 'scout';
+            const r = await call('overlay_preview', kind, ($('#set-ov-pos') || {}).value || '');
+            return toast(r && r.ok ? '미리보기를 띄웠습니다 · 잠시 뒤 사라집니다' : (r && r.message) || '미리보기를 띄우지 못했습니다', !!(r && r.ok), 4200);
+          }
+          if (key === 'ov-hide') { if (AL.real) await call('overlay_hide', ''); return toast('오버레이를 모두 껐습니다', true); }
+          if (key === 'preset-save') {
+            if (!AL.real) return toast('앱(.exe)에서 저장할 수 있습니다', false);
+            const name = ($('#ov-preset-name') || {}).value || '';
+            const r = await call('save_party_preset', name, null, true);
+            if (!r || !r.ok) return fail(r, '프리셋을 저장하지 못했습니다');
+            if (r.state) applyState(r.state);
+            return toast(r.message || '프리셋을 저장했습니다', true);
+          }
+          if (key === 'auth-open') { openAuth('login'); return; }
+          if (key === 'auth-out') {
+            if (!AL.real) return toast('앱(.exe)에서 로그아웃합니다', false);
+            const r = await call('auth_signout');
+            if (r && r.state) applyState(r.state);
+            return toast((r && r.message) || '로그아웃했습니다', !!(r && r.ok));
+          }
+          if (key === 'cloud-push') { if (AL.real) cloudAction('push'); else toast('앱(.exe)에서 올립니다', false); return; }
+          if (key === 'cloud-pull') { if (AL.real) cloudAction('pull'); else toast('앱(.exe)에서 내려받습니다', false); return; }
+          if (key === 'refresh-now') { AL.refreshBarracks(); return; }
+          if (key === 'open-folder') {
+            const result = await call('open_data_folder');
+            return toast(result && result.ok ? '📂 데이터 폴더를 열었습니다' : ((result && result.message) || '폴더를 열지 못했습니다'), !!(result && result.ok));
+          }
+          if (key === 'backup') { if (AL.real) backupNow(); else toast('앱(.exe)에서 백업합니다', false); return; }
+          if (key === 'restore') { if (AL.real) restoreBackup(); else toast('앱(.exe)에서 복원합니다', false); return; }
+          return;
+        }
         const toggle = target.closest('[data-switch]');
         if (toggle) {
           const key = toggle.dataset.switch;
@@ -3746,7 +2928,7 @@
           if (result && result.state) applyState(result.state);
           const labels = {
             auto_launch: '자동 실행', autosave: '점수 자동 저장', auto_sync: '자동 동기화', notify: '알림',
-            hotkey_enabled: 'Ctrl+Shift+A 단축키', kovak_autofill: '코박스 점수 자동 채움'
+            hotkey_enabled: 'Ctrl+Shift+A 단축키', tilt_watch: '연패 브레이크', auto_cloud: '자동 백업', overlay_enabled: '오버레이', toast_enabled: '결과 토스트', toast_auto: '새 경기 자동 감지', ui_scale_auto: '화면 배율 자동'
           };
           toast(`${labels[key] || key} ${!on ? '켜짐' : '꺼짐'}`, true);
           return;
@@ -3893,9 +3075,9 @@
       }
       if (name === 'maps') { renderMaps(AL.peek || AL.state.barracks); }
       if (name === 'leaderboard') { refreshLeaderboardNames(); }
-      if (name === 'records') { if (typeof drawRecords === 'function') drawRecords(); }
       if (name === 'utils') {
         perfRefresh(false);
+        loadRecentOpponents(true);
         const left = $('#cmp-left');
         if (left && !left.value) {
           left.value = (AL.state.settings && AL.state.settings.nickname) ||
@@ -3952,66 +3134,14 @@
       if (!AL.real) { toast('미리보기입니다 · 앱은 종료되지 않습니다', true); return; }
       await call('close_window');
     };
-    /* v1.5.0 — 추천 제외 토글 · 사용자 시나리오 추가/삭제 */
-    AL.toggleExclude = async function (name, excluded) {
-      if (!AL.real) { toast('앱(.exe)에서 저장됩니다', false); return; }
-      const result = await call('set_scenario_excluded', name, !!excluded);
-      if (!result || result.ok === false) return fail(result, '제외 상태를 저장하지 못했습니다');
-      if (result.state) applyState(result.state);
-      if (typeof drawRecGrid === 'function') drawRecGrid();
-      toast(excluded ? `'${name}' 추천에서 제외` : `'${name}' 추천에 다시 포함`, true);
-    };
-    AL.addScenario = async function (payload) {
-      if (!AL.real) { toast('앱(.exe)에서 저장할 수 있습니다', false); return; }
-      const result = await call('add_custom_scenario', payload || {});
-      if (!result || result.ok === false) return fail(result, '시나리오를 저장하지 못했습니다');
-      if (result.state) applyState(result.state);
-      const mask = $('#cscen-mask');
-      if (mask) mask.classList.remove('show');
-      if (typeof drawRecGrid === 'function') drawRecGrid();
-      toast(result.message || '시나리오를 추가했습니다', true);
-    };
-    AL.deleteScenario = async function (name) {
-      if (!AL.real) { toast('앱(.exe)에서 삭제할 수 있습니다', false); return; }
-      const result = await call('delete_custom_scenario', name);
-      if (!result || result.ok === false) return fail(result, '삭제하지 못했습니다');
-      if (result.state) applyState(result.state);
-      if (typeof drawRecGrid === 'function') drawRecGrid();
-      toast(result.message || '시나리오를 삭제했습니다', true);
-    };
-    AL.openScenarioForm = function () {
-      const mask = $('#cscen-mask');
-      if (mask) mask.classList.add('show');
-    };
-
     /* v1.5.0 (#23) — 작업표시줄 ✕ · Alt+F4 도 X 버튼과 같은 확인 팝업 */
     AL.confirmClose = function () {
       const mask = $('#close-mask');
       if (mask) { mask.classList.add('show'); return true; }
       return false;
     };
-    /* v1.5.0 — 코박스·에임랩 종료 감지 토스트 */
-    AL.trainerFinished = function (event) {
-      if (!event) return;
-      const label = event.label || '트레이너';
-      toast(event.message || `${label} 종료 감지 · 점수를 입력해 주세요`, true, 7000,
-        { label: '점수 입력', onClick: () => {
-            const mask = $('#score-mask');
-            if (mask) mask.classList.add('show');
-            if (AL.real) importKovak(true);
-          } });
-    };
-    AL.resetScores = async function () {
-      if (!AL.real) return toast('앱(.exe)에서 초기화할 수 있습니다', false);
-      busy(true, '점수 기록을 초기화하는 중…');
-      const result = await call('reset_scores', '초기화');
-      busy(false);
-      if (!result || !result.ok) return fail(result, '초기화하지 못했습니다');
-      if (result.state) applyState(result.state);
-      const mask = $('#reset-mask');
-      if (mask) mask.classList.remove('show');
-      toast(result.message || '점수 기록을 초기화했습니다', true, 5200);
-    };
+;
+;
     AL.addMember = async function (name, ouid) {
       if (!AL.real) return;
       busy(true, `'${name}' 전적을 불러오는 중…`);
@@ -4064,32 +3194,6 @@
   }
 
   /* state 없이 게임/무기만 바뀐 경우: 저장된 state 로 다시 그린다 */
-  function applySummaryOnly() {
-    const st = AL.state;
-    const summary = st && st.summaries && st.summaries[`${game}-${weapon}`];
-    if (!summary) return;
-    VALUES = {};
-    AREAS.forEach((a) => { VALUES[a.key] = Math.round(Number(summary.values?.[a.key] || 0)); });
-    recalc();
-    if (typeof summary.score === 'number') {
-      score = summary.score;
-      tierIdx = 0;
-      TIERS.forEach((t, k) => { if (score >= t.cut) tierIdx = k; });
-    }
-    applyRecs(summary);
-    const daily = summary.daily || [];
-    TREND = { labels: daily.map((d) => mdLabel(d.date)), values: daily.map((d) => (d.score === null ? null : d.score)) };
-    const known = daily.filter((d) => d.score !== null).map((d) => d.score);
-    SPARK = known.length ? known.slice(-7) : [0, 0];
-    refreshAll();
-    if (typeof summary.score === 'number') {
-      score = summary.score;
-      tierIdx = 0;
-      TIERS.forEach((t, k) => { if (score >= t.cut) tierIdx = k; });
-      drawKpis(); drawRadar(); drawLadder(); drawTierTable();
-    }
-    paintSummaryExtras(summary);
-  }
 
   /* ==================================================================
      부팅

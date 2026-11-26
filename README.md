@@ -1,39 +1,44 @@
 # SA AIM LABS
 
-서든어택 에임 훈련 데스크톱 앱 (Windows · PyWebView).
-코박스(KovaaK's)·에임랩(Aim Lab) 훈련 기록, 5영역 레이더, 18단계 티어,
-NEXON Open API 병영수첩·친구 순위표, NVIDIA Drs 최적화 유틸을 한 화면에 모았습니다.
+서든어택 전술 · 병영 · 엔비디아 최적화 도우미 (Windows · PyWebView).
+NEXON Open API 병영수첩(솔로/파티 RP · 랭크 컨디션 · 플레이 잔디 · 최근 5판 · 약점 맵),
+인게임 오버레이 3종(F8 파티 대기실 맵 밴픽 · F9 적 5명 스카우팅 · 경기 종료 토스트),
+상대 스카우팅 · 타인 A+B 듀오 시너지 · 5인 맵 밴픽 · NVIDIA 계단현상/전원/게임 모드 ·
+회원 로그인(이메일 · 비밀번호 찾기)과 클라우드 백업을 한 앱에 담았습니다.
 
-**v1.0.1 — 실기 피드백 21건. 오버레이가 게임 포커스를 뺏지 않는다(창을 NOACTIVATE 로
-만든 뒤 활성화 없이 표시 · 게임 포커스 복구). 파티 대기실 5인 OCR 좌표를 게임
-클라이언트(1682×945) 기준으로 재보정해 닉네임 줄만 읽고, 유사도 0.78 미만은 다른
-사람으로 바꾸지 않는다. 경기 종료 토스트는 18초 감지 + 캐시 무시 조회로 5~30초 안에
-뜨고, 내 전적은 1분 5초마다 자동 최신화된다. 같은 판 상대 5명은 팀 ID 로 정확히
-가르고, 순위표는 저장된 ouid 로 현재 닉네임을 다시 확인한다. F8 로 읽은 5인은
-전술 도구 파티랭크 맵 밴·픽에 자동 입력·분석되고, 파티 배지는 닉네임 줄 아래 +
-카드 밑에 좋은 맵 3·피할 맵 3(공식 맵 사진)을 함께 보여 준다. 단축키에 Insert·Delete
-추가, 상단 'API 키 입력 필요' 배지 제거(내장 프록시), 점수 저장 직후 클라우드 백업.**
-
-**v1.0.0 — 정식 첫 버전. 인게임 오버레이 3종(대기실 5인 OCR · 맵 밴 PICK/BAN
-글래스 바 · 10초 상대 5명 스카우팅) + 경기 종료 결과 토스트, Cloudflare Workers
-프록시 기본 연결(앱에 넥슨 키 없음), 30일 매치 캐시 자동 정리, 실기 UI 피드백
-전면 반영(상단 제목줄 제거 · 게스트 홈 · K/D % 표기 · 순위표 20명 · 자유 1:1 비교).**
+**v2.0.0 — 서든 전용 전면 개편.** 에임 연습(코박스·에임랩 점수·시나리오·18단계 티어·
+훈련 잔디)을 앱에서 완전히 걷어내고, 홈을 **내 랭크(솔로/파티 RP) · 최근 랭크 컨디션 ·
+서든어택 플레이 잔디 · 최근 5판 · 약점 맵 TOP 3 · 오버레이/엔비디아 상태**로 다시 짰습니다.
+인게임 오버레이는 pywebview 창 대신 **초경량 Win32 레이어드 창**(`WS_EX_TOPMOST |
+WS_EX_NOACTIVATE | WS_EX_TRANSPARENT`, GDI+ 렌더, WM_NCHITTEST=HTTRANSPARENT)으로 바꿔
+게임 포커스를 빼앗지 않고 16:9·4:3 모두에서 제 위치에 뜹니다. 파티 OCR은 신뢰도가
+애매한 닉네임(0.62~0.92)을 **조회하지 않고 '확인 필요'**로 남기고, 전술 도구의 1:1 비교는
+**타인 A + 타인 B 듀오 시너지**(같은 match_id 공동 승률·K/D·표본 부족 안내)로 교체했습니다.
+최근 상대 팀은 매번 최신 조회 + 실패 시 저장본임을 표시하고, 화면 배율 90/100/115/125%에서
+스크롤이 잘리지 않습니다. 저장소는 `RLock` 으로 동시 접근을 막고 백업·클라우드에서
+API 키·Supabase 토큰·비밀번호를 제외합니다. NVAPI `NVDRS_UNICODE_STRING` 앞 4바이트
+length 필드를 제거하고 `settingName[2048]` 을 복구해(구조체 12,320바이트) 드라이버
+프로필 **재조회 검증 후에만** '적용 완료'로 표시합니다. 회원은 앱과 같은 Supabase
+프로젝트로 로그인·회원가입·비밀번호 찾기를 쓰고, 지금은 `ENFORCE_PRO_LIMIT = False`
+(무료 운영 · 전 기능 무제한)이며 이 값을 True 로 바꾸면 곧바로 무료 하루 3회 / PRO
+무제한이 동작합니다.
 
 ```
 main.py                 엔트리 (창 생성 · 정중앙 배치 · --serve 미리보기 · --drs-apply 상승 헬퍼)
 app/api.py              JS ↔ Python 브리지 (window.pywebview.api)
 app/nexon.py            서든어택 오픈 API (전적 · 랭크전 100판 집계 · match-detail 디스크 캐시)
-app/scoring.py          통합 에임 프로필 · 5영역 평점 · 18단계 티어 · 무기별 추천 · 에임랩 52종
+app/insights.py         홈 인사이트 (랭크 밴드 · 플레이 잔디 · 최근 폼 · 약점 맵 · 코칭)
+app/auth.py             회원 로그인/회원가입/비밀번호 찾기 · 등급(subscriptions) · 무료/ PRO 제한
 app/drs.py              NVIDIA Drs DB 리더/패처 (계단현상 끄기 = AA compatibility 0x00401241)
 app/supabase_sync.py    Supabase Auth + PostgREST (표준 라이브러리만 사용)
 app/nvidia.py           NVIDIA Drs 프로필 백업/적용/복구
-app/winutil.py          마우스 가속 · 전원 옵션/게임 모드 · steam:// · aimlab:// 실행
-app/kovak.py            코박스 stats/*.csv 점수 인식 · 플레이리스트(.json/.plo) 생성
+app/winutil.py          마우스 가속 · 전원 옵션/게임 모드 · steam:// 실행
 app/updates.py          GitHub Releases 새 버전 확인 (표준 라이브러리만)
 app/tray.py             시스템 트레이 아이콘 + Ctrl+Shift+A 전역 단축키 (Win32 ctypes)
 app/barracks.py         병영수첩 user_nexon_sn 해석 (ouid 와 다른 ID · 프로필/클랜 주소)
-app/v150.py             테마·화면 배율·공식 맵 이미지·파티 맵 밴픽·등락 뱃지·트레이너 감시
-app/overlay.py          인게임 오버레이 3종 창 관리 (투명·클릭 통과·항상 위 · 블루프린트 기하)
+app/v150.py             테마·화면 배율·공식 맵 이미지·파티 맵 밴픽·등락 뱃지
+app/native_overlay.py   Win32 레이어드 투명 창 (GDI+ 렌더 · 클릭 통과 · 포커스 비탈취)
+app/overlay.py          인게임 오버레이 3종 스펙·기하·수명 관리
 app/party_lobby.py      대기실/10인 OCR 닉네임 파싱·보정·팀 분리·고정 파티 프리셋
 app/scouting.py         상대 5명 병렬 스카우팅 (프로필 → 이 맵 승률·KD 배지)
 app/nvapi_drs.py        NVAPI DRS (프로필에 설정 생성·저장 · 별도 프로세스)
@@ -42,14 +47,9 @@ app/hotkeys.py          F8/F9 전역 단축키 (RegisterHotKey)
 app/toast.py            경기 종료 감지 · 토스트 문구
 ui/index.html           화면 (정적 디자인 + 샘플 데이터 + 첫 로딩 스플래시)
 ui/bridge.js            화면 ↔ pywebview.api 연결 (실데이터 반영)
-tests/api_test.py       백엔드 테스트 (실응답 캐시 재생 · Drs 패치 · 평점 정규화)
-tests/ui_test.py        Playwright UI 테스트 (목 브리지 · 스크린샷)
-tests/v110_test.py      v1.1.0 검증 (통합 점수 · 추천 UX · 모달 · 스크롤 · 순위표 · 창 고정)
-tests/v120_test.py      v1.2.0 검증 (코박스 인식 · 1:1 비교 · 전후 비교 · 리포트 카드 · 코칭 등 13종)
-tests/v130_test.py      v1.3.0 검증 (23가지 UI·기능 + PB 유지)
-tests/v150_test.py      v1.5.0 검증 (테마·배율·홈·레일 정렬·파티 맵·내 시나리오·병영 링크 등 120건)
-tests/v100_test.py      v1.0.0 검증 (프록시·캐시 정리·오버레이 기하/문구·OCR 보정·프리셋·단축키·서든 전용 Drs 패치)
-tests/v100_shot.py      v1.0.0 전 화면 + 오버레이 스크린샷 (tests/shots/v100-*.png)
+tests/v2_test.py        v2.0.0 전체 검사 (구조체·OCR·듀오·저장소·등급·오버레이·UI 115%) 151건
+tests/v2_shot.py        주요 화면 스크린샷 (tests/shots/v2-*.png)
+tests/v2_fixtures.py    테스트 공용 state fixture · 브리지 목
 supabase/schema.sql     user_profiles 테이블 + RLS (SQL Editor 에 1회 실행)
 .github/workflows/      windows-latest 에서 .exe 빌드
 ```

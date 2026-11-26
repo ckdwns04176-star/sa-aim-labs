@@ -21,7 +21,7 @@ _GUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]
 SPI_SETMOUSE = 0x0004
 SPIF_UPDATEINIFILE = 0x01
 SPIF_SENDCHANGE = 0x02
-ALLOWED_SCHEMES = {"steam", "aimlab", "https", "http"}
+ALLOWED_SCHEMES = {"steam", "https", "http"}
 
 # 창 고정 크기 (논리 px · 96 DPI 기준)
 WINDOW_WIDTH = 1200
@@ -144,7 +144,7 @@ def open_target(url: str) -> dict[str, Any]:
     target = normalize_target(url)
     scheme = urlparse(target).scheme.lower()
     try:
-        if os.name == "nt" and scheme in {"steam", "aimlab"}:
+        if os.name == "nt" and scheme == "steam":
             os.startfile(target)  # type: ignore[attr-defined]
             return {"ok": True, "method": "startfile", "url": target}
         if os.name == "nt" and scheme in {"http", "https"}:

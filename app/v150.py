@@ -1,17 +1,14 @@
-"""v1.5.0 신규 — 파티 맵 밴·픽 추천 · RP 등락 뱃지 · 트레이너 종료 감지 · 공식 맵 이미지.
+"""화면 보조 계산 — 파티 맵 밴·픽 추천 · RP 등락 뱃지 · 공식 맵 이미지 · 화면 배율.
 
-모두 표준 라이브러리만 쓴다 (추가 패키지 없음).  화면이 바로 쓸 수 있게
-순수 함수 위주로 두고, Windows 프로세스 감시만 스레드 하나를 쓴다.
+v2.0.0 — 에임 트레이너 감시·사용자 시나리오·추천 제외를 걷어냈다.  모두 표준
+라이브러리만 쓰고, 화면이 바로 쓸 수 있게 순수 함수로 둔다.
 """
 from __future__ import annotations
 
 import json
-import os
 import re
-import threading
-import time
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Sequence
 
 from . import paths
 
@@ -268,133 +265,6 @@ def delta_badges(history: Sequence[dict[str, Any]], *, limit: int = 4) -> list[d
     return result
 
 
-# ---------------------------------------------------------------- 트레이너 종료 감시
-TRAINER_PROCESSES = {
-    "fpsaimtrainer.exe": "kovak",
-    "aimlab_tb.exe": "aimlab",
-    "aimlab.exe": "aimlab",
-}
-TRAINER_LABEL = {"kovak": "KovaaK's", "aimlab": "Aim Lab"}
-
-
-def _running_trainers_windows() -> set[str]:
-    """실행 중인 트레이너 exe 이름 집합 (Windows · ctypes 만)."""
-    if os.name != "nt":
-        return set()
-    try:
-        import ctypes
-        from ctypes import wintypes
-    except Exception:  # noqa: BLE001
-        return set()
-    found: set[str] = set()
-    try:
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        psapi = ctypes.WinDLL("psapi", use_last_error=True)
-        PROCESS_VM_READ = 0x0010
-        PROCESS_QUERY_INFORMATION = 0x0400
-        MAX_PATH = 260
-        ids = (wintypes.DWORD * 2048)()
-        needed = wintypes.DWORD()
-        if not psapi.EnumProcesses(ctypes.byref(ids), ctypes.sizeof(ids), ctypes.byref(needed)):
-            return set()
-        count = int(needed.value) // ctypes.sizeof(wintypes.DWORD)
-        buf = ctypes.create_unicode_buffer(MAX_PATH)
-        for index in range(min(count, 2048)):
-            pid = int(ids[index])
-            if pid <= 0:
-                continue
-            handle = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
-            if not handle:
-                continue
-            try:
-                size = wintypes.DWORD(MAX_PATH)
-                if kernel32.QueryFullProcessImageNameW(handle, 0, buf, ctypes.byref(size)):
-                    name = os.path.basename(str(buf.value)).lower()
-                    if name in TRAINER_PROCESSES:
-                        found.add(name)
-            finally:
-                kernel32.CloseHandle(handle)
-    except Exception:  # noqa: BLE001 - 감시 실패는 앱을 막지 않는다
-        return set()
-    return found
-
-
-class TrainerWatch:
-    """`FPSAimTrainer.exe` / `AimLab_tb.exe` 가 켜졌다가 꺼지면 한 번 알린다."""
-
-    def __init__(self, on_finished: Callable[[dict[str, Any]], None] | None = None,
-                 interval: float = 5.0) -> None:
-        self.on_finished = on_finished
-        self.interval = max(2.0, float(interval))
-        self._thread: threading.Thread | None = None
-        self._stop = threading.Event()
-        self._active: set[str] = set()
-        self.started_at: dict[str, float] = {}
-        self.last_event: dict[str, Any] | None = None
-        self.enabled = True
-
-    @property
-    def supported(self) -> bool:
-        return os.name == "nt"
-
-    @property
-    def running(self) -> list[str]:
-        return sorted(TRAINER_LABEL.get(TRAINER_PROCESSES.get(n, ""), n) for n in self._active)
-
-    def start(self) -> bool:
-        if not self.supported or (self._thread and self._thread.is_alive()):
-            return bool(self._thread and self._thread.is_alive())
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, name="sa-trainer-watch", daemon=True)
-        self._thread.start()
-        return True
-
-    def stop(self) -> None:
-        self._stop.set()
-
-    def poll(self) -> dict[str, Any] | None:
-        """한 번 확인 — 새로 꺼진 트레이너가 있으면 이벤트를 돌려준다."""
-        if not self.enabled:
-            return None
-        current = _running_trainers_windows()
-        closed = self._active - current
-        opened = current - self._active
-        now = time.monotonic()
-        for name in opened:
-            self.started_at[name] = now
-        self._active = current
-        if not closed:
-            return None
-        event = None
-        for name in closed:
-            game = TRAINER_PROCESSES.get(name, "kovak")
-            played = now - self.started_at.pop(name, now)
-            if played < 20:      # 20초 미만 실행은 오탐으로 본다
-                continue
-            event = {
-                "game": game, "exe": name,
-                "label": TRAINER_LABEL.get(game, game),
-                "minutes": int(round(played / 60)),
-                "at": time.strftime("%Y-%m-%dT%H:%M:%S"),
-                "message": f"{TRAINER_LABEL.get(game, game)} 종료 감지 · 점수를 입력하면 오늘 기록에 바로 반영됩니다",
-            }
-        if event:
-            self.last_event = event
-            if self.on_finished:
-                try:
-                    self.on_finished(event)
-                except Exception:  # noqa: BLE001
-                    pass
-        return event
-
-    def _run(self) -> None:
-        while not self._stop.wait(self.interval):
-            try:
-                self.poll()
-            except Exception:  # noqa: BLE001
-                continue
-
-
 # ---------------------------------------------------------------- 내전 팀 복사
 ROLE_LABEL = {"sniper": "스나", "rifle": "라플", "special": "특수", "assist": "지원"}
 
@@ -423,61 +293,6 @@ def team_copy_text(result: dict[str, Any]) -> str:
     left = line("a", "A팀")
     right = line("b", "B팀")
     return f"{left} / {right}"
-
-
-# ---------------------------------------------------------------- 사용자 시나리오
-SCENARIO_DIFFS = ("초급", "중급", "고급")
-
-
-def clean_custom_scenario(payload: dict[str, Any], area_keys: Sequence[str]) -> dict[str, Any]:
-    """`+ 내 시나리오 추가` 입력값 검증."""
-    data = payload or {}
-    name = str(data.get("name") or "").strip()[:60]
-    if not name:
-        raise ValueError("시나리오 이름을 입력해 주세요")
-    area = str(data.get("area") or "").strip()
-    if area not in area_keys:
-        raise ValueError("5영역 중 하나를 골라 주세요")
-    diff = str(data.get("diff") or "").strip() or SCENARIO_DIFFS[0]
-    if diff in ("초", "초급"):
-        diff = "초급"
-    elif diff in ("중", "중급"):
-        diff = "중급"
-    elif diff in ("고", "고급", "상급"):
-        diff = "고급"
-    else:
-        diff = "초급"
-
-    def url(value: Any) -> str:
-        text = str(value or "").strip()[:400]
-        if text and not re.match(r"^(https?://|steam://)", text, re.I):
-            raise ValueError("플레이 URL 은 http(s):// 또는 steam:// 로 시작해야 합니다")
-        return text
-
-    out = {
-        "name": name,
-        "play_url": url(data.get("play_url")),
-        "stats_url": url(data.get("stats_url")),
-        "area": area,
-        "diff": diff,
-        "memo": str(data.get("memo") or "").strip()[:300],
-        "game": str(data.get("game") or "kovak") if str(data.get("game") or "") in ("kovak", "aimlab") else "kovak",
-        "custom": True,
-    }
-    return out
-
-
-def apply_exclusions(recs: Sequence[dict[str, Any]], excluded: Iterable[str]) -> list[dict[str, Any]]:
-    """추천 5종에서 제외된 시나리오를 뺀다 (라이브러리 목록은 그대로)."""
-    blocked = {str(n).strip().lower() for n in (excluded or []) if str(n).strip()}
-    if not blocked:
-        return list(recs)
-    return [r for r in recs if str((r or {}).get("name") or "").strip().lower() not in blocked]
-
-
-def is_excluded(name: Any, excluded: Iterable[str]) -> bool:
-    target = str(name or "").strip().lower()
-    return bool(target) and target in {str(n).strip().lower() for n in (excluded or []) if str(n).strip()}
 
 
 # ---------------------------------------------------------------- 화면 배율

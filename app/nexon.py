@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 from typing import Any, Callable, Iterable, Sequence
 
-from . import paths, scoring
+from . import insights, paths
 
 BASE_URL = "https://open.api.nexon.com"
 # v1.0.0 — 앱에는 넥슨 키가 들어가지 않는다.  모든 조회는 Cloudflare Workers
@@ -585,7 +585,7 @@ def build_barracks(client: NexonClient, nickname: str, progress: Progress | None
     }
     # 🧭 최근 100판 플레이 코칭 — 이미 받은 지표만으로 계산한다(추가 API 0건)
     try:
-        payload["play_coaching"] = scoring.play_coaching(payload)
+        payload["play_coaching"] = insights.play_coaching(payload)
     except Exception:  # noqa: BLE001 - 코칭 실패가 병영수첩을 막지 않는다
         payload["play_coaching"] = []
     return payload
@@ -661,7 +661,7 @@ def build_leaderboard(client: NexonClient, members: Iterable[Any], progress: Pro
 
 def leaderboard_payload(members: Sequence[dict[str, Any]], client: NexonClient | None = None) -> list[dict[str, Any]]:
     """Normalise stored members for the UI (tier marks, unranked flags)."""
-    from . import scoring
+    from . import insights as scoring
 
     rows = []
     for m in members:

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout, as_completed
 from typing import Any, Callable, Sequence
 
 from . import nexon
@@ -25,6 +25,71 @@ PROFILE_BUDGET = 1.2
 TOTAL_BUDGET = 3.4
 
 WEAPON_KO = {"sniper": "스나", "rifle": "라플", "special": "특화"}
+
+
+class InFlight:
+    """같은 스카우팅 요청이 이미 돌고 있으면 두 번째는 즉시 돌려보낸다.
+
+    F9 연타·오버레이 재입력으로 같은 5명을 열 번 조회하면 넥슨 프록시가
+    큐에 쌓여 10초 넘게 늦어진다.  (키 = 기능 + 정렬된 닉네임 + 맵)
+    """
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._keys: set[str] = set()
+
+    def acquire(self, key: str) -> bool:
+        with self._lock:
+            if key in self._keys:
+                return False
+            self._keys.add(key)
+            return True
+
+    def release(self, key: str) -> None:
+        with self._lock:
+            self._keys.discard(key)
+
+    def keys(self) -> list[str]:
+        with self._lock:
+            return sorted(self._keys)
+
+
+INFLIGHT = InFlight()
+
+
+def request_key(kind: str, names: Sequence[str], map_name: str = "") -> str:
+    clean = ",".join(sorted(str(n or "").strip().lower() for n in names if str(n or "").strip()))
+    return f"{kind}|{clean}|{str(map_name or '').strip().lower()}"
+
+
+def run_pool(fn: Callable[[Any], Any], items: Sequence[Any], *,
+             workers: int, timeout: float) -> tuple[list[tuple[Any, Any]], bool]:
+    """제한 시간 안에 끝난 작업만 돌려준다 — 시간이 지나면 **기다리지 않는다**.
+
+    ``with ThreadPoolExecutor`` 는 블록을 나갈 때 모든 스레드를 join 하므로,
+    as_completed 가 타임아웃해도 느린 호출이 끝날 때까지 화면이 멈췄다.
+    여기서는 실행기를 직접 닫아(``cancel_futures``) 남은 작업을 버린다.
+    """
+    if not items:
+        return [], False
+    pool = ThreadPoolExecutor(max_workers=max(1, min(int(workers or 1), len(items))))
+    futures = {pool.submit(fn, item): item for item in items}
+    done: list[tuple[Any, Any]] = []
+    timed_out = False
+    try:
+        for future in as_completed(futures, timeout=max(0.05, float(timeout))):
+            item = futures[future]
+            try:
+                done.append((item, future.result()))
+            except Exception:  # noqa: BLE001 - 한 건 실패는 나머지를 막지 않는다
+                done.append((item, None))
+    except FutureTimeout:
+        timed_out = True
+    finally:
+        for future in futures:
+            future.cancel()
+        pool.shutdown(wait=False, cancel_futures=True)
+    return done, timed_out
 
 
 def _pct(value: Any) -> float | None:
@@ -151,25 +216,43 @@ def _recent_party(client: nexon.NexonClient, ouid: str, limit: int = 20) -> list
 
 def quick_scout(client: nexon.NexonClient, names: Sequence[str], map_name: str = "",
                 *, depth: int = DEFAULT_DEPTH, budget: float = TOTAL_BUDGET,
-                on_update: Callable[[list[dict[str, Any]]], None] | None = None) -> dict[str, Any]:
-    """상대 5명 병렬 스카우팅 — 프로필 먼저, 맵 승률은 이어서."""
+                on_update: Callable[[list[dict[str, Any]]], None] | None = None,
+                ledger: InFlight | None = None) -> dict[str, Any]:
+    """상대 5명 병렬 스카우팅 — 프로필 먼저, 맵 승률은 이어서.
+
+    같은 요청(같은 닉네임 조합·맵)이 이미 돌고 있으면 ``busy=True`` 로
+    즉시 돌아간다.  모든 단계는 남은 시간까지만 기다린다.
+    """
     targets = [str(n).strip() for n in names if str(n or "").strip()][:5]
     if not targets:
         return {"ok": False, "rows": [], "message": "분석할 닉네임이 없습니다"}
+    ledger = ledger or INFLIGHT
+    key = request_key("scout", targets, map_name)
+    if not ledger.acquire(key):
+        return {"ok": False, "busy": True, "rows": [],
+                "message": "같은 상대를 이미 분석 중입니다 · 잠시 뒤 결과가 뜨는대로 갱신됩니다"}
+    try:
+        return _quick_scout(client, targets, map_name, depth=depth, budget=budget,
+                            on_update=on_update)
+    finally:
+        ledger.release(key)
+
+
+def _quick_scout(client: nexon.NexonClient, targets: list[str], map_name: str, *,
+                 depth: int, budget: float,
+                 on_update: Callable[[list[dict[str, Any]]], None] | None) -> dict[str, Any]:
     started = time.monotonic()
     rows: dict[str, dict[str, Any]] = {}
 
     # ── A) 프로필 (병렬) ─────────────────────────────────────────────
-    with ThreadPoolExecutor(max_workers=len(targets)) as pool:
-        futures = {pool.submit(_profile, client, name): name for name in targets}
-        try:
-            for future in as_completed(futures, timeout=PROFILE_BUDGET + 1.6):
-                row = future.result()
-                rows[row["name"]] = row
-        except Exception:  # noqa: BLE001 - 시간이 지나면 있는 것만 쓴다
-            pass
+    done, timed_out = run_pool(lambda name: _profile(client, name), targets,
+                               workers=len(targets), timeout=PROFILE_BUDGET + 1.6)
+    for name, row in done:
+        if isinstance(row, dict):
+            rows[row.get("name") or name] = row
     for name in targets:
-        rows.setdefault(name, {"name": name, "weapon": "sniper", "error": "시간 초과", "map_win": None})
+        rows.setdefault(name, {"name": name, "weapon": "sniper", "error": "시간 초과",
+                               "map_win": None, "stale": True})
     ordered = [rows.get(name) or {"name": name} for name in targets]
     if on_update:
         try:
@@ -178,58 +261,55 @@ def quick_scout(client: nexon.NexonClient, names: Sequence[str], map_name: str =
             pass
 
     # ── B) 최근 경기 상세 → 이 맵 승률 (전체 병렬 · 남은 시간만큼) ─────
-    #     선수별로 순서대로 10~16콜을 하면 5초를 넘긴다.  목록 조회와 상세 조회를
-    #     나눠 **모든 선수의 상세를 한 풀에서** 동시에 받는다.
-    remaining = max(0.5, budget - (time.monotonic() - started))
-    deadline = started + budget
-    refined: list[dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        row_jobs = {pool.submit(_recent_party, client, str(r["ouid"])): r
-                    for r in ordered if r.get("ouid")}
-        match_rows: dict[str, list[dict[str, Any]]] = {}
-        try:
-            for future in as_completed(row_jobs, timeout=max(0.4, remaining * 0.45)):
-                row = row_jobs[future]
-                try:
-                    match_rows[row["name"]] = future.result()
-                except Exception:  # noqa: BLE001
-                    match_rows[row["name"]] = []
-        except Exception:  # noqa: BLE001 - 남은 선수는 프로필 값 유지
-            pass
+    remaining = max(0.4, budget - (time.monotonic() - started))
+    with_ouid = [r for r in ordered if r.get("ouid")]
+    match_rows: dict[str, list[dict[str, Any]]] = {}
+    done, _ = run_pool(lambda row: _recent_party(client, str(row["ouid"])), with_ouid,
+                       workers=6, timeout=max(0.4, remaining * 0.5))
+    for row, matches in done:
+        match_rows[row["name"]] = matches or []
 
-    tasks: list[tuple[str, str, str]] = []      # (선수 이름, match_id, 이름)
+    tasks: list[tuple[str, str]] = []      # (선수 이름, match_id)
     for row in ordered:
         for match in (match_rows.get(row["name"]) or [])[:depth]:
             if match.get("match_id"):
-                tasks.append((row["name"], str(match["match_id"]), str(row.get("name") or "")))
+                tasks.append((str(row.get("name") or ""), str(match["match_id"])))
     details_by_player: dict[str, dict[str, dict[str, Any] | None]] = {}
     if tasks:
-        with ThreadPoolExecutor(max_workers=10) as pool:
-            jobs = {}
-            for name, match_id, _nick in tasks:
-                cached = client.match_detail_cached(match_id)
-                if cached is not None:
-                    details_by_player.setdefault(name, {})[match_id] = cached
-                    continue
-                jobs[pool.submit(client.match_detail, match_id)] = (name, match_id)
-            for future in as_completed(jobs, timeout=max(0.4, deadline - time.monotonic())):
-                name, match_id = jobs[future]
-                try:
-                    details_by_player.setdefault(name, {})[match_id] = future.result()
-                except Exception:  # noqa: BLE001
-                    details_by_player.setdefault(name, {})[match_id] = None
+        pending: list[tuple[str, str]] = []
+        for name, match_id in tasks:
+            cached = client.match_detail_cached(match_id)
+            if cached is not None:
+                details_by_player.setdefault(name, {})[match_id] = cached
+                continue
+            pending.append((name, match_id))
+        if pending:
+            def _fetch(task: tuple[str, str]) -> Any:
+                return client.match_detail(task[1])
 
+            done, _ = run_pool(_fetch, pending, workers=10,
+                               timeout=max(0.4, (started + budget) - time.monotonic()))
+            for (name, match_id), detail in done:
+                details_by_player.setdefault(name, {})[match_id] = detail
+
+    refined: list[dict[str, Any]] = []
     for row in ordered:
         name = row["name"]
-        rows = (match_rows.get(name) or [])[:depth]
+        matches = (match_rows.get(name) or [])[:depth]
         detail_map = details_by_player.get(name) or {}
-        details = [detail_map.get(str(m.get("match_id"))) for m in rows]
-        refined.append(_finish_row(row, rows, details, map_name) if rows else row)
+        details = [detail_map.get(str(m.get("match_id"))) for m in matches]
+        refined.append(_finish_row(row, matches, details, map_name) if matches else row)
     payload = [row_payload(r) for r in refined]
+    for row, shallow in zip(payload, refined):
+        if shallow.get("stale") or shallow.get("error"):
+            row["stale"] = True
     found = len([r for r in refined if not r.get("error")])
+    elapsed = round(time.monotonic() - started, 2)
     return {"ok": found > 0, "rows": payload, "raw": refined,
-            "elapsed": round(time.monotonic() - started, 2),
-            "message": f"상대 {found}/{len(refined)}명 분석 · {round((time.monotonic() - started) * 1000)}ms"}
+            "elapsed": elapsed, "timed_out": bool(timed_out),
+            "stale": any(r.get("stale") for r in payload),
+            "as_of": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "message": f"상대 {found}/{len(refined)}명 분석 · {round(elapsed * 1000)}ms"}
 
 
 def team_power(rows: Sequence[dict[str, Any]]) -> dict[str, Any]:

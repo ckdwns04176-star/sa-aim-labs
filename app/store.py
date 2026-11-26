@@ -1,4 +1,14 @@
-"""Local JSON storage (``data.json``) with atomic writes and .json backups."""
+"""Local JSON storage (``data.json``) — thread-safe, atomic, secret-free backups.
+
+v2.0.0
+------
+* 에임 연습(코박스·에임랩) 기록 저장을 없앴다.  남는 데이터는 **서든어택 전적
+  캐시 · 순위표 · 맵 밴 프리셋 · 설정 · 계정 등급 캐시**뿐이다.
+* 모든 읽기/쓰기는 ``RLock`` 으로 감싼다 — 65초 전적 최신화 스레드, 오버레이
+  단축키 스레드, 30분 클라우드 백업이 같은 dict 를 동시에 만진다.
+* ``export_backup()`` 은 **민감정보를 빼고** 쓴다 (API 키 · Supabase 토큰 ·
+  비밀번호).  백업 파일은 사용자가 메일·메신저로 주고받을 수 있는 파일이다.
+"""
 from __future__ import annotations
 
 import copy
@@ -7,6 +17,7 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -14,8 +25,10 @@ from typing import Any
 from . import paths
 from .supabase_sync import DEFAULT_ANON_KEY, DEFAULT_URL
 
-SCHEMA_VERSION = 1
-MAX_RECORDS = 5000
+SCHEMA_VERSION = 2
+
+# 백업 파일에 절대 들어가면 안 되는 키 (settings 안쪽 이름 기준)
+SECRET_KEYS = ("api_key", "access_token", "refresh_token", "password", "anon_key", "service_key")
 
 DEFAULTS: dict[str, Any] = {
     "version": SCHEMA_VERSION,
@@ -23,58 +36,41 @@ DEFAULTS: dict[str, Any] = {
     "updated_at": None,
     "settings": {
         "nickname": "",
-        "api_key": "",
-        "kovak_path": r"C:\Program Files (x86)\Steam\steamapps\common\FPSAimTrainer\FPSAimTrainer.exe",
-        "aimlab_path": r"C:\Program Files (x86)\Steam\steamapps\common\Aim Lab\AimLab.exe",
         "auto_sync": True,
-        "auto_launch": True,
-        "tray_background": False,
         "notify": True,
-        "autosave": True,
         "hotkey_enabled": True,
-        "kovak_stats_path": "",
-        "kovak_autofill": False,
         "onboarded": False,
-        "weapon": "sniper",
-        "game": "kovak",
         "tilt_watch": True,
         "tilt_interval": 240,
-        "week_goals": {"days": 5, "games": 25},
         "goals": {"win": 55.0, "kd": 60.0, "dmg": 1400, "rp": 4000},
         "supabase": {"url": DEFAULT_URL, "anon_key": DEFAULT_ANON_KEY},
         "cloud_email": "",
-        # ── v1.5.0 ──
-        "theme": "coral",                 # coral / ice / gold (#4)
-        "ui_scale": 100,                  # 90 / 100 / 115 / 125 (#1)
-        "ui_scale_auto": True,            # QHD 이상이면 자동으로 키운다
-        "excluded_scenarios": [],         # 추천에서 빼 둔 시나리오 이름
-        "watch_trainers": True,           # 코박스·에임랩 종료 감지 알림
-        "auto_cloud": True,               # 로그인 상태면 30분마다 자동 동기화
-        # ── v1.0.0 · 인게임 오버레이 ──
-        "overlay_enabled": True,          # 오버레이 3종 사용
-        "overlay_hotkey_lobby": "F8",    # 대기실 스캔 / 맵 밴
-        "overlay_hotkey_scout": "F9",    # 10초 카운트다운 상대 분석
-        "overlay_mapban_seconds": 12,     # 맵 밴 안전 타이머
+        # ── 화면 ──
+        "theme": "coral",
+        "ui_scale": 100,
+        "ui_scale_auto": True,
+        # ── 인게임 오버레이 (v2.0.0 · Win32 순정 창) ──
+        "overlay_enabled": True,
+        "overlay_hotkey_lobby": "F8",
+        "overlay_hotkey_scout": "F9",
+        "overlay_mapban_seconds": 12,
         "overlay_party_seconds": 15,
-        "overlay_scan_x": 0,              # 대기실 OCR 위치 보정 (px)
+        "overlay_scan_x": 0,
         "overlay_scan_y": 0,
         "overlay_scan_scale": 1.0,
-        "toast_enabled": True,            # 경기 종료 토스트
-        "toast_position": "br",          # br(우하단) / tr(우상단)
-        "toast_auto": True,               # 새 경기 감지 시 자동 표시
+        "toast_enabled": True,
+        "toast_position": "br",
+        "toast_auto": True,
+        "auto_cloud": True,
     },
-    "records": [],
     "leaderboard": [],
     "memos": {},
-    "rotation": [],
-    "more": [],
-    "barracks": {},
-    "barracks_ids": {},          # 닉네임 → {sn, clan_id, photo, profile}
-    "custom_scenarios": [],      # 사용자가 직접 추가한 시나리오 (#5)
-    "barracks_history": [],
-    "condition_history": [],
+    "barracks": {},            # 닉네임 → 병영수첩 캐시
+    "barracks_ids": {},        # 닉네임 → {sn, clan_id, photo, profile}
+    "barracks_history": [],    # 날짜별 최신화 스냅샷 (변화 비교)
+    "condition_history": [],   # 날짜별 랭크 컨디션
+    "play_days": {},           # 날짜별 플레이 잔디 {date: {games, wins}}
     "ui": {"digest_ack": None},
-    "attendance": {},
     "utils": {
         "nvidia": {"mode": None, "alias": False, "last_backup": None, "points": []},
         "accel": None,
@@ -83,11 +79,14 @@ DEFAULTS: dict[str, Any] = {
         "last_restore_at": None,
         "last_launch": None,
     },
-    "cloud": {"email": None, "user_id": None, "access_token": None, "refresh_token": None, "last_sync": None},
+    "cloud": {"email": None, "user_id": None, "access_token": None,
+              "refresh_token": None, "last_sync": None},
     "cloud_auto": {"last_at": None, "last_reason": None},
-    "party_presets": [],         # 고정 5인 파티 프리셋 [{name, members, created}]
+    "account": {"plan": "free", "pro_until": None, "checked_at": None, "email": None},
+    "usage": {"date": None, "count": 0},
+    "party_presets": [],
     "overlay": {"last_scan_at": None, "last_scan": [], "last_team": []},
-    "cache_cleanup_at": None,    # 넥슨 매치 캐시 30일 정리 마지막 시각
+    "cache_cleanup_at": None,
 }
 
 
@@ -109,75 +108,112 @@ def _deep_merge(base: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def scrub_secrets(data: dict[str, Any]) -> dict[str, Any]:
+    """민감정보를 지운 사본 — 백업 파일 · 클라우드 payload 공용."""
+    clean = copy.deepcopy(data or {})
+
+    def walk(node: Any) -> Any:
+        if isinstance(node, dict):
+            for key in list(node.keys()):
+                if str(key) in SECRET_KEYS:
+                    node.pop(key, None)
+                else:
+                    node[key] = walk(node[key])
+        elif isinstance(node, list):
+            node = [walk(v) for v in node]
+        return node
+
+    clean = walk(clean)
+    settings = clean.setdefault("settings", {})
+    settings.pop("api_key", None)
+    settings.pop("api_key_masked", None)
+    supabase = settings.get("supabase")
+    if isinstance(supabase, dict):
+        settings["supabase"] = {"url": supabase.get("url", "")}
+    cloud = clean.get("cloud")
+    if isinstance(cloud, dict):
+        clean["cloud"] = {"email": cloud.get("email"), "user_id": cloud.get("user_id"),
+                          "last_sync": cloud.get("last_sync")}
+    return clean
+
+
 class Store:
-    """Thread-safe enough for the app: every mutation saves the whole document."""
+    """Thread-safe local store: every mutation rewrites the whole document."""
 
     # pywebview walks the js_api object's public attributes and recurses into
-    # anything non-callable.  This marker stops that walk at the store, so
-    # internal methods (``save``, ``records`` …) are never exposed to JS.
+    # anything non-callable.  This marker stops that walk at the store.
     _serializable = False
 
     def __init__(self, path: str | os.PathLike[str] | None = None):
         self.path = Path(path) if path else paths.data_file()
         self.data: dict[str, Any] = {}
         self.load_error: str | None = None
+        self._lock = threading.RLock()
         self.load()
 
     # ------------------------------------------------------------ io
     def load(self) -> dict[str, Any]:
-        data: dict[str, Any] = {}
-        if self.path.exists():
-            try:
-                data = json.loads(self.path.read_text(encoding="utf-8"))
-            except (OSError, ValueError) as exc:  # corrupted file: keep a copy and start fresh
-                self.load_error = f"data.json을 읽지 못했습니다 ({exc})"
-                try:
-                    shutil.copy2(self.path, self.path.with_suffix(".corrupt.json"))
-                except OSError:
-                    pass
-                data = {}
-        self.data = _deep_merge(DEFAULTS, data)
-        if not self.data.get("created_at"):
-            self.data["created_at"] = now_iso()
-        return self.data
-
-    def save(self) -> None:
-        self.data["version"] = SCHEMA_VERSION
-        self.data["updated_at"] = now_iso()
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        payload = json.dumps(self.data, ensure_ascii=False, indent=2)
-        fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".data-", suffix=".tmp")
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
-                fh.write(payload)
-                fh.flush()
-                os.fsync(fh.fileno())
+        with self._lock:
+            data: dict[str, Any] = {}
             if self.path.exists():
                 try:
-                    shutil.copy2(self.path, self.path.with_suffix(".bak"))
-                except OSError:
-                    pass
-            os.replace(tmp, self.path)
-        finally:
-            if os.path.exists(tmp):
-                try:
-                    os.unlink(tmp)
-                except OSError:
-                    pass
+                    data = json.loads(self.path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:  # corrupted file: keep a copy, start fresh
+                    self.load_error = f"data.json을 읽지 못했습니다 ({exc})"
+                    try:
+                        shutil.copy2(self.path, self.path.with_suffix(".corrupt.json"))
+                    except OSError:
+                        pass
+                    data = {}
+            self.data = _deep_merge(DEFAULTS, data)
+            # v1 백업/데이터에 남아 있던 에임 연습 구역은 더 이상 쓰지 않는다.
+            for legacy in ("records", "rotation", "more", "attendance", "custom_scenarios"):
+                self.data.pop(legacy, None)
+            if not self.data.get("created_at"):
+                self.data["created_at"] = now_iso()
+            return self.data
+
+    def save(self) -> None:
+        with self._lock:
+            self.data["version"] = SCHEMA_VERSION
+            self.data["updated_at"] = now_iso()
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            payload = json.dumps(self.data, ensure_ascii=False, indent=2)
+            fd, tmp = tempfile.mkstemp(dir=str(self.path.parent), prefix=".data-", suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    fh.write(payload)
+                    fh.flush()
+                    os.fsync(fh.fileno())
+                if self.path.exists():
+                    try:
+                        shutil.copy2(self.path, self.path.with_suffix(".bak"))
+                    except OSError:
+                        pass
+                os.replace(tmp, self.path)
+            finally:
+                if os.path.exists(tmp):
+                    try:
+                        os.unlink(tmp)
+                    except OSError:
+                        pass
 
     # ------------------------------------------------------------ settings
     @property
     def settings(self) -> dict[str, Any]:
-        return self.data["settings"]
+        with self._lock:
+            return self.data["settings"]
 
     def update_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
-        self.data["settings"] = _deep_merge(self.data["settings"], patch or {})
-        self.save()
-        return self.data["settings"]
+        with self._lock:
+            self.data["settings"] = _deep_merge(self.data["settings"], patch or {})
+            self.save()
+            return self.data["settings"]
 
     def public_settings(self) -> dict[str, Any]:
-        """Settings safe to hand to the UI (API keys are masked, never sent raw)."""
-        s = copy.deepcopy(self.data["settings"])
+        """Settings safe to hand to the UI (secrets masked, never raw)."""
+        with self._lock:
+            s = copy.deepcopy(self.data["settings"])
         key = s.get("api_key") or ""
         s["api_key_set"] = bool(key)
         s["api_key_masked"] = (key[:9] + "•" * 12) if key else ""
@@ -188,124 +224,84 @@ class Store:
                          "anon_key_masked": (anon[:8] + "…") if anon else ""}
         return s
 
-    # ------------------------------------------------------------ records
-    def records(self) -> list[dict[str, Any]]:
-        return self.data.setdefault("records", [])
-
-    def add_record(self, record: dict[str, Any]) -> dict[str, Any]:
-        record = copy.deepcopy(record)
-        record.setdefault("id", uuid.uuid4().hex[:12])
-        record.setdefault("created_at", now_iso())
-        record.setdefault("date", today_str())
-        self.records().append(record)
-        if len(self.records()) > MAX_RECORDS:
-            self.data["records"] = self.records()[-MAX_RECORDS:]
-        self.save()
-        return record
-
-    def delete_record(self, record_id: str) -> bool:
-        before = len(self.records())
-        self.data["records"] = [r for r in self.records() if r.get("id") != record_id]
-        if len(self.data["records"]) != before:
-            self.save()
-            return True
-        return False
-
     # ------------------------------------------------------------ leaderboard
     def leaderboard(self) -> list[dict[str, Any]]:
-        return self.data.setdefault("leaderboard", [])
+        with self._lock:
+            return self.data.setdefault("leaderboard", [])
 
     def set_leaderboard(self, members: list[dict[str, Any]]) -> None:
-        self.data["leaderboard"] = members[:20]
-        self.save()
+        with self._lock:
+            self.data["leaderboard"] = members[:20]
+            self.save()
 
-    # ------------------------------------------------------------ friend memos (v1.3.1)
+    # ------------------------------------------------------------ friend memos
     def memos(self) -> dict[str, str]:
-        """친구별 메모 {'닉네임': '메모'} — 순위표 우클릭으로 적는 한 줄 기록."""
-        return self.data.setdefault("memos", {})
+        with self._lock:
+            return self.data.setdefault("memos", {})
 
     def set_memo(self, nickname: str, text: str) -> dict[str, str]:
         name = str(nickname or "").strip()
         if not name:
             raise ValueError("닉네임이 없습니다")
         body = str(text or "").strip()[:400]
-        table = self.memos()
-        if body:
-            table[name] = body
-        else:
-            table.pop(name, None)
-        self.save()
-        return table
-
-    # ------------------------------------------------------------ rotation
-    def rotation(self) -> list[dict[str, Any]]:
-        return self.data.setdefault("rotation", [])
-
-    def set_rotation(self, rows: list[dict[str, Any]]) -> None:
-        self.data["rotation"] = rows
-        self.save()
-
-    # ------------------------------------------------------------ more practice
-    def more(self) -> list[dict[str, Any]]:
-        """`+ 더 연습하기` 로 오늘 연 시나리오 목록 [{date, game, weapon, names}]"""
-        return self.data.setdefault("more", [])
-
-    def set_more(self, rows: list[dict[str, Any]], keep_days: int = 30) -> None:
-        rows = rows[-keep_days * 4:]
-        self.data["more"] = rows
-        self.save()
+        with self._lock:
+            table = self.memos()
+            if body:
+                table[name] = body
+            else:
+                table.pop(name, None)
+            self.save()
+            return table
 
     # ------------------------------------------------------------ misc sections
     def utils(self) -> dict[str, Any]:
-        return self.data.setdefault("utils", copy.deepcopy(DEFAULTS["utils"]))
+        with self._lock:
+            return self.data.setdefault("utils", copy.deepcopy(DEFAULTS["utils"]))
 
     def barracks_cache(self) -> dict[str, Any]:
-        return self.data.setdefault("barracks", {})
+        with self._lock:
+            return self.data.setdefault("barracks", {})
 
-    # ------------------------------------------------------------ barracks ids (v1.5.0)
     def barracks_ids(self) -> dict[str, Any]:
-        """닉네임 → 병영수첩 user_nexon_sn·클랜 ID·프로필 사진 캐시."""
-        return self.data.setdefault("barracks_ids", {})
+        with self._lock:
+            return self.data.setdefault("barracks_ids", {})
 
-    # ------------------------------------------------------------ custom scenarios (v1.5.0)
-    def custom_scenarios(self) -> list[dict[str, Any]]:
-        return self.data.setdefault("custom_scenarios", [])
-
-    # ------------------------------------------------------------ party presets (v1.0.0)
     def party_presets(self) -> list[dict[str, Any]]:
-        """고정 5인 파티 프리셋 — 훈련 기록과 같이 영구 보관한다."""
-        return self.data.setdefault("party_presets", [])
+        with self._lock:
+            return self.data.setdefault("party_presets", [])
 
     def save_party_preset(self, name: str, members: Any) -> dict[str, Any]:
         from . import party_lobby
 
         label = party_lobby.clean_preset_name(name)
         rows = party_lobby.clean_members(members)
-        presets = [row for row in self.party_presets() if isinstance(row, dict)]
-        presets = [row for row in presets if str(row.get("name") or "") != label]
-        entry = {"name": label, "members": rows, "created": now_iso()}
-        presets.append(entry)
-        self.data["party_presets"] = presets[-20:]
-        self.save()
-        return entry
+        with self._lock:
+            presets = [row for row in self.party_presets() if isinstance(row, dict)]
+            presets = [row for row in presets if str(row.get("name") or "") != label]
+            entry = {"name": label, "members": rows, "created": now_iso()}
+            presets.append(entry)
+            self.data["party_presets"] = presets[-20:]
+            self.save()
+            return entry
 
     def delete_party_preset(self, name: str) -> bool:
-        rows = [row for row in self.party_presets()
-                if str((row or {}).get("name") or "") != str(name or "").strip()]
-        changed = len(rows) != len(self.party_presets())
-        self.data["party_presets"] = rows
-        if changed:
-            self.save()
-        return changed
+        with self._lock:
+            rows = [row for row in self.party_presets()
+                    if str((row or {}).get("name") or "") != str(name or "").strip()]
+            changed = len(rows) != len(self.party_presets())
+            self.data["party_presets"] = rows
+            if changed:
+                self.save()
+            return changed
 
-    # ------------------------------------------------------------ overlay cache (v1.0.0)
     def overlay_cache(self) -> dict[str, Any]:
-        return self.data.setdefault("overlay", {"last_scan_at": None, "last_scan": [], "last_team": []})
+        with self._lock:
+            return self.data.setdefault("overlay", {"last_scan_at": None, "last_scan": [], "last_team": []})
 
-    # ------------------------------------------------------------ barracks snapshots (v1.3.0)
+    # ------------------------------------------------------------ barracks snapshots
     def barracks_history(self) -> list[dict[str, Any]]:
-        """병영수첩 최신화 스냅샷 [{date, at, nickname, stats, tier, basic}] — 날짜별 비교용."""
-        return self.data.setdefault("barracks_history", [])
+        with self._lock:
+            return self.data.setdefault("barracks_history", [])
 
     def add_barracks_snapshot(self, barracks: dict[str, Any], *, keep: int = 60) -> dict[str, Any] | None:
         """같은 날 같은 최신화 시각의 스냅샷은 하나만 남긴다."""
@@ -319,108 +315,128 @@ class Store:
             "tier": barracks.get("tier") or {},
             "basic": {"clan": (barracks.get("basic") or {}).get("clan")},
         }
-        rows = self.barracks_history()
-        if rows and rows[-1].get("date") == snapshot["date"] and rows[-1].get("at") == snapshot["at"]:
-            return rows[-1]
-        rows.append(snapshot)
-        self.data["barracks_history"] = rows[-keep:]
-        self.save()
-        return snapshot
-
-    # ------------------------------------------------------------ attendance (v1.3.0)
-    def attendance(self) -> dict[str, Any]:
-        """날짜별 훈련 흔적 {'YYYY-MM-DD': {'n': 시나리오 수, 'r': 기록 수}}.
-
-        `점수 전체 초기화` 는 연습 점수·PB 만 지우고 **훈련 잔디(출석)** 는 남긴다.
-        그래서 기록과 별도로 날짜별 흔적을 보관한다.
-        """
-        return self.data.setdefault("attendance", {})
-
-    def note_attendance(self, records: list[dict[str, Any]]) -> None:
-        """오늘 기록에서 시나리오 수·기록 수를 다시 세어 보관(줄어들지 않게 max)."""
-        by_day: dict[str, dict[str, Any]] = {}
-        for rec in records:
-            day = str(rec.get("date") or str(rec.get("created_at") or "")[:10])
-            if not day:
-                continue
-            names = {str(s.get("name")) for s in (rec.get("scenarios") or []) if s.get("score") is not None}
-            slot = by_day.setdefault(day, {"n": 0, "r": 0})
-            slot["n"] += len(names) or 1
-            slot["r"] += 1
-        table = self.attendance()
-        changed = False
-        for day, slot in by_day.items():
-            old = table.get(day) or {}
-            merged = {"n": max(int(old.get("n") or 0), int(slot["n"])),
-                      "r": max(int(old.get("r") or 0), int(slot["r"]))}
-            if merged != old:
-                table[day] = merged
-                changed = True
-        if changed:
+        with self._lock:
+            rows = self.barracks_history()
+            if rows and rows[-1].get("date") == snapshot["date"] and rows[-1].get("at") == snapshot["at"]:
+                return rows[-1]
+            rows.append(snapshot)
+            self.data["barracks_history"] = rows[-keep:]
             self.save()
+            return snapshot
+
+    # ------------------------------------------------------------ play days (잔디)
+    def play_days(self) -> dict[str, Any]:
+        with self._lock:
+            return self.data.setdefault("play_days", {})
+
+    def merge_play_days(self, matches: list[dict[str, Any]]) -> dict[str, Any]:
+        from . import insights
+
+        with self._lock:
+            merged = insights.merge_play_days(self.play_days(), matches or [])
+            if merged != self.data.get("play_days"):
+                self.data["play_days"] = merged
+                self.save()
+            return self.data["play_days"]
 
     # ------------------------------------------------------------ ui flags
     def ui(self) -> dict[str, Any]:
-        return self.data.setdefault("ui", {"digest_ack": None})
+        with self._lock:
+            return self.data.setdefault("ui", {"digest_ack": None})
 
-    # ------------------------------------------------------------ reset (v1.3.0)
-    def reset_scores(self) -> dict[str, int]:
-        """에임 연습 점수·PB·로그만 지운다.
+    # ------------------------------------------------------------ account · usage
+    def account(self) -> dict[str, Any]:
+        with self._lock:
+            return self.data.setdefault("account", copy.deepcopy(DEFAULTS["account"]))
 
-        남기는 것 — 설정(닉네임·API 키·친구 목록·유틸), 순위표, 병영수첩/변화 이력,
-        훈련 잔디(attendance: 날짜별 출석·훈련 흔적).  지우는 것 — 훈련 기록(점수·PB),
-        오늘 추천 로테이션, 더 연습하기 목록.
-        """
-        self.note_attendance(self.records())      # 지우기 직전에 오늘 흔적을 확정
-        removed = {"records": len(self.records()), "rotation": len(self.rotation()), "more": len(self.more())}
-        self.data["records"] = []
-        self.data["rotation"] = []
-        self.data["more"] = []
-        self.data.setdefault("ui", {})["digest_ack"] = None
-        self.save()
-        return removed
+    def set_account(self, plan: str, pro_until: str | None, email: str | None = None) -> dict[str, Any]:
+        with self._lock:
+            row = self.account()
+            row.update({"plan": plan, "pro_until": pro_until, "checked_at": now_iso()})
+            if email:
+                row["email"] = email
+            self.save()
+            return row
+
+    def usage(self) -> dict[str, Any]:
+        with self._lock:
+            row = self.data.setdefault("usage", copy.deepcopy(DEFAULTS["usage"]))
+            if row.get("date") != today_str():
+                row.update({"date": today_str(), "count": 0})
+            return row
+
+    def bump_usage(self, amount: int = 1) -> int:
+        with self._lock:
+            row = self.usage()
+            row["count"] = int(row.get("count") or 0) + int(amount or 0)
+            self.save()
+            return int(row["count"])
 
     def cloud(self) -> dict[str, Any]:
-        return self.data.setdefault("cloud", copy.deepcopy(DEFAULTS["cloud"]))
+        with self._lock:
+            return self.data.setdefault("cloud", copy.deepcopy(DEFAULTS["cloud"]))
 
     def cloud_auto(self) -> dict[str, Any]:
-        """자동 백업 상태 {last_at, last_reason}."""
-        return self.data.setdefault("cloud_auto", copy.deepcopy(DEFAULTS["cloud_auto"]))
+        with self._lock:
+            return self.data.setdefault("cloud_auto", copy.deepcopy(DEFAULTS["cloud_auto"]))
 
     # ------------------------------------------------------------ backup / restore
     def export_backup(self, dest: str | os.PathLike[str] | None = None) -> Path:
         dest_path = Path(dest) if dest else paths.backup_dir() / f"sa_aim_backup_{_stamp()}.json"
         dest_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {
-            "app": paths.APP_NAME,
-            "version": SCHEMA_VERSION,
-            "exported_at": now_iso(),
-            "data": self.data,
-        }
-        dest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-        self.utils()["last_backup_at"] = now_iso()
-        self.save()
-        return dest_path
+        with self._lock:
+            payload = {
+                "app": paths.APP_NAME,
+                "version": SCHEMA_VERSION,
+                "exported_at": now_iso(),
+                "data": scrub_secrets(self.data),
+                "excluded": ["api_key", "supabase 토큰", "비밀번호"],
+            }
+            dest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+            self.utils()["last_backup_at"] = now_iso()
+            self.save()
+            return dest_path
 
     def import_backup(self, src: str | os.PathLike[str], *, snapshot: bool = True) -> dict[str, Any]:
         src_path = Path(src)
         raw = json.loads(src_path.read_text(encoding="utf-8"))
         data = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else raw
-        if not isinstance(data, dict) or ("records" not in data and "settings" not in data):
-            raise ValueError("SA AIM LABS 백업 파일이 아닙니다 (records/settings 없음)")
-        if snapshot and self.path.exists():
-            shutil.copy2(self.path, paths.backup_dir() / f"before_import_{_stamp()}.json")
-        merged = _deep_merge(DEFAULTS, data)
-        merged["created_at"] = self.data.get("created_at") or merged.get("created_at")
-        self.data = merged
-        self.utils()["last_restore_at"] = now_iso()
-        self.save()
-        return self.data
+        if not isinstance(data, dict) or not ("leaderboard" in data or "settings" in data):
+            raise ValueError("SA AIM LABS 백업 파일이 아닙니다 (settings/leaderboard 없음)")
+        with self._lock:
+            if snapshot and self.path.exists():
+                shutil.copy2(self.path, paths.backup_dir() / f"before_import_{_stamp()}.json")
+            merged = _deep_merge(DEFAULTS, data)
+            # 백업에는 비밀이 없으니 지금 쓰는 비밀은 유지한다
+            current = self.data.get("settings") or {}
+            incoming = merged.get("settings") or {}
+            for key in ("api_key", "supabase"):
+                if key == "supabase":
+                    incoming_sb = incoming.get("supabase") or {}
+                    current_sb = current.get("supabase") or {}
+                    incoming["supabase"] = {
+                        "url": incoming_sb.get("url") or current_sb.get("url") or DEFAULT_URL,
+                        "anon_key": current_sb.get("anon_key") or DEFAULT_ANON_KEY,
+                    }
+                elif current.get(key):
+                    incoming[key] = current[key]
+            merged["settings"] = incoming
+            cloud = self.data.get("cloud") or {}
+            if cloud.get("access_token"):
+                merged["cloud"] = cloud
+            for legacy in ("records", "rotation", "more", "attendance", "custom_scenarios"):
+                merged.pop(legacy, None)
+            merged["created_at"] = self.data.get("created_at") or merged.get("created_at")
+            self.data = merged
+            self.utils()["last_restore_at"] = now_iso()
+            self.save()
+            return self.data
 
     def reset(self, keep_settings: bool = True) -> None:
-        settings = copy.deepcopy(self.settings) if keep_settings else copy.deepcopy(DEFAULTS["settings"])
-        self.data = _deep_merge(DEFAULTS, {"settings": settings, "created_at": now_iso()})
-        self.save()
+        with self._lock:
+            settings = copy.deepcopy(self.settings) if keep_settings else copy.deepcopy(DEFAULTS["settings"])
+            self.data = _deep_merge(DEFAULTS, {"settings": settings, "created_at": now_iso()})
+            self.save()
 
 
 def _stamp() -> str:
@@ -434,3 +450,7 @@ def load_settings_only(path: str | os.PathLike[str] | None = None) -> dict[str, 
         return json.loads(p.read_text(encoding="utf-8")).get("settings", {})
     except (OSError, ValueError):
         return {}
+
+
+def new_id() -> str:
+    return uuid.uuid4().hex[:12]

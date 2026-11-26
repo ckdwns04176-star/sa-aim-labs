@@ -21,7 +21,7 @@ from typing import Any
 from . import paths
 
 TABLE = "user_profiles"
-AIM_TABLE = "aim_scores"   # v1.3.0 — 18단계 티어 분포 집계용 (닉네임·점수·티어만)
+SUBSCRIPTION_TABLE = "subscriptions"   # plan(free/pro) · pro_until
 
 # 사용자가 발급받은 프로젝트 (publishable 키는 공개용 · RLS가 데이터를 보호합니다)
 DEFAULT_URL = "https://ujnffbskudzkatskbmwc.supabase.co"
@@ -143,6 +143,22 @@ class SupabaseClient:
                              query={"grant_type": "refresh_token"})
         return self._session(body or {}, "")
 
+    def recover(self, email: str, redirect_to: str = "") -> dict[str, Any]:
+        """비밀번호 찾기 — ``POST /auth/v1/recover``.
+
+        Supabase 가 재설정 링크를 담은 메일을 보낸다.  앱에는 메일만 보내고
+        새 비밀번호는 받지 않는다 (비밀번호는 Supabase Auth 밖으로 나오지 않는다).
+        """
+        address = str(email or "").strip()
+        if "@" not in address:
+            raise SupabaseError("이메일 주소를 확인해 주세요")
+        body: dict[str, Any] = {"email": address}
+        if redirect_to:
+            body["redirect_to"] = redirect_to
+        self._request("POST", "/auth/v1/recover", body=body, prefer="return=minimal")
+        return {"ok": True, "email": address,
+                "message": "비밀번호 재설정 메일을 보냈습니다 · 메일의 링크에서 새 비밀번호를 정해 주세요"}
+
     def sign_out(self, access_token: str) -> None:
         try:
             self._request("POST", "/auth/v1/logout", token=access_token)
@@ -175,28 +191,19 @@ class SupabaseClient:
             return body[0]
         return None
 
-    # ------------------------------------------------------------ tier distribution (v1.3.0)
-    def upsert_aim_score(self, access_token: str, user_id: str, nickname: str,
-                         score: int, tier_name: str) -> dict[str, Any]:
-        """내 종합 점수 한 줄을 공개 집계 테이블에 올린다 (점수·티어만, 기록은 안 올림)."""
-        row = {"user_id": user_id, "nickname": (nickname or "")[:12],
-               "score": int(score or 0), "tier": tier_name or "",
-               "updated_at": _utc_now()}
-        body = self._request(
-            "POST", f"/rest/v1/{AIM_TABLE}",
-            body=[row], token=access_token,
-            query={"on_conflict": "user_id"},
-            prefer="resolution=merge-duplicates,return=minimal",
-        )
-        return body or {}
+    # ------------------------------------------------------------ subscription (v2.0.0)
+    def subscription(self, access_token: str, user_id: str) -> dict[str, Any] | None:
+        """public.subscriptions 에서 내 등급 한 줄 (plan · pro_until).
 
-    def aim_scores(self, limit: int = 2000) -> list[dict[str, Any]]:
-        """공개 집계 테이블에서 점수만 읽는다 (RLS: select 공개, 쓰기는 본인 행만)."""
+        테이블이 없거나 RLS 로 막혀 있으면 ``None`` — 호출한 쪽이 free 로 본다.
+        """
         body = self._request(
-            "GET", f"/rest/v1/{AIM_TABLE}",
-            query={"select": "score,tier", "limit": str(max(1, min(5000, int(limit))))},
+            "GET", f"/rest/v1/{SUBSCRIPTION_TABLE}", token=access_token,
+            query={"user_id": f"eq.{user_id}", "select": "plan,pro_until", "limit": "1"},
         )
-        return body if isinstance(body, list) else []
+        if isinstance(body, list) and body:
+            return body[0]
+        return None
 
 
 def _utc_now() -> str:

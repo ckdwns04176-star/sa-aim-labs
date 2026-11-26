@@ -354,12 +354,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:  # noqa: BLE001 - 스타일 고정은 최선 노력
         log.debug("window style could not be fixed", exc_info=True)
 
-    # ── v1.5.0 · 코박스/에임랩 종료 감지 · 클라우드 30분 자동 백업 ──
-    try:
-        api.start_trainer_watch()
-        log.info("trainer watch armed")
-    except Exception:  # noqa: BLE001
-        log.debug("trainer watch could not start", exc_info=True)
+    # ── v2.0.0 · 클라우드 30분 자동 백업 ──
     try:
         api.start_cloud_auto()
     except Exception:  # noqa: BLE001
