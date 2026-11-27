@@ -1,0 +1,88 @@
+name: Build Windows EXE
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Windows · PyInstaller onefile
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Verify overlay source marker
+        shell: pwsh
+        run: |
+          if (!(Select-String -Path "app/native_overlay.py" -Pattern 'OVERLAY_DIAG_BUILD = "class-atom-v3-20261127"')) {
+            throw "Overlay source marker is missing; refusing to build an unverified EXE."
+          }
+
+      - name: Syntax check (compileall)
+        shell: pwsh
+        run: python -m compileall -q app main.py
+
+      - name: Build SA_Aim_Labs.exe
+        shell: pwsh
+        run: |
+          pyinstaller --noconfirm --onefile --windowed --icon assets/app.ico `
+            --name "SA_Aim_Labs" `
+            --add-data "ui;ui" `
+            --add-data "assets;assets" `
+            --add-data "config.json;." `
+            --collect-all webview `
+            main.py
+
+      - name: Verify artifact
+        shell: pwsh
+        run: |
+          $exe = "dist/SA_Aim_Labs.exe"
+          if (!(Test-Path $exe)) { throw "빌드 결과 $exe 가 없습니다" }
+          $size = [math]::Round((Get-Item $exe).Length / 1MB, 2)
+          Write-Host "SA_Aim_Labs.exe · $size MB"
+          Get-FileHash $exe -Algorithm SHA256 | Format-List
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SA_Aim_Labs-windows
+          path: dist/SA_Aim_Labs.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Attach EXE to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/SA_Aim_Labs.exe
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-build' }}
+          name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Latest build' }}
+          body: |
+            SA AIM LABS · Windows 실행 파일 (onefile, 콘솔 없음)
+
+            - 빌드 워크플로우: `Build Windows EXE`
+            - 커밋: ${{ github.sha }}
+            - 실행: `SA_Aim_Labs.exe` (Windows 10/11 · Edge WebView2 Runtime 필요)
+
+            훈련 기록은 `%APPDATA%\SA_Aim_Labs\data.json` 에 저장됩니다.
+          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
+          make_latest: ${{ startsWith(github.ref, 'refs/tags/') }}

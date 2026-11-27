@@ -651,6 +651,9 @@ def test_v201_win32() -> None:
     check("native_overlay: 창 생성 시 초기 렌더 실패 검사",
           "if not self.update(spec):" in src)
     check("native_overlay: WM_CLOSE 로 창 정상 종료", "PostMessageW(ctypes.c_void_p(self.hwnd), WM_CLOSE" in src)
+    check("native_overlay: 등록된 클래스 ATOM 캐시", "_class_atoms: dict[str, int]" in src and "_class_atoms[class_name] = atom" in src)
+    check("native_overlay: CreateWindowExW 에 클래스 ATOM 전달", "class_atom_arg = ctypes.cast(ctypes.c_void_p(class_atom), wintypes.LPCWSTR)" in src and "ex_style, class_atom_arg" in src)
+    check("native_overlay: 진단 빌드 표식", 'OVERLAY_DIAG_BUILD = "class-atom-v3-20261127"' in src and "build={OVERLAY_DIAG_BUILD}" in src)
 
 
 def test_v201_scouting() -> None:

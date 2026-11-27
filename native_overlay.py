@@ -29,6 +29,9 @@ from typing import Any, Callable, Sequence
 
 log = logging.getLogger("native-overlay")
 
+# 이 문자열은 앱 로그에서 실제 EXE에 포함된 오버레이 소스를 식별하는 표식이다.
+OVERLAY_DIAG_BUILD = "class-atom-v3-20261127"
+
 # ── Win32 상수 ───────────────────────────────────────────────────────────
 WS_POPUP = 0x80000000
 WS_EX_TOPMOST = 0x00000008
@@ -48,6 +51,8 @@ AC_SRC_OVER = 0x00
 AC_SRC_ALPHA = 0x01
 HTTRANSPARENT = -1
 WM_DESTROY = 0x0002
+WM_CREATE = 0x0001
+WM_NCCREATE = 0x0081
 WM_CLOSE = 0x0010
 WM_NCHITTEST = 0x0084
 WM_ERASEBKGND = 0x0014
@@ -726,6 +731,8 @@ class NativeOverlayWindow:
     # RegisterClassExW 는 WNDPROC 포인터를 보관한다. 창 인스턴스가 닫혀도
     # 콜백 객체가 GC 되지 않도록 프로세스 수명 동안 유지한다.
     _class_wndprocs: dict[str, Any] = {}
+    # RegisterClassExW가 반환한 ATOM을 보관해 CreateWindowExW에 직접 전달한다.
+    _class_atoms: dict[str, int] = {}
     _class_lock = threading.RLock()
 
     def __init__(self, kind: str, title: str):
@@ -895,6 +902,8 @@ class NativeOverlayWindow:
 
     def _run(self) -> None:
         try:
+            from ctypes import wintypes
+
             libs = win32()
             user32 = libs.user32
             kernel32 = libs.kernel32
@@ -922,6 +931,12 @@ class NativeOverlayWindow:
                 if wndproc is None:
                     @WNDPROC
                     def wndproc(hwnd, msg, wparam, lparam):
+                        # CreateWindowExW는 생성 중 WM_NCCREATE/WM_CREATE를 동기 전송한다.
+                        # 이 시점의 콜백 진입 여부를 로그로 남겨 생성 실패 지점을 구분한다.
+                        if msg == WM_NCCREATE:
+                            log.info("native-overlay WNDPROC · kind=%s · WM_NCCREATE", self.kind)
+                        elif msg == WM_CREATE:
+                            log.info("native-overlay WNDPROC · kind=%s · WM_CREATE", self.kind)
                         if msg == WM_NCHITTEST:
                             return HTTRANSPARENT
                         if msg == WM_ERASEBKGND:
@@ -929,7 +944,12 @@ class NativeOverlayWindow:
                         if msg == WM_DESTROY:
                             user32.PostQuitMessage(0)
                             return 0
-                        return int(user32.DefWindowProcW(hwnd, msg, wparam, lparam))
+                        try:
+                            return int(user32.DefWindowProcW(hwnd, msg, wparam, lparam))
+                        except Exception:  # noqa: BLE001 - 콜백 예외를 조용히 삼키지 않는다
+                            log.exception("native-overlay WNDPROC 예외 · kind=%s · msg=0x%04X",
+                                          self.kind, int(msg))
+                            return 0
 
                     wc = WNDCLASSEXW()
                     wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
@@ -938,28 +958,47 @@ class NativeOverlayWindow:
                     wc.hInstance = hinstance
                     wc.lpszClassName = class_name
                     ctypes.set_last_error(0)
-                    if not user32.RegisterClassExW(ctypes.byref(wc)):
+                    atom = int(user32.RegisterClassExW(ctypes.byref(wc)) or 0)
+                    if not atom:
                         code = libs.last_error()
-                        self.error = (f"RegisterClassExW 실패 · class={class_name} · "
-                                      f"hinstance=0x{int(hinstance):X} · {libs.error_text(code)}")
+                        self.error = (f"RegisterClassExW 실패 · build={OVERLAY_DIAG_BUILD} · "
+                                      f"class={class_name} · hinstance=0x{int(hinstance):X} · "
+                                      f"{libs.error_text(code)}")
                         log.error(self.error)
                         self._ready.set()
                         return
                     NativeOverlayWindow._class_registered.add(class_name)
                     NativeOverlayWindow._class_wndprocs[class_name] = wndproc
+                    NativeOverlayWindow._class_atoms[class_name] = atom
                 self._wndproc = wndproc
+                class_atom = NativeOverlayWindow._class_atoms.get(class_name)
+                if not class_atom:
+                    self.error = (f"창 클래스 ATOM을 찾을 수 없음 · build={OVERLAY_DIAG_BUILD} · "
+                                  f"class={class_name}")
+                    log.error(self.error)
+                    self._ready.set()
+                    return
 
             ex_style = (WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE
                         | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW)
+            # CreateWindowExW의 lpClassName은 RegisterClassExW가 반환한 ATOM도
+            # 받을 수 있다. 이름 문자열 재검색 대신 등록된 클래스를 직접 지정한다.
+            class_atom_arg = ctypes.cast(ctypes.c_void_p(class_atom), wintypes.LPCWSTR)
+            log.info("native-overlay create · build=%s · kind=%s · class=%s · atom=0x%04X · "
+                     "hinstance=0x%X · size=%sx%s",
+                     OVERLAY_DIAG_BUILD, self.kind, class_name, class_atom,
+                     int(hinstance), self._size[0], self._size[1])
             ctypes.set_last_error(0)
             hwnd = user32.CreateWindowExW(
-                ex_style, class_name, self.title, WS_POPUP,
+                ex_style, class_atom_arg, self.title, WS_POPUP,
                 0, 0, self._size[0], self._size[1], None, None, hinstance, None)
             if not hwnd:
                 code = libs.last_error()
-                self.error = (f"CreateWindowExW 실패 · class={class_name} · "
+                self.error = (f"CreateWindowExW 실패 · build={OVERLAY_DIAG_BUILD} · "
+                              f"kind={self.kind} · class={class_name} · atom=0x{class_atom:04X} · "
                               f"size={self._size[0]}x{self._size[1]} · "
-                              f"hinstance=0x{int(hinstance):X} · {libs.error_text(code)}")
+                              f"hinstance=0x{int(hinstance):X} · style=0x{ex_style:08X} · "
+                              f"{libs.error_text(code)}")
                 log.error(self.error)
                 self._ready.set()
                 return
