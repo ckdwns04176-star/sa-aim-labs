@@ -6,6 +6,9 @@
 (목록은 fresh 로 조회해 캐시를 건너뛴다).  토스트 자체는 ``overlay`` 모듈의
 투명 창이 그린다.  감시는 설정에서 끌 수 있고, 꺼져 있으면 아무 것도 하지
 않는다(수동 미리보기는 항상 가능).
+
+v2.0.6 — 감시는 **기본 꺼짐**이다(``DEFAULT_ENABLED``).  18초마다 전적 목록을
+읽는 호출이 하루 API 사용량의 절반을 차지해, 설정 화면에서 직접 켠 사람만 돈다.
 """
 from __future__ import annotations
 
@@ -19,6 +22,8 @@ from . import nexon
 log = logging.getLogger("toast")
 
 POLL_SECONDS = 18.0
+# v2.0.6 — 앱을 켜자마자 감시를 돌리지 않는다(설정에서 켰을 때만).
+DEFAULT_ENABLED = False
 
 
 def last_match(client: nexon.NexonClient, nick: str, *, fresh: bool = True) -> dict[str, Any] | None:
@@ -77,7 +82,7 @@ class MatchWatcher:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._last_seen: str | None = None
-        self.enabled = False
+        self.enabled = DEFAULT_ENABLED
         self.last_error: str | None = None
 
     def start(self) -> None:

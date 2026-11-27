@@ -1692,6 +1692,11 @@ def test_v206_api_savings() -> None:
     api = api_mod.Api(Store(tmp / "api" / "data.json"))
     ov_set = api._overlay_settings()
     check("v2.0.6: API 오버레이 설정도 기본 꺼짐", ov_set.get("toast_enabled") is False, str(ov_set.get("toast_enabled")))
+    from app import toast as toast_mod
+    checker = toast_mod.MatchWatcher(lambda: None, lambda: "", lambda _m: None)
+    check("v2.0.6: MatchWatcher 기본값 꺼짐", toast_mod.DEFAULT_ENABLED is False and checker.enabled is False,
+          f"{toast_mod.DEFAULT_ENABLED}/{checker.enabled}")
+    check("v2.0.6: 토스트 폴링 18초 유지", toast_mod.POLL_SECONDS == 18.0, str(toast_mod.POLL_SECONDS))
     started = api.start_overlays()
     toast_state = started.get("toast") or {}
     check("v2.0.6: 앱 시작 시 토스트 감시를 켜지 않음",
