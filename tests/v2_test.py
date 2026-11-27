@@ -388,6 +388,17 @@ def test_overlay() -> None:
     check("오버레이: 숨김", hidden["closed"] and win.destroyed)
     check("오버레이: 백엔드 표기", hub.state()["backend"] == "win32-layered")
 
+    class FailedShowWindow(native_overlay.FakeWindow):
+        def show(self, rect=None) -> bool:
+            return False
+
+    failed_hub = overlay.OverlayHub(window_factory=lambda k, t: FailedShowWindow(k, t))
+    failed = failed_hub.show("toast", {"map": "실패 테스트"}, rect=rect)
+    check("오버레이: 표시 실패는 성공으로 보고하지 않음",
+          not failed.get("ok") and "표시" in failed.get("message", ""), str(failed))
+    check("오버레이: 표시 실패 창은 열린 목록에서 제거",
+          "toast" not in failed_hub.state()["open"])
+
 
 # ======================================================================
 # 9. Api — 상태 · 설정 · 저장 범위
@@ -624,8 +635,29 @@ def test_v201_win32() -> None:
     check("native_overlay: windll 직접 호출 제거",
           "ctypes.windll.user32" not in src and "ctypes.windll.kernel32" not in src)
     check("native_overlay: DIB 비트 주소로 clear", "self._bits" in src and "memset(self._bits" in src)
-    # GDI 폴백도 같은 서명을 쓴다
-    check("native_overlay: GDI 폴백이 서명된 gdi32 사용", "_render_gdi" in src)
+    # FillRect 는 User32 소속이므로 두 위치 모두 user32 를 사용해야 한다.
+    check("native_overlay: FillRect 는 user32 에서 바인딩",
+          "sig(u.FillRect" in src and "sig(g.FillRect" not in src)
+    check("native_overlay: GDI 폴백이 user32.FillRect 호출",
+          "user32.FillRect(bitmap.hdc" in src)
+    check("native_overlay: GDI 폴백이 서명된 Win32 API 사용", "_render_gdi" in src)
+    check("native_overlay: WNDPROC 는 LRESULT/WPARAM/LPARAM 크기 사용",
+          "_WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_uint32" in src
+          and "ctypes.c_size_t, ctypes.c_ssize_t" in src)
+    check("native_overlay: DefWindowProcW 에 WPARAM/LPARAM 정수 전달",
+          "user32.DefWindowProcW(hwnd, msg, wparam, lparam)" in src
+          and "ctypes.c_void_p(wparam)" not in src
+          and "ctypes.c_void_p(lparam)" not in src)
+    check("native_overlay: 등록된 WNDPROC 콜백 수명 유지",
+          "_class_wndprocs: dict[str, Any]" in src and "_class_wndprocs[class_name] = wndproc" in src)
+    check("native_overlay: UpdateLayeredWindow 화면 DC 는 NULL",
+          "ctypes.c_void_p(self.hwnd), None, ctypes.byref(dst), ctypes.byref(size)" in src)
+    check("native_overlay: 창 생성 시 초기 렌더 실패 검사",
+          "if not self.update(spec):" in src)
+    check("native_overlay: WM_CLOSE 로 창 정상 종료", "PostMessageW(ctypes.c_void_p(self.hwnd), WM_CLOSE" in src)
+    check("native_overlay: 등록된 클래스 ATOM 캐시", "_class_atoms: dict[str, int]" in src and "_class_atoms[class_name] = atom" in src)
+    check("native_overlay: CreateWindowExW 에 클래스 ATOM 전달", "class_atom_arg = ctypes.cast(ctypes.c_void_p(class_atom), wintypes.LPCWSTR)" in src and "ex_style, class_atom_arg" in src)
+    check("native_overlay: 진단 빌드 표식", 'OVERLAY_DIAG_BUILD = "class-atom-v3-20261127"' in src and "build={OVERLAY_DIAG_BUILD}" in src)
 
 
 def test_v201_scouting() -> None:
