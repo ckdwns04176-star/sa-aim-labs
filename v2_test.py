@@ -644,6 +644,10 @@ def test_v201_win32() -> None:
     check("native_overlay: WNDPROC 는 LRESULT/WPARAM/LPARAM 크기 사용",
           "_WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_uint32" in src
           and "ctypes.c_size_t, ctypes.c_ssize_t" in src)
+    check("native_overlay: DefWindowProcW 에 WPARAM/LPARAM 정수 전달",
+          "user32.DefWindowProcW(hwnd, msg, wparam, lparam)" in src
+          and "ctypes.c_void_p(wparam)" not in src
+          and "ctypes.c_void_p(lparam)" not in src)
     check("native_overlay: 등록된 WNDPROC 콜백 수명 유지",
           "_class_wndprocs: dict[str, Any]" in src and "_class_wndprocs[class_name] = wndproc" in src)
     check("native_overlay: UpdateLayeredWindow 화면 DC 는 NULL",
