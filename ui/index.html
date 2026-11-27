@@ -4580,11 +4580,11 @@ function drawHomeStatus(){
   const on=!!ol.enabled;
   const st=$('#home-overlay-st');
   if(st){ st.textContent=on?'ON':'OFF'; st.className='st '+(on?'on':''); }
-  set('home-overlay-sub',on?`Win32 레이어드 창 · ${ol.hotkey_lobby||'F8'} 파티 / ${ol.hotkey_scout||'F9'} 스카우트`:'설정에서 켜면 게임 위에 표시됩니다');
+  set('home-overlay-sub',on?`Win32 레이어드 창 · ${ol.hotkey_lobby||'Insert'} 파티 / ${ol.hotkey_scout||'Home'} 스카우트`:'설정에서 켜면 게임 위에 표시됩니다');
   const strip=$('#home-strip-overlay');
   if(strip) strip.textContent=on?'켜짐':'꺼짐';
   const stripSub=$('#home-strip-overlay-sub');
-  if(stripSub) stripSub.textContent=`${ol.hotkey_lobby||'F8'} 파티 · ${ol.hotkey_scout||'F9'} 스카우트`;
+  if(stripSub) stripSub.textContent=`${ol.hotkey_lobby||'Insert'} 파티 · ${ol.hotkey_scout||'Home'} 스카우트`;
   const nv=(h.stairfix)||{};
   const nvSt=$('#home-nv-st');
   const applied=!!nv.applied;

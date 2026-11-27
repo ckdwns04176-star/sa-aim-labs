@@ -88,7 +88,7 @@
   }
   AL.stateReload = reloadState;
 
-  /* v1.0.1 (#11) — F8 로 읽은 5인을 전술 도구 파티랭크 슬롯에 채우고 바로 분석 */
+  /* v1.0.1 (#11) — 대기실 단축키로 읽은 5인을 파티랭크 슬롯에 채우고 바로 분석 */
   AL.partyAutoFill = async function (names) {
     const list = (Array.isArray(names) ? names : []).map((n) => String(n || '').trim()).filter(Boolean).slice(0, 5);
     if (!list.length) return;
@@ -921,7 +921,7 @@
             <div class="card-sub">Win32 레이어드 창 · 클릭 통과 · 포커스 비탈취</div></div>
           <span class="ustate ${reg.length ? 'on' : 'warn'}">${reg.length ? '단축키 작동' : '대기'}</span>
         </div>
-        ${switchRow('overlay_enabled', '오버레이 사용', 'F8 대기실·맵 밴 · F9 상대 분석 (게임 화면 위에 표시)', ovSet.enabled !== false)}
+        ${switchRow('overlay_enabled', '오버레이 사용', `${hot.hotkey_lobby || ovSet.hotkey_lobby || 'Insert'} 대기실·맵 밴 · ${hot.hotkey_scout || ovSet.hotkey_scout || 'Home'} 상대 분석 (게임 화면 위에 표시)`, ovSet.enabled !== false)}
         <div class="set-row2" style="margin-top:4px">
           <div class="field"><label>대기실 · 맵 밴 단축키</label>
             <select id="set-ov-hot1" class="inp">${HOTKEY_OPTIONS.map((k) => `<option value="${k}" ${ovSet.hotkey_lobby === k ? 'selected' : ''}>${k}</option>`).join('')}</select></div>

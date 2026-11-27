@@ -898,7 +898,10 @@ def test_ui_v201() -> None:
         check("UI: 패널 단축키 Insert/Home", "Insert" in label and "Home" in label, label)
 
         # XSS — 닉네임/클랜에 태그를 넣어도 실행되지 않는다
-        page.evaluate("()=>document.querySelectorAll('.screen').forEach(s=>{s.hidden=(s.id!=='s-leaderboard')}); if(window.drawLeaderboard) drawLeaderboard();")
+        page.evaluate("""() => {
+            document.querySelectorAll('.screen').forEach((s) => { s.hidden = (s.id !== 's-leaderboard'); });
+            if (window.drawLeaderboard) drawLeaderboard();
+        }""")
         page.wait_for_timeout(300)
         xss = page.evaluate("()=>window.__XSS")
         check("UI: 순위표 XSS 미실행", xss is None, str(xss))
