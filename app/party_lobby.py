@@ -103,7 +103,11 @@ def pick_line(lines: Sequence[str], known: Iterable[str] = ()) -> tuple[str, lis
     """
     candidates: list[str] = []
     for line in lines:
-        cleaned = clean_ocr_text(line)
+        raw_line = str(line or "").strip()
+        # PowerShell 예외 표식은 닉네임이 아니라 내부 오류다.
+        if raw_line.startswith("__ERR__") or raw_line.startswith("ERR:"):
+            continue
+        cleaned = clean_ocr_text(raw_line)
         if len(cleaned) >= 2:
             candidates.append(cleaned)
     if not candidates:
@@ -274,6 +278,8 @@ def scan_party(client: nexon.NexonClient, game: tuple[int, int, int, int],
     message = f"대기실 5칸 · {found}명 확인" if found else "닉네임을 읽지 못했습니다"
     if needs:
         message += f" · 확인 필요 {needs}명"
+    if found == 0 and shot.get("errors"):
+        message += " · OCR 상세: " + str(shot["errors"][0])[:120]
     return {"ok": found > 0, "supported": True, "rows": rows,
             "names": [r.get("name") for r in rows if r.get("ouid")],
             "confirmed": found, "needs_check": needs, "message": message}
@@ -320,8 +326,10 @@ def scan_teams(game: tuple[int, int, int, int], known: Iterable[str],
         rows.append({"team": meta["team"], "slot": meta["slot"], "raw": name,
                      "name": corrected, "score": round(score, 2),
                      "lines": " / ".join(candidates[:3])})
-    return {"ok": bool(rows), "rows": rows,
-            "message": f"10인 화면 · {len(rows)}명 인식"}
+    message = f"10인 화면 · {len(rows)}명 인식"
+    if not rows and shot.get("errors"):
+        message += " · OCR 상세: " + str(shot["errors"][0])[:120]
+    return {"ok": bool(rows), "rows": rows, "message": message}
 
 
 def last_match_teams(client: nexon.NexonClient, my_nick: str) -> dict[str, Any]:

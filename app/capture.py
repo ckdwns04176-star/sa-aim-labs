@@ -74,56 +74,73 @@ $out = @()
 foreach ($r in $rects) {
   $x = [int]$r.x; $y = [int]$r.y; $w = [int]$r.w; $h = [int]$r.h
   $lines = @()
+  $errors = @()
   $resources = @()
+  $bmp = $null
   try {
     $bmp = New-Object System.Drawing.Bitmap($w, $h)
     $resources += $bmp
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $resources += $g
     $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w, $h)))
-
-    # 1) 원본 픽셀: 이전 4~5배 Bicubic 확대/강한 반전은 작은 한글 획을 뭉개므로
-    #    원본 크기 그대로 먼저 읽는다.
-    Add-OcrLines $bmp $engine ([ref]$lines)
-
-    # 2) 2배 NearestNeighbor: 1픽셀 획을 흐리지 않고 키워 작은 닉네임에 맞춘다.
-    $scale = 2
-    $big = New-Object System.Drawing.Bitmap(($w * $scale), ($h * $scale))
-    $resources += $big
-    $g2 = [System.Drawing.Graphics]::FromImage($big)
-    $resources += $g2
-    $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
-    $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
-    $dst = New-Object System.Drawing.Rectangle(0, 0, ($w * $scale), ($h * $scale))
-    $g2.DrawImage($bmp, $dst, 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel)
-    Add-OcrLines $big $engine ([ref]$lines)
-
-    # 3) 2배 회색조: 청록 글자와 짙은 배경의 색상 차이를 밝기 차이로 보조한다.
-    #    기존 스크립트는 정상 회색조 행렬을 음수 행렬로 다시 덮어써 명암을 망가뜨렸다.
-    $gray = New-Object System.Drawing.Bitmap(($w * $scale), ($h * $scale))
-    $resources += $gray
-    $g3 = [System.Drawing.Graphics]::FromImage($gray)
-    $resources += $g3
-    $g3.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
-    $g3.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
-    $attr = New-Object System.Drawing.Imaging.ImageAttributes
-    $resources += $attr
-    $cm = New-Object System.Drawing.Imaging.ColorMatrix
-    $cm.Matrix00 = 0.30; $cm.Matrix01 = 0.30; $cm.Matrix02 = 0.30
-    $cm.Matrix10 = 0.59; $cm.Matrix11 = 0.59; $cm.Matrix12 = 0.59
-    $cm.Matrix20 = 0.11; $cm.Matrix21 = 0.11; $cm.Matrix22 = 0.11
-    $cm.Matrix33 = 1.0; $cm.Matrix44 = 1.0
-    $attr.SetColorMatrix($cm)
-    $g3.DrawImage($bmp, $dst, 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel, $attr)
-    Add-OcrLines $gray $engine ([ref]$lines)
   } catch {
-    $lines += ('__ERR__' + $_.Exception.Message)
-  } finally {
-    for ($i = $resources.Count - 1; $i -ge 0; $i--) {
-      try { $resources[$i].Dispose() } catch {}
+    $errors += ('capture: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+  }
+
+  if ($bmp) {
+    # 각 OCR 변형은 독립적으로 실행한다. 한 전처리에서 실패해도
+    # 원본/다른 변형에서 얻은 정상 결과는 보존한다.
+    try {
+      Add-OcrLines $bmp $engine ([ref]$lines)
+    } catch {
+      $errors += ('original OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+    }
+
+    $scale = 2
+    $dst = New-Object System.Drawing.Rectangle(0, 0, ($w * $scale), ($h * $scale))
+
+    # 2배 NearestNeighbor
+    try {
+      $big = New-Object System.Drawing.Bitmap(($w * $scale), ($h * $scale))
+      $resources += $big
+      $g2 = [System.Drawing.Graphics]::FromImage($big)
+      $resources += $g2
+      $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+      $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+      $g2.DrawImage($bmp, $dst, 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel)
+      Add-OcrLines $big $engine ([ref]$lines)
+    } catch {
+      $errors += ('nearest-neighbor OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+    }
+
+    # 2배 회색조. 이 단계가 실패해도 앞의 OCR 결과를 버리지 않는다.
+    try {
+      $gray = New-Object System.Drawing.Bitmap(($w * $scale), ($h * $scale))
+      $resources += $gray
+      $g3 = [System.Drawing.Graphics]::FromImage($gray)
+      $resources += $g3
+      $g3.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+      $g3.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+      $attr = New-Object System.Drawing.Imaging.ImageAttributes
+      $resources += $attr
+      $cm = New-Object System.Drawing.Imaging.ColorMatrix
+      $cm.Matrix00 = 0.30; $cm.Matrix01 = 0.30; $cm.Matrix02 = 0.30
+      $cm.Matrix10 = 0.59; $cm.Matrix11 = 0.59; $cm.Matrix12 = 0.59
+      $cm.Matrix20 = 0.11; $cm.Matrix21 = 0.11; $cm.Matrix22 = 0.11
+      $cm.Matrix33 = 1.0; $cm.Matrix44 = 1.0
+      $attr.SetColorMatrix($cm)
+      $g3.DrawImage($bmp, $dst, 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel, $attr)
+      Add-OcrLines $gray $engine ([ref]$lines)
+    } catch {
+      $errors += ('grayscale OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
     }
   }
-  $out += @{ lines = @($lines) }
+
+  for ($i = $resources.Count - 1; $i -ge 0; $i--) {
+    try { $resources[$i].Dispose() } catch {}
+  }
+  # 오류 메시지는 OCR 텍스트(lines)에 절대 섞지 않는다.
+  $out += @{ lines = @($lines); errors = @($errors) }
 }
 $payload = @{ ok = $true; items = $out }
 ConvertTo-Json -InputObject $payload -Compress -Depth 5
@@ -216,10 +233,24 @@ def ocr_regions(rects: Sequence[Sequence[int]], *, timeout: float = PS_TIMEOUT) 
         return data
     items = data.get("items") or []
     lines: list[list[str]] = []
-    for item in items:
-        row = [str(v) for v in ((item or {}).get("lines") or [])]
+    errors: list[str] = []
+    for index, item in enumerate(items):
+        item = item or {}
+        # 구버전 PowerShell이 오류를 lines에 섞어 반환한 경우도 후보에서 제외한다.
+        row = [str(v) for v in (item.get("lines") or [])
+               if not str(v).strip().startswith("__ERR__")]
         lines.append(row)
-    return {"ok": True, "supported": True, "lines": lines, "count": len(lines)}
+        for error in item.get("errors") or []:
+            message = str(error).strip()
+            if message:
+                errors.append(f"영역 {index + 1}: {message[:300]}")
+    has_text = any(any(str(line).strip() for line in row) for row in lines)
+    if not has_text and errors:
+        return {"ok": False, "supported": True, "lines": lines,
+                "errors": errors, "count": len(lines),
+                "message": "OCR 이미지 처리 실패 · " + errors[0]}
+    return {"ok": True, "supported": True, "lines": lines,
+            "errors": errors, "count": len(lines)}
 
 
 def signature(rect: Sequence[int], *, cols: int = 8, rows: int = 3,
