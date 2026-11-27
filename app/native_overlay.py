@@ -29,9 +29,6 @@ from typing import Any, Callable, Sequence
 
 log = logging.getLogger("native-overlay")
 
-# 이 문자열은 앱 로그에서 실제 EXE에 포함된 오버레이 소스를 식별하는 표식이다.
-OVERLAY_DIAG_BUILD = "class-atom-v3-20261127"
-
 # ── Win32 상수 ───────────────────────────────────────────────────────────
 WS_POPUP = 0x80000000
 WS_EX_TOPMOST = 0x00000008
@@ -51,9 +48,6 @@ AC_SRC_OVER = 0x00
 AC_SRC_ALPHA = 0x01
 HTTRANSPARENT = -1
 WM_DESTROY = 0x0002
-WM_CREATE = 0x0001
-WM_NCCREATE = 0x0081
-WM_CLOSE = 0x0010
 WM_NCHITTEST = 0x0084
 WM_ERASEBKGND = 0x0014
 WM_DISPLAYCHANGE = 0x007E
@@ -296,8 +290,11 @@ def party_spec(payload: dict[str, Any], width: int, height: int) -> dict[str, An
             prims.append(text(width * 0.55, maps_top, width * 0.45 - 10, maps_h, tail.strip(),
                               size=max(9.5, maps_h * 0.5), color="coral", align="right"))
     else:
-        prims.append(text(10, maps_top, width - 20, maps_h, "표본이 쌓이면 픽·밴을 표시합니다",
-                          size=max(9.0, maps_h * 0.45), color="muted"))
+        scan_message = str(payload.get("scan_message") or "").strip()
+        display_message = scan_message or "표본이 쌓이면 픽·밴을 표시합니다"
+        status_color = "gold" if any(token in display_message for token in ("실패", "0/5", "오류", "확인 필요")) else "muted"
+        prims.append(text(10, maps_top, width - 20, maps_h, display_message,
+                          size=max(9.0, min(12.0, maps_h * 0.42)), color=status_color))
     return _spec(width, height, prims)
 
 
@@ -475,7 +472,7 @@ class _GdiPlus:
         self.add_line = self._fn("GdipAddPathLine", ctypes.c_int, p,
                                  ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float)
         self.close_figure = self._fn("GdipClosePathFigure", ctypes.c_int, p)
-        self.fill_path = self._fn("GdipFillPath", ctypes.c_int, p, p, p)
+        self.fill_path = self._fn("GdipFillPath", ctypes.c_int, p, p)
         self.draw_path = self._fn("GdipDrawPath", ctypes.c_int, p, p, p)
         self.create_family = self._fn("GdipCreateFontFamilyFromName", ctypes.c_int,
                                       ctypes.c_wchar_p, p, ctypes.POINTER(p))
@@ -544,25 +541,10 @@ class _Bitmap:
         header.biBitCount = 32
         header.biCompression = 0             # BI_RGB
         self.hdc = self.gdi32.CreateCompatibleDC(None)
-        if not self.hdc:
-            code = libs.last_error()
-            raise OSError(f"CreateCompatibleDC 실패 · {libs.error_text(code)}")
         self._bits = ctypes.c_void_p()
         self.hbitmap = self.gdi32.CreateDIBSection(
             self.hdc, ctypes.byref(self._info), 0, ctypes.byref(self._bits), None, 0)
-        if not self.hbitmap or not self._bits:
-            code = libs.last_error()
-            self.gdi32.DeleteDC(self.hdc)
-            self.hdc = None
-            raise OSError(f"CreateDIBSection 실패 · {libs.error_text(code)}")
         self.old = self.gdi32.SelectObject(self.hdc, self.hbitmap)
-        invalid_object = ctypes.c_void_p(-1).value
-        if not self.old or int(self.old) == invalid_object:
-            code = libs.last_error()
-            self.gdi32.DeleteObject(self.hbitmap)
-            self.gdi32.DeleteDC(self.hdc)
-            self.hdc = self.hbitmap = self.old = None
-            raise OSError(f"SelectObject 실패 · {libs.error_text(code)}")
         self.premultiplied = True
 
     def clear(self) -> None:
@@ -592,14 +574,14 @@ def render_prims(bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
 
 def _render_gdiplus(gp: _GdiPlus, bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
     graphics = ctypes.c_void_p()
-    if gp.create_from_hdc(bitmap.hdc, ctypes.byref(graphics)) != 0:
+    if gp.create_from_hdc(ctypes.byref(graphics), bitmap.hdc) != 0:
         return _render_gdi(bitmap, prims)
     try:
         gp.set_smoothing(graphics, 4)       # SmoothingModeAntiAlias
         gp.set_text_aa(graphics, 3)         # TextRenderingHintClearTypeGridFit → 4? use AntiAlias
         family = ctypes.c_void_p()
-        if gp.create_family(FONT, None, ctypes.byref(family)) != 0:
-            gp.create_family(FONT_FALLBACK, None, ctypes.byref(family))
+        if gp.create_family(ctypes.byref(family), FONT, None) != 0:
+            gp.create_family(ctypes.byref(family), FONT_FALLBACK, None)
 
         def brush(color: int) -> Any:
             out = ctypes.c_void_p()
@@ -672,7 +654,7 @@ def _render_gdiplus(gp: _GdiPlus, bitmap: _Bitmap, prims: Sequence[dict[str, Any
 def _rounded_path(gp: _GdiPlus, x: float, y: float, w: float, h: float, radius: float) -> Any:
     r = max(1.0, min(radius, min(w, h) / 2))
     path = ctypes.c_void_p()
-    gp.create_path(0, ctypes.byref(path))
+    gp.create_path(ctypes.byref(path), 0)
     gp.add_arc(path, x, y, r * 2, r * 2, 180, 90)
     gp.add_arc(path, x + w - r * 2, y, r * 2, r * 2, 270, 90)
     gp.add_arc(path, x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, 90)
@@ -717,23 +699,14 @@ def _render_gdi(bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
 
 # ---------------------------------------------------------------- 창
 _WINFUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)   # 리눅스 테스트용 폴백
-# Win32 WNDPROC 는 LRESULT(HWND, UINT, WPARAM, LPARAM) 시그니처다.
-# LRESULT/LPARAM 은 signed pointer-size, WPARAM 은 unsigned pointer-size 로
-# 선언해야 WM_NCHITTEST 의 HTTRANSPARENT(-1) 반환값도 안전하게 전달된다.
-WNDPROC = _WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_uint32,
-                       ctypes.c_size_t, ctypes.c_ssize_t)
+WNDPROC = _WINFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
+                       ctypes.c_void_p, ctypes.c_void_p)
 
 
 class NativeOverlayWindow:
     """레이어드 창 하나 — show/hide/update/destroy."""
 
     _class_registered: set[str] = set()
-    # RegisterClassExW 는 WNDPROC 포인터를 보관한다. 창 인스턴스가 닫혀도
-    # 콜백 객체가 GC 되지 않도록 프로세스 수명 동안 유지한다.
-    _class_wndprocs: dict[str, Any] = {}
-    # RegisterClassExW가 반환한 ATOM을 보관해 CreateWindowExW에 직접 전달한다.
-    _class_atoms: dict[str, int] = {}
-    _class_lock = threading.RLock()
 
     def __init__(self, kind: str, title: str):
         self.kind = kind
@@ -753,88 +726,51 @@ class NativeOverlayWindow:
             return False
         try:
             self._size = (int(rect["w"]), int(rect["h"]))
-            if self._size[0] <= 0 or self._size[1] <= 0:
-                self.error = f"잘못된 오버레이 크기 · {self._size[0]}x{self._size[1]}"
-                return False
             self._thread = threading.Thread(target=self._run, daemon=True,
                                             name=f"overlay-native-{self.kind}")
             self._thread.start()
             if not self._ready.wait(4.0):
                 self.error = "창 생성 시간 초과"
-                log.error("overlay %s 창 생성 시간 초과", self.kind)
                 return False
-            if not self.hwnd:
-                return False
-            # HWND 가 생겼다는 이유만으로 성공 처리하지 않는다. 초기 렌더링 및
-            # UpdateLayeredWindow 까지 성공해야 실제 보이는 오버레이라고 본다.
-            if not self.update(spec):
-                self.error = self.error or "오버레이 초기 그리기 실패"
-                self.destroy()
-                return False
-            return True
+            if self.hwnd:
+                self.update(spec)
+            return bool(self.hwnd)
         except Exception as exc:  # noqa: BLE001
             self.error = str(exc)
-            log.exception("overlay %s create failed", self.kind)
-            self.destroy()
             return False
 
     def update(self, spec: dict[str, Any]) -> bool:
         if os.name != "nt" or not self.hwnd:
-            self.error = "창 핸들이 없어 업데이트할 수 없습니다"
             return False
         try:
-            width, height = int(spec["w"]), int(spec["h"])
-            if width <= 0 or height <= 0:
-                self.error = f"잘못된 렌더링 크기 · {width}x{height}"
-                return False
-            if self.bitmap is None or self._size != (width, height):
+            if self.bitmap is None or self._size != (spec["w"], spec["h"]):
                 if self.bitmap is not None:
                     self.bitmap.dispose()
-                self._size = (width, height)
+                self._size = (int(spec["w"]), int(spec["h"]))
                 self.bitmap = _Bitmap(*self._size)
             else:
                 self.bitmap.clear()
             if not render_prims(self.bitmap, spec.get("prims") or []):
-                self.error = "오버레이 내용을 그리지 못했습니다 (GDI/GDI+ 렌더링 실패)"
-                log.error("overlay %s render_prims 실패 · size=%sx%s prims=%s",
-                          self.kind, width, height, len(spec.get("prims") or []))
                 return False
-            if not self._blit():
-                self.error = self.error or "UpdateLayeredWindow 화면 출력 실패"
-                return False
-            self.error = None
-            return True
-        except Exception as exc:  # noqa: BLE001
-            self.error = f"오버레이 업데이트 실패 · {exc}"
-            log.exception("overlay %s update failed", self.kind)
+            return self._blit()
+        except Exception:  # noqa: BLE001
+            log.debug("overlay update failed", exc_info=True)
             return False
 
     def show(self, rect: dict[str, int] | None = None) -> bool:
         if os.name != "nt" or not self.hwnd:
-            self.error = "창 핸들이 없어 표시할 수 없습니다"
             return False
         try:
-            libs = win32()
-            user32 = libs.user32
-            ctypes.set_last_error(0)
+            user32 = win32().user32
             if rect:
-                ok = user32.SetWindowPos(ctypes.c_void_p(self.hwnd), ctypes.c_void_p(HWND_TOPMOST),
-                                         int(rect["x"]), int(rect["y"]), int(rect["w"]), int(rect["h"]),
-                                         SWP_NOACTIVATE | SWP_SHOWWINDOW)
+                user32.SetWindowPos(ctypes.c_void_p(self.hwnd), ctypes.c_void_p(HWND_TOPMOST),
+                                    int(rect["x"]), int(rect["y"]), int(rect["w"]), int(rect["h"]),
+                                    SWP_NOACTIVATE | SWP_SHOWWINDOW)
             else:
-                ok = user32.SetWindowPos(ctypes.c_void_p(self.hwnd), ctypes.c_void_p(HWND_TOPMOST),
-                                         0, 0, 0, 0,
-                                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
-            if not ok:
-                code = libs.last_error()
-                self.error = f"SetWindowPos 실패 · {libs.error_text(code)}"
-                log.error("overlay %s 표시 실패 · hwnd=%s rect=%s · %s",
-                          self.kind, self.hwnd, rect, self.error)
-                return False
+                user32.SetWindowPos(ctypes.c_void_p(self.hwnd), ctypes.c_void_p(HWND_TOPMOST),
+                                    0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW)
             return True
-        except Exception as exc:  # noqa: BLE001
-            self.error = f"오버레이 표시 실패 · {exc}"
-            log.exception("overlay %s show failed", self.kind)
+        except Exception:  # noqa: BLE001
             return False
 
     def hide(self) -> bool:
@@ -851,9 +787,7 @@ class NativeOverlayWindow:
             return
         try:
             if self.hwnd:
-                # WM_DESTROY 를 직접 Post 하지 말고 WM_CLOSE 를 보내 기본 프로시저가
-                # DestroyWindow 를 호출하게 한다 (창 스레드에서 정상 파괴).
-                win32().user32.PostMessageW(ctypes.c_void_p(self.hwnd), WM_CLOSE, 0, 0)
+                win32().user32.PostMessageW(ctypes.c_void_p(self.hwnd), WM_DESTROY, 0, 0)
         except Exception:  # noqa: BLE001
             pass
         if self.bitmap is not None:
@@ -881,29 +815,18 @@ class NativeOverlayWindow:
         size = SIZE(self._size[0], self._size[1])
         src = POINT(0, 0)
         rect = wintypes.RECT()
-        ctypes.set_last_error(0)
-        if not user32.GetWindowRect(ctypes.c_void_p(self.hwnd), ctypes.byref(rect)):
-            code = libs.last_error()
-            self.error = f"GetWindowRect 실패 · {libs.error_text(code)}"
-            log.error("overlay %s 위치 조회 실패 · hwnd=%s · %s", self.kind, self.hwnd, self.error)
-            return False
+        user32.GetWindowRect(ctypes.c_void_p(self.hwnd), ctypes.byref(rect))
         dst = POINT(rect.left, rect.top)
-        # hdcDst 는 화면 DC다. NULL 을 전달하면 기본 팔레트를 사용한다.
-        # 비트맵의 메모리 DC 는 hdcSrc 에만 전달해야 한다.
         ok = user32.UpdateLayeredWindow(
-            ctypes.c_void_p(self.hwnd), None, ctypes.byref(dst), ctypes.byref(size),
+            ctypes.c_void_p(self.hwnd), self.bitmap.hdc, ctypes.byref(dst), ctypes.byref(size),
             self.bitmap.hdc, ctypes.byref(src), 0, ctypes.byref(blend), ULW_ALPHA)
         if not ok:
             code = libs.last_error()
-            self.error = f"UpdateLayeredWindow 실패 · {libs.error_text(code)}"
-            log.error("overlay %s 화면 합성 실패 · hwnd=%s size=%s · %s",
-                      self.kind, self.hwnd, self._size, self.error)
+            log.debug("UpdateLayeredWindow 실패 · %s", libs.error_text(code))
         return bool(ok)
 
     def _run(self) -> None:
         try:
-            from ctypes import wintypes
-
             libs = win32()
             user32 = libs.user32
             kernel32 = libs.kernel32
@@ -916,89 +839,50 @@ class NativeOverlayWindow:
                 return
             class_name = f"SAAimOverlay_{self.kind}"
 
-            class WNDCLASSEXW(ctypes.Structure):
-                _fields_ = [("cbSize", ctypes.c_uint), ("style", ctypes.c_uint),
-                            ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int),
-                            ("cbWndExtra", ctypes.c_int), ("hInstance", ctypes.c_void_p),
-                            ("hIcon", ctypes.c_void_p), ("hCursor", ctypes.c_void_p),
-                            ("hbrBackground", ctypes.c_void_p), ("lpszMenuName", ctypes.c_wchar_p),
-                            ("lpszClassName", ctypes.c_wchar_p), ("hIconSm", ctypes.c_void_p)]
+            @WNDPROC
+            def wndproc(hwnd, msg, wparam, lparam):
+                if msg == WM_NCHITTEST:
+                    return HTTRANSPARENT
+                if msg == WM_ERASEBKGND:
+                    return 1
+                if msg == WM_DESTROY:
+                    user32.PostQuitMessage(0)
+                    return 0
+                return user32.DefWindowProcW(ctypes.c_void_p(hwnd), msg, ctypes.c_void_p(wparam),
+                                             ctypes.c_void_p(lparam))
 
-            # 같은 종류의 오버레이가 거의 동시에 열려도 RegisterClassExW 경쟁이나
-            # 이미 등록된 클래스의 콜백 포인터가 해제되는 일이 없도록 잠근다.
-            with NativeOverlayWindow._class_lock:
-                wndproc = NativeOverlayWindow._class_wndprocs.get(class_name)
-                if wndproc is None:
-                    @WNDPROC
-                    def wndproc(hwnd, msg, wparam, lparam):
-                        # CreateWindowExW는 생성 중 WM_NCCREATE/WM_CREATE를 동기 전송한다.
-                        # 이 시점의 콜백 진입 여부를 로그로 남겨 생성 실패 지점을 구분한다.
-                        if msg == WM_NCCREATE:
-                            log.info("native-overlay WNDPROC · kind=%s · WM_NCCREATE", self.kind)
-                        elif msg == WM_CREATE:
-                            log.info("native-overlay WNDPROC · kind=%s · WM_CREATE", self.kind)
-                        if msg == WM_NCHITTEST:
-                            return HTTRANSPARENT
-                        if msg == WM_ERASEBKGND:
-                            return 1
-                        if msg == WM_DESTROY:
-                            user32.PostQuitMessage(0)
-                            return 0
-                        try:
-                            return int(user32.DefWindowProcW(hwnd, msg, wparam, lparam))
-                        except Exception:  # noqa: BLE001 - 콜백 예외를 조용히 삼키지 않는다
-                            log.exception("native-overlay WNDPROC 예외 · kind=%s · msg=0x%04X",
-                                          self.kind, int(msg))
-                            return 0
+            self._wndproc = wndproc
+            if class_name not in NativeOverlayWindow._class_registered:
+                class WNDCLASSEXW(ctypes.Structure):
+                    _fields_ = [("cbSize", ctypes.c_uint), ("style", ctypes.c_uint),
+                                ("lpfnWndProc", WNDPROC), ("cbClsExtra", ctypes.c_int),
+                                ("cbWndExtra", ctypes.c_int), ("hInstance", ctypes.c_void_p),
+                                ("hIcon", ctypes.c_void_p), ("hCursor", ctypes.c_void_p),
+                                ("hbrBackground", ctypes.c_void_p), ("lpszMenuName", ctypes.c_wchar_p),
+                                ("lpszClassName", ctypes.c_wchar_p), ("hIconSm", ctypes.c_void_p)]
 
-                    wc = WNDCLASSEXW()
-                    wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
-                    wc.style = CS_HREDRAW | CS_VREDRAW
-                    wc.lpfnWndProc = wndproc
-                    wc.hInstance = hinstance
-                    wc.lpszClassName = class_name
-                    ctypes.set_last_error(0)
-                    atom = int(user32.RegisterClassExW(ctypes.byref(wc)) or 0)
-                    if not atom:
-                        code = libs.last_error()
-                        self.error = (f"RegisterClassExW 실패 · build={OVERLAY_DIAG_BUILD} · "
-                                      f"class={class_name} · hinstance=0x{int(hinstance):X} · "
-                                      f"{libs.error_text(code)}")
-                        log.error(self.error)
-                        self._ready.set()
-                        return
-                    NativeOverlayWindow._class_registered.add(class_name)
-                    NativeOverlayWindow._class_wndprocs[class_name] = wndproc
-                    NativeOverlayWindow._class_atoms[class_name] = atom
-                self._wndproc = wndproc
-                class_atom = NativeOverlayWindow._class_atoms.get(class_name)
-                if not class_atom:
-                    self.error = (f"창 클래스 ATOM을 찾을 수 없음 · build={OVERLAY_DIAG_BUILD} · "
-                                  f"class={class_name}")
+                wc = WNDCLASSEXW()
+                wc.cbSize = ctypes.sizeof(WNDCLASSEXW)
+                wc.style = CS_HREDRAW | CS_VREDRAW
+                wc.lpfnWndProc = wndproc
+                wc.hInstance = hinstance
+                wc.lpszClassName = class_name
+                if not user32.RegisterClassExW(ctypes.byref(wc)):
+                    code = libs.last_error()
+                    self.error = f"RegisterClassExW 실패 · {libs.error_text(code)}"
                     log.error(self.error)
                     self._ready.set()
                     return
+                NativeOverlayWindow._class_registered.add(class_name)
 
             ex_style = (WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE
                         | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW)
-            # CreateWindowExW의 lpClassName은 RegisterClassExW가 반환한 ATOM도
-            # 받을 수 있다. 이름 문자열 재검색 대신 등록된 클래스를 직접 지정한다.
-            class_atom_arg = ctypes.cast(ctypes.c_void_p(class_atom), wintypes.LPCWSTR)
-            log.info("native-overlay create · build=%s · kind=%s · class=%s · atom=0x%04X · "
-                     "hinstance=0x%X · size=%sx%s",
-                     OVERLAY_DIAG_BUILD, self.kind, class_name, class_atom,
-                     int(hinstance), self._size[0], self._size[1])
-            ctypes.set_last_error(0)
             hwnd = user32.CreateWindowExW(
-                ex_style, class_atom_arg, self.title, WS_POPUP,
+                ex_style, class_name, self.title, WS_POPUP,
                 0, 0, self._size[0], self._size[1], None, None, hinstance, None)
             if not hwnd:
                 code = libs.last_error()
-                self.error = (f"CreateWindowExW 실패 · build={OVERLAY_DIAG_BUILD} · "
-                              f"kind={self.kind} · class={class_name} · atom=0x{class_atom:04X} · "
-                              f"size={self._size[0]}x{self._size[1]} · "
-                              f"hinstance=0x{int(hinstance):X} · style=0x{ex_style:08X} · "
-                              f"{libs.error_text(code)}")
+                self.error = f"CreateWindowExW 실패 · {libs.error_text(code)}"
                 log.error(self.error)
                 self._ready.set()
                 return

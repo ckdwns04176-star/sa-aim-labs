@@ -43,23 +43,38 @@ $null = [Windows.Graphics.Imaging.BitmapDecoder, Windows.Foundation, ContentType
 $null = [Windows.Globalization.Language, Windows.Foundation, ContentType=WindowsRuntime]
 __AWAIT__
 $rects = __RECTS__
-$cyanOnly = __CYAN_ONLY__
+$debugDirB64 = '__DEBUG_DIR_B64__'
+$debugDir = $null
+if ($debugDirB64) {
+  try {
+    $debugDir = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($debugDirB64))
+    New-Item -ItemType Directory -Force -Path $debugDir | Out-Null
+  } catch { $debugDir = $null }
+}
 $engine = $null
 foreach ($tag in @('ko-KR', 'ko')) {
-  try { $lang = New-Object Windows.Globalization.Language($tag)
-        $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang) } catch { $engine = $null }
+  try {
+    $lang = New-Object Windows.Globalization.Language($tag)
+    $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromLanguage($lang)
+  } catch { $engine = $null }
   if ($engine) { break }
 }
 if (-not $engine) { $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages() }
-if (-not $engine) { Write-Output '{"ok":false,"message":"Windows OCR 언어팩(한국어)을 찾지 못했습니다"}'; exit 0 }
+if (-not $engine) {
+  Write-Output '{"ok":false,"message":"Windows OCR 언어팩(한국어)을 찾지 못했습니다"}'
+  exit 0
+}
 
-# OCR 엔진에 비트맵을 전달하고 인식된 한 줄을 대상 배열에 추가한다.
+# Windows OCR에 PNG 비트맵을 전달한다.
+# 중요: AsRandomAccessStream 확장 클래스의 실제 네임스페이스는 System.IO다.
 function Add-OcrLines($bitmap, $ocrEngine, [ref]$target) {
   $ms = New-Object System.IO.MemoryStream
+  $ras = $null
+  $software = $null
   try {
     $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
     $ms.Position = 0
-    $ras = [System.WindowsRuntimeStreamExtensions]::AsRandomAccessStream($ms)
+    $ras = [System.IO.WindowsRuntimeStreamExtensions]::AsRandomAccessStream($ms)
     $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($ras)) ([Windows.Graphics.Imaging.BitmapDecoder])
     $software = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
     $result = Await ($ocrEngine.RecognizeAsync($software)) ([Windows.Media.Ocr.OcrResult])
@@ -67,132 +82,212 @@ function Add-OcrLines($bitmap, $ocrEngine, [ref]$target) {
       if ($line.Text) { $target.Value += [string]$line.Text }
     }
   } finally {
+    if ($software) { try { $software.Dispose() } catch {} }
+    if ($ras) { try { $ras.Dispose() } catch {} }
     $ms.Dispose()
   }
 }
 
-# 파티 카드의 청록색 닉네임 글자만 검게 남기고 나머지를 흰색으로 바꾼다.
-# 회색 클랜명·카드 아이콘·배경 무늬가 OCR 후보에 들어가지 않게 한다.
-function Add-CyanOnlyOcr($bitmap, $ocrEngine, [ref]$target) {
-  $mask = $null
-  $big = $null
-  $scaleGraphics = $null
+function Save-DebugBitmap($bitmap, $folder, $fileName) {
+  if (-not $folder -or -not $bitmap) { return '' }
   try {
-    $mask = New-Object System.Drawing.Bitmap($bitmap.Width, $bitmap.Height)
-    $black = [System.Drawing.Color]::FromArgb(255, 0, 0, 0)
-    $white = [System.Drawing.Color]::FromArgb(255, 255, 255, 255)
-    for ($yy = 0; $yy -lt $bitmap.Height; $yy++) {
-      for ($xx = 0; $xx -lt $bitmap.Width; $xx++) {
-        $px = $bitmap.GetPixel($xx, $yy)
-        $isCyan = (($px.G - $px.R) -ge 15) -and
-                  (($px.B - $px.R) -ge 15) -and
-                  ($px.G -ge 100) -and ($px.B -ge 100) -and
-                  ([math]::Abs($px.G - $px.B) -le 100)
-        if ($isCyan) { $mask.SetPixel($xx, $yy, $black) }
-        else { $mask.SetPixel($xx, $yy, $white) }
-      }
-    }
-
-    # 원본 마스크와 3배 확대본을 각각 인식해 작은 한글 획의 누락을 줄인다.
-    Add-OcrLines $mask $ocrEngine $target
-    $scale = 3
-    $big = New-Object System.Drawing.Bitmap(($bitmap.Width * $scale), ($bitmap.Height * $scale))
-    $scaleGraphics = [System.Drawing.Graphics]::FromImage($big)
-    $scaleGraphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $scaleGraphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
-    $scaleGraphics.DrawImage($mask, 0, 0, $big.Width, $big.Height)
-    Add-OcrLines $big $ocrEngine $target
-  } finally {
-    if ($scaleGraphics) { $scaleGraphics.Dispose() }
-    if ($big) { $big.Dispose() }
-    if ($mask) { $mask.Dispose() }
-  }
+    $full = Join-Path $folder $fileName
+    $bitmap.Save($full, [System.Drawing.Imaging.ImageFormat]::Png)
+    return $full
+  } catch { return '' }
 }
 
 $out = @()
+$slotIndex = 0
 foreach ($r in $rects) {
+  $slotIndex++
   $x = [int]$r.x; $y = [int]$r.y; $w = [int]$r.w; $h = [int]$r.h
-  $lines = @()
+  $originalLines = @()
+  $enlargedLines = @()
+  $contrastLines = @()
+  $cyanLines = @()
   $errors = @()
   $resources = @()
   $bmp = $null
+  $enlarged = $null
+  $contrast = $null
+  $mask = $null
+  $cyanPixels = 0
+  $captureOk = $false
+  $nameRect = @{}
+  $rawFile = ''
+  $maskFile = ''
+  $contrastFile = ''
+
   try {
     $bmp = New-Object System.Drawing.Bitmap($w, $h)
     $resources += $bmp
     $g = [System.Drawing.Graphics]::FromImage($bmp)
     $resources += $g
     $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w, $h)))
+    $captureOk = $true
+    $rawFile = Save-DebugBitmap $bmp $debugDir ("slot_{0}_raw.png" -f $slotIndex)
   } catch {
     $errors += ('capture: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
   }
 
-  if ($bmp) {
-    if ($cyanOnly) {
-      # 파티 대기실: 닉네임 색상만 남겨 클랜명과 배경 문자를 제거한다.
-      try {
-        Add-CyanOnlyOcr $bmp $engine ([ref]$lines)
-      } catch {
-        $errors += ('cyan-only OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+  if ($captureOk -and $bmp) {
+    # 1) 원본 캡처 OCR
+    try { Add-OcrLines $bmp $engine ([ref]$originalLines) }
+    catch { $errors += ('original OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message) }
+
+    # 2) 3배 고품질 확대 OCR
+    try {
+      $scale = 3
+      $enlarged = New-Object System.Drawing.Bitmap(($w * $scale), ($h * $scale))
+      $resources += $enlarged
+      $g2 = [System.Drawing.Graphics]::FromImage($enlarged)
+      $resources += $g2
+      $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+      $g2.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+      $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+      $g2.DrawImage($bmp, 0, 0, $enlarged.Width, $enlarged.Height)
+      Add-OcrLines $enlarged $engine ([ref]$enlargedLines)
+    } catch { $errors += ('enlarged OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message) }
+
+    # 3) 고대비 흑백 전처리 OCR. 밝은 닉네임 획을 검정, 어두운 배경을 흰색으로 만든다.
+    try {
+      $contrast = New-Object System.Drawing.Bitmap($w, $h)
+      $resources += $contrast
+      for ($yy = 0; $yy -lt $h; $yy++) {
+        for ($xx = 0; $xx -lt $w; $xx++) {
+          $px = $bmp.GetPixel($xx, $yy)
+          $lum = [int][math]::Round(($px.R * 0.299) + ($px.G * 0.587) + ($px.B * 0.114))
+          $v = [int][math]::Round(255 - [math]::Min(255, [math]::Max(0, ($lum - 48) * 2.15)))
+          if ($v -lt 0) { $v = 0 }; if ($v -gt 255) { $v = 255 }
+          $contrast.SetPixel($xx, $yy, [System.Drawing.Color]::FromArgb(255, $v, $v, $v))
+        }
       }
-    } else {
-      # 일반 OCR: 각 전처리를 독립 실행해 어느 한 단계의 실패가 결과를 지우지 않게 한다.
-      try {
-        Add-OcrLines $bmp $engine ([ref]$lines)
-      } catch {
-        $errors += ('original OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+      $contrastFile = Save-DebugBitmap $contrast $debugDir ("slot_{0}_contrast.png" -f $slotIndex)
+      Add-OcrLines $contrast $engine ([ref]$contrastLines)
+    } catch { $errors += ('contrast OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message) }
+
+    # 4) 청록색 닉네임 마스크 OCR. 회색 클랜명과 카드 아이콘을 최대한 제외한다.
+    try {
+      $mask = New-Object System.Drawing.Bitmap($w, $h)
+      $resources += $mask
+      $white = [System.Drawing.Color]::FromArgb(255, 255, 255, 255)
+      $black = [System.Drawing.Color]::FromArgb(255, 0, 0, 0)
+      $rowCounts = @()
+      for ($yy = 0; $yy -lt $h; $yy++) {
+        $rowCount = 0
+        for ($xx = 0; $xx -lt $w; $xx++) {
+          $px = $bmp.GetPixel($xx, $yy)
+          $isCyan = (($px.G - $px.R) -ge 18) -and
+                    (($px.B - $px.R) -ge 18) -and
+                    ($px.G -ge 82) -and ($px.B -ge 82) -and
+                    ([math]::Abs($px.G - $px.B) -le 115)
+          if ($isCyan) { $mask.SetPixel($xx, $yy, $black); $rowCount++ }
+          else { $mask.SetPixel($xx, $yy, $white) }
+        }
+        $rowCounts += $rowCount
+        $cyanPixels += $rowCount
+      }
+      $maskFile = Save-DebugBitmap $mask $debugDir ("slot_{0}_cyan.png" -f $slotIndex)
+
+      # 화면 종류마다 닉네임의 Y 좌표가 달라서, crop 안에서 청록 픽셀이
+      # 연속해서 모여 있는 가장 강한 가로 글자 줄을 자동으로 찾는다.
+      $rowThreshold = [math]::Max(2, [int][math]::Ceiling($w * 0.008))
+      $bestScore = 0; $bestStart = -1; $bestEnd = -1
+      $runScore = 0; $runStart = -1; $lastActive = -100
+      for ($yy = 0; $yy -lt $h; $yy++) {
+        if ($rowCounts[$yy] -ge $rowThreshold) {
+          if ($runStart -lt 0 -or ($yy - $lastActive) -gt 3) {
+            if ($runScore -gt $bestScore -and $runStart -ge 0) {
+              $bestScore = $runScore; $bestStart = $runStart; $bestEnd = $lastActive
+            }
+            $runStart = $yy; $runScore = 0
+          }
+          $runScore += [int]$rowCounts[$yy]
+          $lastActive = $yy
+        }
+      }
+      if ($runScore -gt $bestScore -and $runStart -ge 0) {
+        $bestScore = $runScore; $bestStart = $runStart; $bestEnd = $lastActive
       }
 
-      $scale = 2
-      $dst = New-Object System.Drawing.Rectangle(0, 0, ($w * $scale), ($h * $scale))
-
-      # 2배 NearestNeighbor
-      try {
-        $big = New-Object System.Drawing.Bitmap(($w * $scale), ($h * $scale))
-        $resources += $big
-        $g2 = [System.Drawing.Graphics]::FromImage($big)
-        $resources += $g2
-        $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
-        $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
-        $g2.DrawImage($bmp, $dst, 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel)
-        Add-OcrLines $big $engine ([ref]$lines)
-      } catch {
-        $errors += ('nearest-neighbor OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+      $tight = $null
+      if ($bestStart -ge 0 -and ($bestEnd - $bestStart + 1) -ge 5 -and
+          ($bestEnd - $bestStart + 1) -le 42) {
+        $minX = $w; $maxX = -1
+        for ($yy = $bestStart; $yy -le $bestEnd; $yy++) {
+          for ($xx = 0; $xx -lt $w; $xx++) {
+            $px = $bmp.GetPixel($xx, $yy)
+            $isCyan = (($px.G - $px.R) -ge 18) -and
+                      (($px.B - $px.R) -ge 18) -and
+                      ($px.G -ge 82) -and ($px.B -ge 82) -and
+                      ([math]::Abs($px.G - $px.B) -le 115)
+            if ($isCyan) { if ($xx -lt $minX) { $minX = $xx }; if ($xx -gt $maxX) { $maxX = $xx } }
+          }
+        }
+        if ($maxX -ge $minX) {
+          $padX = 4; $padY = 3
+          $cropX = [math]::Max(0, $minX - $padX)
+          $cropY = [math]::Max(0, $bestStart - $padY)
+          $cropRight = [math]::Min($w, $maxX + $padX + 1)
+          $cropBottom = [math]::Min($h, $bestEnd + $padY + 1)
+          $tightWidth = [math]::Max(1, $cropRight - $cropX)
+          $tightHeight = [math]::Max(1, $cropBottom - $cropY)
+          $tight = $mask.Clone((New-Object System.Drawing.Rectangle($cropX, $cropY, $tightWidth, $tightHeight)), $mask.PixelFormat)
+          $resources += $tight
+          $nameRect = @{ x = $cropX; y = $cropY; w = $tightWidth; h = $tightHeight }
+          $cyanPixels = $bestScore
+        }
       }
 
-      # 2배 회색조. 이 단계가 실패해도 앞의 OCR 결과를 버리지 않는다.
-      try {
-        $gray = New-Object System.Drawing.Bitmap(($w * $scale), ($h * $scale))
-        $resources += $gray
-        $g3 = [System.Drawing.Graphics]::FromImage($gray)
-        $resources += $g3
-        $g3.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
-        $g3.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
-        $attr = New-Object System.Drawing.Imaging.ImageAttributes
-        $resources += $attr
-        $cm = New-Object System.Drawing.Imaging.ColorMatrix
-        $cm.Matrix00 = 0.30; $cm.Matrix01 = 0.30; $cm.Matrix02 = 0.30
-        $cm.Matrix10 = 0.59; $cm.Matrix11 = 0.59; $cm.Matrix12 = 0.59
-        $cm.Matrix20 = 0.11; $cm.Matrix21 = 0.11; $cm.Matrix22 = 0.11
-        $cm.Matrix33 = 1.0; $cm.Matrix44 = 1.0
-        $attr.SetColorMatrix($cm)
-        $g3.DrawImage($bmp, $dst, 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel, $attr)
-        Add-OcrLines $gray $engine ([ref]$lines)
-      } catch {
-        $errors += ('grayscale OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message)
+      if ($tight) {
+        # 실제 글자 바운딩 박스만 원본 크기와 3배 확대 크기로 OCR한다.
+        Add-OcrLines $tight $engine ([ref]$cyanLines)
+        $maskBig = New-Object System.Drawing.Bitmap(($tight.Width * 3), ($tight.Height * 3))
+        $resources += $maskBig
+        $gm = [System.Drawing.Graphics]::FromImage($maskBig)
+        $resources += $gm
+        $gm.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $gm.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::HighQuality
+        $gm.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+        $gm.DrawImage($tight, 0, 0, $maskBig.Width, $maskBig.Height)
+        Add-OcrLines $maskBig $engine ([ref]$cyanLines)
+        Save-DebugBitmap $tight $debugDir ("slot_{0}_text.png" -f $slotIndex) | Out-Null
+      } else {
+        # 색상 글자가 검출되지 않은 경우 전체 마스크를 남겨 진단할 수 있게 한다.
+        $nameRect = @{}
+        Add-OcrLines $mask $engine ([ref]$cyanLines)
       }
-    }
+    } catch { $errors += ('cyan-mask OCR: ' + $_.Exception.GetType().FullName + ': ' + $_.Exception.Message) }
   }
 
+  $allLines = @($originalLines) + @($enlargedLines) + @($contrastLines) + @($cyanLines)
+  $variants = @{
+    original = @($originalLines)
+    enlarged = @($enlargedLines)
+    contrast = @($contrastLines)
+    cyan_mask = @($cyanLines)
+  }
   for ($i = $resources.Count - 1; $i -ge 0; $i--) {
     try { $resources[$i].Dispose() } catch {}
   }
-  # 오류 메시지는 OCR 텍스트(lines)에 절대 섞지 않는다.
-  $out += @{ lines = @($lines); errors = @($errors) }
+  $out += @{
+    slot = $slotIndex
+    rect = @{ x = $x; y = $y; w = $w; h = $h }
+    capture_ok = $captureOk
+    cyan_pixels = $cyanPixels
+    name_rect = $nameRect
+    lines = @($allLines)
+    variants = $variants
+    errors = @($errors)
+    debug_raw = $rawFile
+    debug_cyan = $maskFile
+    debug_contrast = $contrastFile
+  }
 }
-$payload = @{ ok = $true; items = $out }
-ConvertTo-Json -InputObject $payload -Compress -Depth 5
+$payload = @{ ok = $true; items = @($out) }
+ConvertTo-Json -InputObject $payload -Compress -Depth 7
 """
-
 _SIGNATURE_SCRIPT = r"""
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
@@ -269,41 +364,105 @@ def _rect_list(rects: Sequence[Sequence[int]]) -> str:
     return "@(" + ",".join(rows) + ")"
 
 
-def ocr_regions(rects: Sequence[Sequence[int]], *, cyan_only: bool = False,
-                timeout: float = PS_TIMEOUT) -> dict[str, Any]:
-    """화면의 여러 사각형을 캡처해 한국어 OCR 줄 목록을 돌려준다.
+def _as_text_lines(value: Any) -> list[str]:
+    """PowerShell JSON 배열이 문자열 하나로 축약된 경우까지 안전하게 정규화한다."""
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if str(item or "").strip()]
+    return [str(value)] if str(value).strip() else []
 
-    cyan_only=True이면 청록색 글자만 남겨 파티 닉네임과 회색 클랜명을 분리한다.
+
+def ocr_regions(rects: Sequence[Sequence[int]], *, timeout: float = 30.0,
+                debug_dir: str | os.PathLike[str] | None = None) -> dict[str, Any]:
+    """여러 영역을 캡처해 원본·3배 확대·고대비·청록 마스크 4경로로 OCR한다.
+
+    debug_dir를 지정하면 슬롯별 원본/전처리 캡처 PNG도 저장한다. 전체 화면이
+    아니라 닉네임 줄 주변만 저장하므로 인식 실패 원인을 확인하기 쉽다.
     """
-    cleaned = [r for r in rects if len(r) >= 4]
+    cleaned = [r for r in rects if len(r) >= 4 and int(r[2]) > 0 and int(r[3]) > 0]
     if not cleaned:
         return {"ok": False, "supported": available(), "message": "읽을 영역이 없습니다"}
+
+    debug_b64 = ""
+    if debug_dir is not None:
+        import base64 as _base64
+        debug_b64 = _base64.b64encode(os.fspath(debug_dir).encode("utf-8")).decode("ascii")
+
     script = (_OCR_SCRIPT.replace("__AWAIT__", _AWAIT)
               .replace("__RECTS__", _rect_list(cleaned))
-              .replace("__CYAN_ONLY__", "$true" if cyan_only else "$false"))
+              .replace("__DEBUG_DIR_B64__", debug_b64))
     data = _run(script, timeout=timeout)
     if not data.get("ok"):
         return data
+
     items = data.get("items") or []
+    if isinstance(items, dict):
+        items = [items]
     lines: list[list[str]] = []
+    variant_lines: list[dict[str, list[str]]] = []
+    capture_ok: list[bool] = []
+    cyan_pixels: list[int] = []
+    rect_details: list[dict[str, int]] = []
+    name_rects: list[dict[str, int]] = []
     errors: list[str] = []
+
     for index, item in enumerate(items):
-        item = item or {}
-        # 구버전 PowerShell이 오류를 lines에 섞어 반환한 경우도 후보에서 제외한다.
-        row = [str(v) for v in (item.get("lines") or [])
-               if not str(v).strip().startswith("__ERR__")]
-        lines.append(row)
-        for error in item.get("errors") or []:
-            message = str(error).strip()
-            if message:
-                errors.append(f"영역 {index + 1}: {message[:300]}")
-    has_text = any(any(str(line).strip() for line in row) for row in lines)
-    if not has_text and errors:
-        return {"ok": False, "supported": True, "lines": lines,
-                "errors": errors, "count": len(lines),
-                "message": "OCR 이미지 처리 실패 · " + errors[0]}
-    return {"ok": True, "supported": True, "lines": lines,
-            "errors": errors, "count": len(lines)}
+        item = item if isinstance(item, dict) else {}
+        all_lines = [line for line in _as_text_lines(item.get("lines"))
+                     if not line.strip().startswith("__ERR__")]
+        lines.append(all_lines)
+        variants_raw = item.get("variants") or {}
+        variants: dict[str, list[str]] = {}
+        for method in ("original", "enlarged", "contrast", "cyan_mask"):
+            variants[method] = [line for line in _as_text_lines(variants_raw.get(method))
+                                if not line.strip().startswith("__ERR__")]
+        variant_lines.append(variants)
+        capture_ok.append(bool(item.get("capture_ok", True)))
+        try:
+            cyan_pixels.append(int(item.get("cyan_pixels") or 0))
+        except (TypeError, ValueError):
+            cyan_pixels.append(0)
+        rect = item.get("rect") or {}
+        if isinstance(rect, dict):
+            rect_details.append({k: int(rect.get(k) or 0) for k in ("x", "y", "w", "h")})
+        else:
+            rect_details.append({})
+        name_rect = item.get("name_rect") or {}
+        if isinstance(name_rect, dict):
+            name_rects.append({k: int(name_rect.get(k) or 0) for k in ("x", "y", "w", "h")})
+        else:
+            name_rects.append({})
+        for error in _as_text_lines(item.get("errors")):
+            errors.append(f"영역 {index + 1}: {error[:300]}")
+
+    has_text = any(any(line.strip() for line in row) for row in lines)
+    any_capture = any(capture_ok)
+    if not any_capture:
+        message = "화면 캡처에 실패했습니다"
+        if errors:
+            message += " · " + errors[0]
+    elif not has_text:
+        message = "화면 캡처는 됐지만 OCR 문자를 찾지 못했습니다"
+    else:
+        message = "OCR 캡처 완료"
+
+    return {
+        "ok": True,
+        "supported": True,
+        "lines": lines,
+        "variant_lines": variant_lines,
+        "capture_ok": capture_ok,
+        "cyan_pixels": cyan_pixels,
+        "rects": rect_details,
+        "name_rects": name_rects,
+        "errors": errors,
+        "count": len(lines),
+        "message": message,
+        "debug_dir": os.fspath(debug_dir) if debug_dir is not None else "",
+    }
 
 
 def signature(rect: Sequence[int], *, cols: int = 8, rows: int = 3,

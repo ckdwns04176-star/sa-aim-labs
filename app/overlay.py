@@ -59,7 +59,6 @@ MAPBAN_TAB_H = 0.038
 MAPBAN_NAME_TOP = 0.492
 MAPBAN_NAME_H = 0.031
 
-# 카드의 가로 위치·폭 기준값. OCR 세로 탐색띠는 party_card_rects()에서 별도 계산한다.
 PARTY_CARDS = [
     (0.039833, 0.471958, 0.166468, 0.028571),
     (0.230083, 0.471958, 0.166468, 0.028571),
@@ -140,16 +139,17 @@ def mapban_name_rects(game: tuple[int, int, int, int],
 
 def party_card_rects(game: tuple[int, int, int, int],
                      calib: dict[str, Any] | None = None) -> list[dict[str, int]]:
-    """5개 카드의 닉네임 탐색 띠.
+    """5개 파티 카드의 닉네임 탐색 영역.
 
-    구형 대기실(참고 영상)과 현재 인게임 대기실은 닉네임 줄의 높이가
-    서로 다르다. 두 UI를 모두 포함하도록 세로 띠를 넓히고,
-    capture.ocr_regions(cyan_only=True)가 청록색 닉네임만 분리해 읽는다.
+    구형 대기실(참고 영상)은 이름 줄이 화면 높이 약 47~50%에,
+    현재 대기실은 약 51~54%에 나타난다. 두 UI를 모두 포함하는 세로 띠를
+    읽고, capture.ocr_regions()가 청록색 닉네임을 우선 분리한다.
     """
-    name_top, name_height = 0.440, 0.105
-    # 닉네임은 카드 중앙에 정렬되므로 중앙 60%만 읽어 측면 배지/아이콘을 배제한다.
-    rows = [(row[0] + row[2] * 0.20, name_top, row[2] * 0.60, name_height)
-            for row in PARTY_CARDS]
+    scan_top, scan_height = 0.445, 0.112
+    # 닉네임은 카드 중앙 정렬. 중앙 80%를 사용해 긴 영문 닉네임도 자르지 않되
+    # 좌우의 무기/상태 아이콘이 OCR에 섞이는 것을 줄인다.
+    rows = [(col[0] + col[2] * 0.10, scan_top, col[2] * 0.80, scan_height)
+            for col in PARTY_CARDS]
     return [rect_scale(game, row, calib) for row in rows]
 
 

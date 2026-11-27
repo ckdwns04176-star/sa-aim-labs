@@ -2772,7 +2772,7 @@ class Api:
             client = self._client()
             known = self._known_names()
             scan = party_lobby.scan_party(client, area, known, calib=settings.get("scan_calib"))
-            if scan.get("rows"):
+            if scan.get("rows") and any((row or {}).get("name") for row in scan["rows"]):
                 cache = self.store.overlay_cache()
                 cache["last_scan_at"] = now_iso()
                 cache["last_scan"] = scan["rows"]
@@ -2780,6 +2780,10 @@ class Api:
                 self._last_scan = scan["rows"]
             return {"ok": bool(scan.get("ok")), "rows": scan.get("rows") or [],
                     "names": scan.get("names") or [], "run": scan,
+                    "recognized": int(scan.get("recognized") or 0),
+                    "confirmed": int(scan.get("confirmed") or 0),
+                    "stage": str(scan.get("stage") or ""),
+                    "debug_file": str(scan.get("debug_file") or ""),
                     "presets": self.party_presets()["presets"],
                     "mapban": self._mapban_payload(scan.get("names") or []) if scan.get("rows") else None,
                     "message": scan.get("message") or ""}
@@ -2826,8 +2830,9 @@ class Api:
             return self._err("오버레이가 꺼져 있습니다")
         scan = self.party_scan()
         rows = scan.get("rows") or []
-        if not rows or not any(r.get("name") for r in rows):
-            # OCR 실패 — 직전 판 API 에서 우리 팀 5명을 그대로 불러온다
+        if not rows:
+            # 스캔 함수 자체가 행을 반환하지 못한 경우에만 직전 판 API 폴백을 사용한다.
+            # 5개 실시간 OCR 슬롯이 비어 있는 경우 과거 명단을 현재 대기실 결과처럼 보이지 않는다.
             try:
                 me = self._store_nick()
                 fallback = party_lobby.last_match_teams(self._client(), me) if me else {"ok": False}
@@ -2854,6 +2859,8 @@ class Api:
                 "message": scan.get("message") or "닉네임을 읽지 못했습니다 · 대기실 화면을 확인해 주세요",
             }
         payload = self._party_overlay_payload(rows)
+        payload["scan_message"] = str(scan.get("message") or "")
+        payload["debug_file"] = str(scan.get("debug_file") or (scan.get("run") or {}).get("debug_file") or "")
         shown = self._overlay.show("party", payload, rect=overlay.party_overlay_rect(overlay.game_area()),
                                    seconds=settings.get("party_seconds"))
         # 5인을 읽었으면 앱 전술 도구 슬롯에도 채우고 분석까지 돌린다 (#11)

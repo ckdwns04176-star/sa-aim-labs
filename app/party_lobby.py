@@ -17,11 +17,13 @@
 from __future__ import annotations
 
 import difflib
+import json
 import re
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable, Sequence
 
-from . import capture, nexon
+from . import capture, nexon, paths
 
 NICK_MAX = 12
 PARTY_SLOTS = 5
@@ -134,6 +136,74 @@ def pick_line(lines: Sequence[str], known: Iterable[str] = ()) -> tuple[str, lis
     winner = max(counts, key=score)
     ordered = sorted(counts, key=score, reverse=True)
     return display[winner], [display[key] for key in ordered]
+
+
+def pick_line_variants(variants: dict[str, Sequence[str]],
+                       known: Iterable[str] = ()) -> tuple[str, list[str], dict[str, list[str]]]:
+    """4개 OCR 경로의 후보를 신뢰도 가중 투표로 합친다.
+
+    청록 마스크는 닉네임 글자색을 직접 이용하므로 가장 높은 가중치를 준다.
+    단, 마스크 한 경로가 오인식할 수 있어 원본·확대·고대비 경로의 일치도도
+    함께 반영한다. 저장된 닉네임 유사도는 동점일 때만 사용한다.
+    """
+    weights = {"original": 1, "enlarged": 2, "contrast": 2, "cyan_mask": 5}
+    known_list = [str(n).strip() for n in known if str(n or "").strip()]
+    totals: dict[str, int] = {}
+    frequencies: dict[str, int] = {}
+    display: dict[str, str] = {}
+    method_hits: dict[str, set[str]] = {}
+    cleaned_by_method: dict[str, list[str]] = {}
+
+    for method in ("cyan_mask", "contrast", "enlarged", "original"):
+        method_lines = variants.get(method) or []
+        if isinstance(method_lines, str):
+            method_lines = [method_lines]
+        cleaned_rows: list[str] = []
+        for line in method_lines:
+            raw_line = str(line or "").strip()
+            if not raw_line or raw_line.startswith(("__ERR__", "ERR:")):
+                continue
+            cleaned = clean_ocr_text(raw_line)
+            if len(cleaned) < 2:
+                continue
+            cleaned_rows.append(cleaned)
+            key = nick_key(cleaned)
+            if not key:
+                continue
+            totals[key] = totals.get(key, 0) + weights.get(method, 1)
+            frequencies[key] = frequencies.get(key, 0) + 1
+            display.setdefault(key, cleaned)
+            method_hits.setdefault(key, set()).add(method)
+        cleaned_by_method[method] = cleaned_rows
+
+    if not totals:
+        return "", [], cleaned_by_method
+
+    def rank(key: str) -> tuple[int, float, int, int, int, int]:
+        text = display[key]
+        known_score = max((similarity(text, item) for item in known_list), default=0.0)
+        has_korean = int(bool(re.search(r"[가-힣]", text)))
+        # 한 방법의 반복보다 서로 다른 전처리의 합의를 우선한다.
+        return (totals[key], len(method_hits.get(key, set())), known_score,
+                frequencies[key], has_korean, -len(text))
+
+    ordered = sorted(totals, key=rank, reverse=True)
+    return display[ordered[0]], [display[key] for key in ordered], cleaned_by_method
+
+
+def _write_party_debug(debug_dir, debug_path, report: dict[str, Any]) -> str:
+    """마지막 파티 OCR의 슬롯 캡처와 진단 JSON을 하나의 ZIP으로 묶는다."""
+    try:
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        json_path = debug_dir / "diagnostic.json"
+        json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        with zipfile.ZipFile(debug_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for file_path in sorted(debug_dir.iterdir()):
+                if file_path.is_file():
+                    archive.write(file_path, arcname=file_path.name)
+        return str(debug_path)
+    except Exception as exc:  # noqa: BLE001 - 진단 저장 실패가 OCR을 막지 않는다
+        return f"debug save failed: {exc}"
 
 
 def team_of(rows: Sequence[dict[str, Any]], me: str) -> dict[str, Any]:
@@ -255,37 +325,139 @@ def validate_names(client: nexon.NexonClient, names: Sequence[str], known: Itera
 
 def scan_party(client: nexon.NexonClient, game: tuple[int, int, int, int],
                known: Iterable[str], *, calib: dict[str, Any] | None = None) -> dict[str, Any]:
-    """대기실 5칸을 읽고 → 보정 → API 검증까지 한 번에."""
+    r"""대기실 5칸 캡처 → 4경로 OCR → 후보 투표 → NEXON API 확인.
+
+    실제 캡처 PNG와 방법별 OCR 문자열을 %APPDATA%\SA_Aim_Labs\logs에
+    party_ocr_debug.zip으로 보관한다. 캡처 실패와 OCR 실패, API 검증 실패를 구분한다.
+    """
     from . import overlay
 
     known_list = [str(n).strip() for n in known if str(n or "").strip()]
     rects = overlay.party_card_rects(game, calib)
+    debug_dir = paths.log_dir() / "party_ocr_debug"
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    # 직전 진단 이미지가 현재 결과와 섞이지 않게 슬롯 파일만 초기화한다.
+    for old_file in debug_dir.glob("slot_*.png"):
+        try:
+            old_file.unlink()
+        except OSError:
+            pass
+
     shot = capture.ocr_regions(
         [(r["x"], r["y"], r["w"], r["h"]) for r in rects],
-        cyan_only=True,
+        timeout=35.0,
+        debug_dir=str(debug_dir),
     )
+
     if not shot.get("ok"):
-        return {"ok": False, "supported": bool(shot.get("supported")), "rows": [],
-                "message": shot.get("message") or "대기실 화면을 읽지 못했습니다"}
+        rows = [{"slot": i, "raw": "", "name": "", "ouid": None,
+                 "status": "empty", "score": 0.0, "lines": ""}
+                for i in range(PARTY_SLOTS)]
+        report = {"game": list(game[:4]), "rects": rects, "capture": shot,
+                  "rows": rows, "stage": "capture_or_ocr_engine_failed"}
+        debug_file = _write_party_debug(debug_dir, paths.log_dir() / "party_ocr_debug.zip", report)
+        return {"ok": False, "supported": bool(shot.get("supported")), "rows": rows,
+                "recognized": 0, "confirmed": 0, "debug_file": debug_file,
+                "message": shot.get("message") or "화면 캡처/OCR 실행에 실패했습니다"}
+
+    variant_items = shot.get("variant_lines") or []
+    flat_items = shot.get("lines") or []
     names: list[str] = []
     raws: list[str] = []
-    for lines in shot.get("lines") or []:
-        name, candidates = pick_line(lines, known_list)
+    slot_debug: list[dict[str, Any]] = []
+    for slot in range(PARTY_SLOTS):
+        variants = variant_items[slot] if slot < len(variant_items) else {}
+        if not variants:
+            fallback_lines = flat_items[slot] if slot < len(flat_items) else []
+            variants = {"original": fallback_lines}
+        name, candidates, by_method = pick_line_variants(variants, known_list)
         names.append(name)
-        raws.append(" / ".join(candidates[:3]))
-    rows = validate_names(client, names, known_list)
-    for row, raw in zip(rows, raws):
+        raws.append(" / ".join(candidates[:5]))
+        slot_debug.append({
+            "slot": slot + 1,
+            "rect": rects[slot] if slot < len(rects) else {},
+            "capture_ok": (shot.get("capture_ok") or [True] * PARTY_SLOTS)[slot]
+                          if slot < len(shot.get("capture_ok") or []) else False,
+            "cyan_pixels": (shot.get("cyan_pixels") or [0] * PARTY_SLOTS)[slot]
+                           if slot < len(shot.get("cyan_pixels") or []) else 0,
+            "name_rect": (shot.get("name_rects") or [{}] * PARTY_SLOTS)[slot]
+                         if slot < len(shot.get("name_rects") or []) else {},
+            "ocr_candidates": candidates[:5],
+            "ocr_by_method": by_method,
+            "selected": name,
+        })
+
+    api_validation_error = ""
+    try:
+        rows = validate_names(client, names, known_list)
+    except Exception as exc:  # noqa: BLE001 - API 실패가 OCR 원문/진단을 지우지 않게 한다
+        api_validation_error = f"{type(exc).__name__}: {exc}"
+        rows = [{"slot": i, "raw": name, "name": name, "ouid": None,
+                 "status": "needs_check" if name else "empty", "score": 0.0,
+                 "skip_reason": "NEXON API 검증 중 오류"}
+                for i, name in enumerate(names)]
+    for index, (row, raw) in enumerate(zip(rows, raws)):
         row["lines"] = raw
-    found = len([r for r in rows if r.get("ouid")])
-    needs = len([r for r in rows if r.get("status") == "needs_check"])
-    message = f"대기실 5칸 · {found}명 확인" if found else "닉네임을 읽지 못했습니다"
+        row["ocr_by_method"] = slot_debug[index]["ocr_by_method"]
+        row["capture_ok"] = slot_debug[index]["capture_ok"]
+        row["cyan_pixels"] = slot_debug[index]["cyan_pixels"]
+
+    recognized = sum(1 for name in names if name)
+    found = sum(1 for row in rows if row.get("ouid"))
+    needs = sum(1 for row in rows if row.get("status") == "needs_check")
+    captures = shot.get("capture_ok") or []
+    capture_count = sum(1 for ok in captures if ok)
+    if capture_count == 0:
+        message = "게임 화면 캡처 실패 · 진단 ZIP에서 CopyFromScreen 오류를 확인하세요"
+        stage = "screen_capture_failed"
+    elif recognized == 0:
+        message = "화면 캡처 성공 · 닉네임 OCR 결과 0/5 · 진단 이미지 확인 필요"
+        stage = "ocr_returned_no_nicknames"
+    elif found == 0:
+        message = f"닉네임 OCR {recognized}/5 · NEXON API 확인 0명 · 철자/API 검증 단계 확인 필요"
+        stage = "ocr_succeeded_api_validation_failed"
+    else:
+        message = f"닉네임 OCR {recognized}/5 · NEXON API {found}/5명 확인"
+        stage = "success" if found == PARTY_SLOTS else "partial_success"
     if needs:
         message += f" · 확인 필요 {needs}명"
-    if found == 0 and shot.get("errors"):
-        message += " · OCR 상세: " + str(shot["errors"][0])[:120]
-    return {"ok": found > 0, "supported": True, "rows": rows,
-            "names": [r.get("name") for r in rows if r.get("ouid")],
-            "confirmed": found, "needs_check": needs, "message": message}
+
+    if api_validation_error:
+        message += " · API 오류: " + api_validation_error[:120]
+        stage = "api_validation_error"
+
+    report = {
+        "game": list(game[:4]),
+        "capture": {
+            "ok": True,
+            "message": shot.get("message"),
+            "capture_ok": captures,
+            "rects": shot.get("rects") or rects,
+            "name_rects": shot.get("name_rects") or [],
+            "cyan_pixels": shot.get("cyan_pixels") or [],
+            "errors": shot.get("errors") or [],
+            "debug_dir": str(debug_dir),
+        },
+        "stage": stage,
+        "api_validation_error": api_validation_error,
+        "slots": slot_debug,
+        "rows": [{k: row.get(k) for k in ("slot", "raw", "name", "status", "score", "skip_reason")}
+                 for row in rows],
+    }
+    debug_file = _write_party_debug(debug_dir, paths.log_dir() / "party_ocr_debug.zip", report)
+    return {
+        "ok": found > 0,
+        "supported": True,
+        "rows": rows,
+        "names": [row.get("name") for row in rows if row.get("ouid")],
+        "recognized_names": names,
+        "recognized": recognized,
+        "confirmed": found,
+        "needs_check": needs,
+        "stage": stage,
+        "debug_file": debug_file,
+        "message": message,
+    }
 
 
 # ---------------------------------------------------------------- 10인 팀 스캔
