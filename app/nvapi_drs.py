@@ -51,6 +51,9 @@ NVAPI_DRS_DESTROY_SESSION = 0xDAFB9D2F
 NVAPI_DRS_LOAD_SETTINGS = 0x375DBD6B
 NVAPI_DRS_SAVE_SETTINGS = 0xFCBC7E14
 NVAPI_DRS_FIND_PROFILE_BY_NAME = 0x7E4A9BF9
+# v2.0.4 — 실행 파일(suddenattack.exe)로 프로필을 찾는 쪽이 더 정확하다.
+# 드라이버 버전·언어에 따라 프로필 "이름"이 달라져도 앱 이름은 고정이기 때문.
+NVAPI_DRS_FIND_APPLICATION_BY_NAME = 0xEEE566B2
 NVAPI_DRS_GET_SETTING = 0x73BF8338
 NVAPI_DRS_SET_SETTING = 0x577DD202
 
@@ -63,6 +66,10 @@ NVAPI_INCOMPATIBLE_STRUCT_VERSION = -12
 SETTING_VER = 1
 
 PROFILE_NAMES = ("Sudden Attack", "SuddenAttack", "서든어택", "Sudden Attack (Korea)")
+# FindApplicationByName 1순위 — 서든어택 실행 파일 이름 (대소문자 표기 차이 대비)
+APPLICATION_NAMES = ("suddenattack.exe", "SuddenAttack.exe")
+# NVDRS_APPLICATION_V3 버전
+APPLICATION_VER = 3
 
 STATUS = {
     0: "OK",
@@ -141,8 +148,20 @@ def _structures() -> dict[str, Any]:
             ("settingName", NVDRS_UNICODE_STRING),
         ]
 
+    class NVDRS_APPLICATION_V3(ctypes.Structure):
+        # FindApplicationByName 의 OUT 파라미터 — 프로필이 아닌 **앱** 정보.
+        _fields_ = [
+            ("version", ctypes.c_uint32),
+            ("appName", NVDRS_UNICODE_STRING),
+            ("userFriendlyName", NVDRS_UNICODE_STRING),
+            ("launcher", NVDRS_UNICODE_STRING),
+            ("fileInvisible", ctypes.c_uint32),
+            ("reserved", ctypes.c_uint32 * 7),
+        ]
+
     return {"unicode": NVDRS_UNICODE_STRING, "binary": NVDRS_BINARY_SETTING,
-            "value": NVDRS_SETTING_VALUE, "setting": NVDRS_SETTING_V1}
+            "value": NVDRS_SETTING_VALUE, "setting": NVDRS_SETTING_V1,
+            "application": NVDRS_APPLICATION_V3}
 
 
 def struct_report() -> dict[str, Any]:
@@ -196,8 +215,36 @@ def _fill_name(structs: dict[str, Any], name: str) -> Any:
     return value
 
 
-def _find_profile(structs: dict[str, Any], find_profile: Any, session: Any) -> tuple[Any, str, int | None]:
+def application_struct(structs: dict[str, Any]) -> Any:
+    """FindApplicationByName 이 채워 줄 NVDRS_APPLICATION_V3 — version 먼저."""
+    application = structs["application"]()
+    application.version = (APPLICATION_VER << 16) | ctypes.sizeof(application)
+    return application
+
+
+def _find_profile(structs: dict[str, Any], find_profile: Any, session: Any,
+                  find_app: Any | None = None) -> tuple[Any, str, int | None]:
+    """프로필 찾기 — **suddenattack.exe 로 먼저**, 없으면 프로필 이름으로 폴백.
+
+    드라이버 버전·언어에 따라 프로필 표시 이름이 달라지면
+    FindProfileByName 이 실패한다(사용자 지적).  실행 파일 이름은 게임이
+    정해져 있으므로 FindApplicationByName(0xEEE566B2) 쪽이 안정적이다.
+    """
     last_rc: int | None = None
+    if find_app is not None:
+        for app_name in APPLICATION_NAMES:
+            encoded = _fill_name(structs, app_name)
+            handle = ctypes.c_void_p()
+            application = application_struct(structs)
+            try:
+                rc = int(find_app(session, ctypes.byref(encoded), ctypes.byref(handle),
+                                  ctypes.byref(application)))
+            except Exception:  # noqa: BLE001 - 바인딩 실패는 이름 조회로 넘어간다
+                last_rc = None
+                break
+            last_rc = rc
+            if rc == NVAPI_OK and handle:
+                return handle, app_name, rc
     for name in PROFILE_NAMES:
         encoded = _fill_name(structs, name)
         handle = ctypes.c_void_p()
@@ -275,6 +322,14 @@ def apply_profile_settings(settings: list[tuple[int, int]]) -> dict[str, Any]:
         find_profile = _query(dll, NVAPI_DRS_FIND_PROFILE_BY_NAME, ctypes.c_int,
                               ctypes.c_void_p, ctypes.POINTER(structs["unicode"]),
                               ctypes.POINTER(ctypes.c_void_p))
+        # 실행 파일 이름으로 프로필 찾기 (1순위) — 구버전 드라이버에 없으면 None
+        try:
+            find_app = _query(dll, NVAPI_DRS_FIND_APPLICATION_BY_NAME, ctypes.c_int,
+                              ctypes.c_void_p, ctypes.POINTER(structs["unicode"]),
+                              ctypes.POINTER(ctypes.c_void_p),
+                              ctypes.POINTER(structs["application"]))
+        except Exception:  # noqa: BLE001
+            find_app = None
         get_setting = _query(dll, NVAPI_DRS_GET_SETTING, ctypes.c_int,
                              ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
                              ctypes.POINTER(structs["setting"]))
@@ -305,7 +360,8 @@ def apply_profile_settings(settings: list[tuple[int, int]]) -> dict[str, Any]:
 
         session = _session()
         try:
-            profile, profile_name, _rc = _find_profile(structs, find_profile, session)
+            profile, profile_name, _rc = _find_profile(structs, find_profile, session,
+                                                       find_app=find_app)
             if not profile:
                 return {"ok": False, "verified": False, "supported": True, "rc": _rc,
                         "status": status_text(_rc or 0),
@@ -344,7 +400,8 @@ def apply_profile_settings(settings: list[tuple[int, int]]) -> dict[str, Any]:
             try:
                 session2 = _session()
                 try:
-                    profile2, _name2, _rc2 = _find_profile(structs, find_profile, session2)
+                    profile2, _name2, _rc2 = _find_profile(structs, find_profile, session2,
+                                                          find_app=find_app)
                     if not profile2:
                         verify_error = "재조회에서 서든 프로필을 찾지 못했습니다"
                     else:

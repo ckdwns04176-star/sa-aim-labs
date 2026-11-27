@@ -585,6 +585,7 @@ class Api:
                 "mode": "suddenattack",
             },
             "settings": settings,
+            "accounts": store.accounts_state(),
             "nexon": {
                 "connected": bool((store.settings.get("api_key") or "").strip()),
                 "nickname": store.settings.get("nickname") or "",
@@ -762,6 +763,28 @@ class Api:
         text = (value or "").strip()
         return bool(text) and any(ch in text for ch in cls._MASK_CHARS)
 
+    def switch_account(self, index: Any = 0) -> dict[str, Any]:
+        """계정 3칸 중 하나로 원클릭 전환 — 홈·병영수첩이 그 닉네임 기준으로 바뀐다."""
+        try:
+            state = self.store.switch_account(index)
+            name = state.get("nickname") or ""
+            return {"ok": True, "accounts": state, "nickname": name,
+                    "state": self._build_state(light=True),
+                    "message": f"{name} 계정으로 전환했습니다" if name else "전환할 계정이 없습니다"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, accounts=self.store.accounts_state())
+
+    def save_account(self, index: Any = 0, nickname: Any = "", label: Any = "") -> dict[str, Any]:
+        """계정 칸의 닉네임 등록·수정 (빈 값이면 그 칸 비우기)."""
+        try:
+            state = self.store.save_account(index, nickname, label)
+            name = state.get("nickname") or ""
+            return {"ok": True, "accounts": state, "nickname": name,
+                    "state": self._build_state(light=True),
+                    "message": f"{name} 계정 저장" if name else "계정을 비웠습니다"}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc, accounts=self.store.accounts_state())
+
     def save_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         allowed = {"nickname", "auto_sync", "notify", "hotkey_enabled", "goals", "cloud_email",
                    "tilt_watch", "tilt_interval", "onboarded", "auto_cloud",
@@ -817,6 +840,12 @@ class Api:
             except Exception:  # noqa: BLE001 - 감시 토글이 저장을 막지 않는다
                 log.debug("tilt watcher toggle failed", exc_info=True)
         self.store.update_settings(clean)
+        if "nickname" in clean:
+            # 계정 3칸과 항상 같은 상태를 유지한다 (설정창에서 바꿔도 슬롯에 반영).
+            try:
+                self.store.remember_account(clean["nickname"])
+            except Exception:  # noqa: BLE001 - 계정 동기화 실패가 저장을 막지 않는다
+                log.debug("account sync failed", exc_info=True)
         if "hotkey_enabled" in clean:
             self._apply_hotkey(bool(clean["hotkey_enabled"]))
         if any(key.startswith("overlay_") or key.startswith("toast_") for key in clean):
@@ -2825,8 +2854,7 @@ class Api:
         if kind == "scout":
             area = overlay.game_area()
             rows = _sample_scout_rows()
-            payload = {"tab": "scout", "map": "제3보급창고",
-                       "top_team": rows[:5], "bottom_team": rows[5:], "rows": rows}
+            payload = {"tab": "scout", "top_team": rows[:5], "bottom_team": rows[5:], "rows": rows}
             return self._ok(**self._overlay.show("match", payload, rect=overlay.scout_overlay_rect(area),
                                                  seconds=12))
         return self._err("알 수 없는 미리보기 종류입니다")
@@ -3110,8 +3138,7 @@ class Api:
                 return rows[:head], rows[head:head + 5]
 
             payload: dict[str, Any] = {
-                "tab": "scout", "map": map_name or "",
-                "top_team": [], "bottom_team": [], "loading": True,
+                "tab": "scout", "top_team": [], "bottom_team": [], "loading": True,
                 "top": len(top_names), "bottom": len(bottom_names), "seconds": 16,
             }
             shown = self._overlay.show("match", payload, rect=overlay.scout_overlay_rect(area),

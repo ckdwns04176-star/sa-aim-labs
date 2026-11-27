@@ -93,6 +93,8 @@ def build_state(nick: str = "스나이퍼01", signed_in: bool = True, plan: str 
 
     store = Store(tmp / "data.json")
     store.update_settings({"nickname": nick, "onboarded": True})
+    store.save_account(0, nick)          # v2.0.4 — 내 계정 3칸 (2칸 사용 · 1칸 빈칸)
+    store.save_account(1, "시티캣")
     barracks = sample_barracks(nick)
     store.barracks_cache()[nick] = barracks
     store.add_barracks_snapshot(barracks)
@@ -189,6 +191,20 @@ def mock_js(state: dict) -> str:
       async duo_rank() { return {ok:true, rows:[], message:'표본 없음'}; },
       async duo_synergy(n) { return {ok:true, available:true, friend:n, together:{games:5,win:60,kd:53,dmg:1100}, alone:{games:15,win:46,kd:50,dmg:980}, delta:{win:14,kd:3,dmg:120}, verdict:'찰떡 궁합', tone:'good', label:n+'와 함께 좋습니다', pairs:[], force:{power:62}, sample:5, message:''}; },
       async connect_nickname() { return {ok:true, state:S(), nickname:'스나이퍼01', message:'연결'}; },
+      async switch_account(p) { window.__CALLS.push(['switch_account', p && p.index]); const st=S();
+        const acc=st.accounts||{items:[],active:0,max:3}; const i=Number((p||{}).index||0);
+        if(acc.items && acc.items[i]) { acc.active=i; acc.nickname=acc.items[i].nickname;
+          st.settings=Object.assign({}, st.settings||{}, {nickname:acc.nickname}); }
+        return {ok:true, state:st, accounts:acc, nickname:(p||{}).nickname, message:'계정 전환'}; },
+      async save_account(p) { window.__CALLS.push(['save_account', p && p.index, p && p.nickname]); const st=S();
+        const acc=st.accounts||{items:[],active:0,max:3}; const i=Number((p||{}).index||0);
+        const n=String((p||{}).nickname||'').trim();
+        acc.items=Array.isArray(acc.items)?acc.items:[];
+        while(acc.items.length<=i) acc.items.push({nickname:'',label:''});
+        acc.items[i]={nickname:n,label:''};
+        acc.items=acc.items.filter(function(r){return r && r.nickname;});
+        acc.nickname=st.settings && st.settings.nickname || n;
+        return {ok:true, state:st, accounts:acc, nickname:n, message:n+' 계정 저장'}; },
       async search_user() { return {ok:true, found:true, user:{name:'스나이퍼01'}}; },
       async lookup_barracks() { return {ok:true, barracks:S().barracks, peek:true}; },
       async add_leaderboard_member() { return {ok:true, state:S(), message:'추가'}; },

@@ -71,7 +71,11 @@ PARTY_BADGE_H = 0.030688
 PARTY_MAPS_TOP = 0.538624
 PARTY_MAPS_H = 0.033862
 
-SCOUT_SIZE = (0.360, 0.430)
+# 스카우팅 창 — 1행 3열(닉네임 | 솔로 | 파티)이 꽉 차는 폭 · 10줄 높이.
+SCOUT_WIDTH = (540, 580)      # (min, max) px
+SCOUT_WIDTH_RATIO = 0.29      # 1920 → 557, 2560 → 580(상한), 1024 → 540(하한)
+SCOUT_HEIGHT_RATIO = 0.290    # 1080 → 313 (글씨 +2pt)
+SCOUT_MIN_HEIGHT = 260
 SCOUT_MARGIN = (0.012, 0.020)
 TOAST_SIZE = (372, 96)
 TOAST_MARGIN = 18
@@ -220,12 +224,16 @@ def party_layout(rect: dict[str, int], game: tuple[int, int, int, int]) -> dict[
 
 
 def scout_overlay_rect(game: tuple[int, int, int, int]) -> dict[str, int]:
-    """상대 스카우팅 창 — 게임 창 오른쪽 아래 (10명 = 2그룹 × 5줄)."""
+    """스카우팅 창 — 게임 창 오른쪽 아래, 10명(2그룹 × 5줄)이 들어가는 최소 폭.
+
+    사용자 피드백: 이전 폭(~691px)은 닉네임과 스탯 사이가 250px 넘게 비어
+    보였다.  이제 폭을 440~500px 로 묶어 중간 여백을 없앤다.
+    """
     x, y, w, h = (int(v) for v in game[:4])
-    rw, rh = SCOUT_SIZE
+    lo, hi = SCOUT_WIDTH
     mx, my = SCOUT_MARGIN
-    win_w = max(420, int(round(rw * w)))
-    win_h = max(300, int(round(rh * h)))
+    win_w = min(hi, max(lo, int(round(SCOUT_WIDTH_RATIO * w))))
+    win_h = max(SCOUT_MIN_HEIGHT, int(round(SCOUT_HEIGHT_RATIO * h)))
     left = x + w - win_w - int(round(mx * w))
     top = y + h - win_h - int(round(my * h))
     return {"x": max(x, left), "y": max(y, top), "w": win_w, "h": win_h}

@@ -299,6 +299,8 @@
     const d = AL.state && AL.state.digest;
     if (!d || !d.show || digestShown) return;
     if (AL.peek) return;
+    if (AL.suppressDigest) return;   // 계정 전환·설정 저장처럼 화면만 갱신할 때는 띄우지 않는다
+    if (AL.suppressDigestUntil && Date.now() < AL.suppressDigestUntil) return;
     digestShown = true;
     if (typeof renderDigest === 'function') renderDigest(d);
     const mask = $('#digest-mask');
@@ -326,6 +328,7 @@
     const set = st.settings || {};
     const home = st.home || {};
     AL.meta = meta;
+    renderAccounts(st);
 
     /* ---------- 상단 · 사이드바 ---------- */
     const nick = String(home.nickname || (st.nexon || {}).nickname || set.nickname || '').trim();
@@ -893,14 +896,16 @@
             <div class="card-sub">병영수첩 · 친구 순위표 · 테마 · 배율</div></div>
         </div>
         ${inputRow('set-nick', '서든어택 닉네임', set.nickname || '', { maxlength: 12 })}
-        <div class="set-row2" style="margin-top:2px">
-          <div class="field"><label>테마</label><select id="set-theme" class="inp">
-            ${(st.themes || []).map((t) => `<option value="${t.key}" ${st.theme === t.key ? 'selected' : ''}>${t.name}</option>`).join('')}
-          </select></div>
-          <div class="field"><label>화면 배율</label><select id="set-scale" class="inp">
-            ${(st.ui_scales || [90, 100, 115, 125]).map((v) => `<option value="${v}" ${Number(st.ui_scale_setting) === Number(v) ? 'selected' : ''}>${v}%</option>`).join('')}
-          </select></div>
+        <div class="acct-bar" id="set-accounts" style="margin:2px 0 8px"></div>
+        <div class="field" style="margin-top:4px"><label>테마</label>
+          <div class="pill-seg" id="set-theme">
+            ${(st.themes || []).map((t) => `<button type="button" data-theme-key="${t.key}" class="${st.theme === t.key ? 'on' : ''}"><i style="background:${t.hex || '#8B96A8'}"></i>${t.name}</button>`).join('')}
+            <span class="pill-thumb"></span>
+          </div>
         </div>
+        <div class="field" style="margin-top:8px"><label>화면 배율</label><select id="set-scale" class="inp">
+          ${(st.ui_scales || [90, 100, 115, 125]).map((v) => `<option value="${v}" ${Number(st.ui_scale_setting) === Number(v) ? 'selected' : ''}>${v}%</option>`).join('')}
+        </select></div>
         ${switchRow('ui_scale_auto', '화면 배율 자동', 'QHD(2560×1440) 이상이면 115%로 자동', !!st.ui_scale_auto)}
         <div class="set-note" style="margin-top:8px">
           마지막 병영수첩 최신화 <b>${nexon.last_barracks_at ? String(nexon.last_barracks_at).replace('T', ' ').slice(0, 16) : '—'}</b> · 출처 Data based on NEXON Open API
@@ -910,6 +915,10 @@
           <button class="btn btn-ghost" data-act="save-goals">목표 저장</button>
         </div>`;
     }
+
+    requestAnimationFrame(() => syncPill($('#set-theme')));
+    const setAcct = $('#set-accounts');
+    if (setAcct) setAcct.innerHTML = acctBarHTML(st, false);
 
     /* ---------- 오버레이 ---------- */
     const ov = $('#set-overlay');
@@ -1075,7 +1084,8 @@
     const num = (id) => { const el = $('#' + id); return el && String(el.value).trim() !== '' ? Number(el.value) : undefined; };
     const patch = {};
     const nick = read('set-nick'); if (nick) patch.nickname = nick;
-    const theme = read('set-theme'); if (theme) patch.theme = theme;
+    const themeBtn = document.querySelector('#set-theme button.on');
+    if (themeBtn) patch.theme = themeBtn.dataset.themeKey;
     const scale = read('set-scale'); if (scale) patch.ui_scale = Number(scale);
     const hot1 = $('#set-ov-hot1'), hot2 = $('#set-ov-hot2'), pos = $('#set-ov-pos');
     if (hot1) patch.overlay_hotkey_lobby = hot1.value;
@@ -2509,9 +2519,148 @@
     renderBalance(res || {});
   }
 
+  /* ===================== v2.0.4 — 내 계정 3칸 (원클릭 전환) ===================== */
+  const ACCT_MAX = 3;
+  const acctEsc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  function acctState(st) {
+    const acc = (st && st.accounts) || {};
+    const items = Array.isArray(acc.items) ? acc.items.slice(0, ACCT_MAX).map((row) => ({
+      nickname: String((row || {}).nickname || ''),
+      label: String((row || {}).label || ''),
+    })).filter((row) => row.nickname) : [];
+    const nick = String(((st || {}).settings || {}).nickname || ((st || {}).nexon || {}).nickname || '').trim();
+    if (!items.length && nick) items.push({ nickname: nick, label: '' });
+    let active = Number(acc.active);
+    if (!Number.isFinite(active) || active < 0 || active >= items.length) {
+      active = Math.max(0, items.findIndex((row) => row.nickname.toLowerCase() === nick.toLowerCase()));
+    }
+    return { items, active, max: Number(acc.max) || ACCT_MAX };
+  }
+
+  function acctBarHTML(st, big) {
+    const { items, active } = acctState(st);
+    const slots = [];
+    for (let i = 0; i < ACCT_MAX; i += 1) {
+      const row = items[i];
+      if (row) {
+        const on = i === active ? ' on' : '';
+        slots.push('<button class="acct-slot' + on + '" data-acct="' + i + '" type="button"'
+          + ' title="' + acctEsc(row.nickname) + ' 계정으로 전환">'
+          + '<b>' + (i + 1) + '</b><span class="acct-name">' + acctEsc(row.nickname) + '</span>'
+          + '<i class="acct-edit" data-acct-edit="' + i + '" title="닉네임 수정">✎</i></button>');
+      } else {
+        slots.push('<button class="acct-slot empty" data-acct-edit="' + i + '" type="button"'
+          + ' title="닉네임 등록"><b>' + (i + 1) + '</b><span class="acct-name">계정 추가</span></button>');
+      }
+    }
+    const label = big ? '내 계정' : '계정';
+    return '<span class="acct-lb">' + label + '</span>' + slots.join('')
+      + '<span class="acct-hint">클릭하면 바로 전환</span>';
+  }
+
+  function renderAccounts(st) {
+    const state = st || AL.state || {};
+    ['#home-accounts', '#br-accounts'].forEach((sel) => {
+      const box = $(sel);
+      if (!box) return;
+      const focused = document.activeElement;
+      if (focused && focused.closest && focused.closest(sel)) return;   // 입력 중 보호
+      const html = acctBarHTML(state, sel === '#br-accounts');
+      if (box.innerHTML !== html) box.innerHTML = html;
+    });
+  }
+
+  async function switchAccount(index) {
+    if (!AL.real) return toast('앱(.exe)에서 계정을 전환할 수 있습니다', false);
+    const st = AL.state || {};
+    const { items } = acctState(st);
+    if (!items[index]) return toast('빈 칸입니다 · ✎ 로 닉네임을 등록해 주세요', false);
+    busy(true, '계정을 전환하는 중…');
+    AL.suppressDigest = true;
+    AL.suppressDigestUntil = Date.now() + 6000;   // 전적 새로 불러오는 동안 요약 팝업 금지
+    const res = await call('switch_account', { index });
+    busy(false);
+    if (!res || !res.ok) { AL.suppressDigest = false; return toast((res && res.message) || '계정을 전환하지 못했습니다', false); }
+    if (res.state) applyState(res.state);
+    toast('🪪 ' + (res.message || '계정을 전환했습니다'), true);
+    setTimeout(() => { AL.suppressDigest = false; }, 1200);
+    try { fetchBarracks(); } catch (err) { /* 전적 자동 갱신은 보조 */ }
+    return true;
+  }
+
+  function startAcctEdit(btn) {
+    if (!btn) return;
+    const index = Number(btn.dataset.acctEdit) || 0;
+    const { items } = acctState(AL.state || {});
+    const current = items[index] && index < ACCT_MAX ? items[index].nickname : '';
+    btn.classList.add('editing');
+    const input = document.createElement('input');
+    input.maxLength = 12;
+    input.value = current;
+    input.placeholder = '닉네임';
+    btn.innerHTML = '';
+    btn.appendChild(input);
+    input.focus();
+    input.select();
+    let done = false;
+    const finish = async (save) => {
+      if (done) return;
+      done = true;
+      const value = String(input.value || '').trim();
+      if (!save || value === current) { renderAccounts(AL.state || {}); return; }
+      if (!AL.real) { renderAccounts(AL.state || {}); return toast('앱(.exe)에서 저장할 수 있습니다', false); }
+      busy(true, '계정을 저장하는 중…');
+      const res = await call('save_account', { index, nickname: value });
+      busy(false);
+      if (!res || !res.ok) { renderAccounts(AL.state || {}); return toast((res && res.message) || '저장하지 못했습니다', false); }
+      if (res.state) applyState(res.state);
+      return toast('💾 ' + (res.message || '계정을 저장했습니다'), true);
+    };
+    input.addEventListener('keydown', (ev) => {
+      if (ev.key === 'Enter') { ev.preventDefault(); finish(true); }
+      if (ev.key === 'Escape') { ev.preventDefault(); finish(false); }
+    });
+    input.addEventListener('blur', () => { finish(true); });
+  }
+
+  /* 설정 테마 — 슬라이딩 pill 위치를 활성 버튼에 맞춘다 */
+  function syncPill(seg) {
+    try {
+      if (!seg) return;
+      const thumb = seg.querySelector('.pill-thumb');
+      const btn = seg.querySelector('button.on') || seg.querySelector('button');
+      if (!thumb || !btn) return;
+      const pad = 3;
+      thumb.style.width = (btn.offsetWidth + 'px');
+      thumb.style.transform = 'translateX(' + (btn.offsetLeft - pad) + 'px)';
+    } catch (err) { /* 위치 계산 실패는 치명적이지 않다 */ }
+  }
+  AL.syncPill = syncPill;
+
+  function bindAccounts() {
+    document.addEventListener('click', (e) => {
+      const edit = e.target.closest('[data-acct-edit]');
+      if (edit) {
+        e.preventDefault();
+        e.stopPropagation();
+        startAcctEdit(edit);
+        return;
+      }
+      const slot = e.target.closest('[data-acct]');
+      if (slot) {
+        e.preventDefault();
+        switchAccount(Number(slot.dataset.acct));
+      }
+    });
+    window.addEventListener('resize', () => syncPill($('#set-theme')));
+  }
+
   function bind() {
     if (bound) return;
     bound = true;
+    bindAccounts();
 
     /* ---------- 창 이동 (v1.3.1 · Win32 커서 추적 + JS 폴백) ----------
        frameless 창에서 pywebview JS API 는 백그라운드 스레드에서 돌기 때문에
@@ -3164,7 +3313,8 @@
         if (themeBtn) {
           const key = themeBtn.dataset.themeKey;
           applyTheme(key);
-          $$('#set-theme .theme-btn').forEach((b) => b.classList.toggle('on', b === themeBtn));
+          $$('#set-theme button').forEach((b) => b.classList.toggle('on', b === themeBtn));
+          syncPill($('#set-theme'));
           if (AL.real) {
             const r = await call('save_settings', { theme: key });
             if (r && r.state) AL.state = r.state;

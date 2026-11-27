@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import ctypes
 import datetime as dt
 import json
 import os
@@ -54,6 +55,51 @@ def test_nvapi() -> None:
     check("NVAPI 재조회 실패 = 미완료", empty["verified"] is False)
     result = nvapi_drs.apply_profile_settings([(1, 2)])
     check("NVAPI 리눅스에서는 supported=False", result.get("supported") is False)
+
+    # v2.0.4 — suddenattack.exe 로 프로필 찾기 (FindApplicationByName 0xEEE566B2)
+    check("NVAPI: FindApplicationByName 상수", nvapi_drs.NVAPI_DRS_FIND_APPLICATION_BY_NAME == 0xEEE566B2)
+    check("NVAPI: 실행 파일 이름 목록", "suddenattack.exe" in nvapi_drs.APPLICATION_NAMES)
+    app = nvapi_drs.application_struct(structs)
+    check("NVAPI: NVDRS_APPLICATION_V3 12324바이트 · 버전 3",
+          ctypes.sizeof(app) == 12324 and app.version == (3 << 16 | 12324), hex(app.version))
+
+    calls: list[tuple[str, str]] = []
+
+    def find_app_ok(session, name_ref, handle_ref, app_ref):
+        calls.append(("app", nvapi_drs.get_unicode(name_ref._obj)))
+        if nvapi_drs.get_unicode(name_ref._obj).lower() == "suddenattack.exe":
+            handle_ref._obj.value = 0x1111
+            return 0
+        return -5
+
+    def find_profile_never(session, name_ref, handle_ref):
+        calls.append(("name", nvapi_drs.get_unicode(name_ref._obj)))
+        return -5
+
+    handle, name, rc = nvapi_drs._find_profile(structs, find_profile_never, None, find_app=find_app_ok)
+    check("NVAPI: suddenattack.exe 프로필을 1순위로 찾음", bool(handle) and name == "suddenattack.exe",
+          f"{name} / {calls}")
+    check("NVAPI: 실행 파일 조회가 이름 조회보다 먼저", calls and all(c[0] == "app" for c in calls), str(calls))
+
+    calls2: list[tuple[str, str]] = []
+
+    def find_app_never(session, name_ref, handle_ref, app_ref):
+        calls2.append(("app", nvapi_drs.get_unicode(name_ref._obj)))
+        return -5
+
+    def find_profile_ok(session, name_ref, handle_ref):
+        calls2.append(("name", nvapi_drs.get_unicode(name_ref._obj)))
+        handle_ref._obj.value = 0x2222
+        return 0
+
+    handle2, name2, _rc2 = nvapi_drs._find_profile(structs, find_profile_ok, None, find_app=find_app_never)
+    check("NVAPI: 앱이 없으면 프로필 이름으로 폴백",
+          bool(handle2) and name2 in nvapi_drs.PROFILE_NAMES, str(name2))
+    handle3, name3, _rc3 = nvapi_drs._find_profile(structs, find_profile_ok, None)
+    check("NVAPI: 앱 바인딩이 없어도 동작", bool(handle3) and name3 in nvapi_drs.PROFILE_NAMES, str(name3))
+    src_nv = (ROOT / "app" / "nvapi_drs.py").read_text(encoding="utf-8")
+    check("NVAPI: 앱 우선 · 이름 폴백 구현", "find_app=find_app" in src_nv
+          and "NVAPI_DRS_FIND_APPLICATION_BY_NAME" in src_nv)
 
 
 # ======================================================================
@@ -738,9 +784,11 @@ def test_v201_scouting() -> None:
     # 오버레이 스펙 — 한 행에 솔로/파티 두 줄
     spec = native_overlay.build_spec("match", {"tab": "scout", "rows": rows, "loading": False}, 576, 389)
     texts = [p.get("text") for p in spec["prims"] if p["type"] == "text"]
-    check("오버레이: 솔로 줄 표시", any(str(t).startswith("솔로") for t in texts), str(texts[:6]))
-    check("오버레이: 파티 줄 표시", any(str(t).startswith("파티") for t in texts), str(texts[:6]))
+    check("오버레이: 솔로 열 라벨", any(str(t).strip() == "솔로" for t in texts), str(texts[:6]))
+    check("오버레이: 파티 열 라벨", any(str(t).strip() == "파티" for t in texts), str(texts[:6]))
     check("오버레이: 데미지 표시 없음", not any("딜" in str(t) for t in texts))
+    check("오버레이: 행마다 솔로/파티 접두어 없음",
+          not any(str(t).startswith(("솔로 ", "파티 ")) for t in texts), str(texts[:8]))
 
     # v140.scout_player — UI 경로도 상세 조회 없이 솔로/파티 분리
     row = v140.scout_player(fake, "ace")
@@ -874,6 +922,16 @@ def test_ui_v201() -> None:
         check("UI: 레일 메뉴 6개", nav_count == 6, str(nav_count))
         check("UI: 전술 도구 단일 메뉴 없음",
               page.eval_on_selector_all('.nav-item[data-screen="utils"]', "els=>els.length") == 0)
+
+        # v2.0.4 — 내 계정 3칸 (홈)
+        acc_slots = page.eval_on_selector_all('#home-accounts .acct-slot', "els=>els.length")
+        acc_names = page.eval_on_selector_all('#home-accounts .acct-slot .acct-name',
+                                              "els=>els.map(e=>e.textContent.trim())")
+        acc_w = page.evaluate("()=>Math.round(document.getElementById('home-accounts').getBoundingClientRect().width)")
+        check("UI: 홈 계정 슬롯 3칸", acc_slots == 3, str(acc_slots))
+        check("UI: 계정 2개 + 빈 칸", acc_names[:2] == ["스나이퍼01", "시티캣"] and acc_names[2] == "계정 추가",
+              str(acc_names))
+        check("UI: 홈 계정 줄이 히어로 안에 들어감", acc_w <= 560, str(acc_w))
         for name, want_screen, want_tab in (("barracks", "s-barracks", None), ("maps", "s-maps", None),
                                             ("leaderboard", "s-leaderboard", None),
                                             ("scout", "s-utils", "scout"), ("duo", "s-utils", "duo"),
@@ -883,23 +941,65 @@ def test_ui_v201() -> None:
             screen = page.evaluate("()=>{const s=document.querySelector('.screen:not([hidden])');return s?s.id:'NONE'}")
             check(f"UI: {name} 클릭 → {want_screen}", screen == want_screen, screen)
             if want_tab:
-                tab = page.evaluate("()=>{const b=document.querySelector('#util-tabs button.on');return b?b.dataset.utilTab:'-'}")
-                check(f"UI: {name} 탭 활성({want_tab})", tab == want_tab, tab)
                 active = page.evaluate(f"()=>document.querySelector('.nav-item[data-screen=\"{name}\"]').classList.contains('on')")
                 check(f"UI: {name} 메뉴 active", active is True)
                 pane = page.evaluate(f"()=>!document.getElementById('util-pane-{want_tab}').hidden")
                 check(f"UI: {name} 패널 표시", pane is True)
-        page.screenshot(path=str(SHOTS / "v201-utils-scout.png"))
+        check("UI: 전술 도구 상단 탭 줄 없음(레일과 중복 제거)",
+              page.eval_on_selector_all("#util-tabs", "els=>els.length") == 0)
+        page.screenshot(path=str(SHOTS / "v204-utils-scout.png"))
 
+        # v2.0.4 — 병영수첩 상단 계정 3칸 · 원클릭 전환
+        page.click('.nav-item[data-screen="barracks"]')
+        page.wait_for_timeout(420)
+        br_slots = page.eval_on_selector_all("#br-accounts .acct-slot", "els=>els.length")
+        check("UI: 병영수첩 계정 슬롯 3칸", br_slots == 3, str(br_slots))
+        page.click('#br-accounts .acct-slot[data-acct="1"]')
+        page.wait_for_timeout(600)
+        acc_calls = page.evaluate("()=>window.__CALLS.map(c=>c[0])")
+        check("UI: 계정 클릭 → switch_account", "switch_account" in acc_calls, str(acc_calls[-3:]))
+        # 오늘의 요약 팝업(하루 1회)은 화면 확인에 방해만 된다 — 닫고 찍는다.
+        page.evaluate("()=>{const m=document.getElementById('digest-mask'); if(m) m.classList.remove('show');}")
+        page.wait_for_timeout(250)
+        page.screenshot(path=str(SHOTS / "v204-accounts.png"))
         page.click("#rail-home")
         page.wait_for_timeout(320)
         home = page.evaluate("()=>{const s=document.querySelector('.screen:not([hidden])');return s?s.id:'NONE'}")
         check("UI: 홈 버튼 → 홈 화면", home == "s-home", home)
 
+        # v2.0.4 — 홈 버튼 호버/클릭 피드백 (레일 메뉴와 동일)
+        rail_tr = page.evaluate("()=>getComputedStyle(document.getElementById('rail-home')).transitionProperty")
+        page.hover("#rail-home")
+        page.wait_for_timeout(240)
+        rail_bg = page.evaluate("()=>getComputedStyle(document.getElementById('rail-home')).backgroundColor")
+        check("UI: 홈 버튼 전환 애니메이션", "transform" in rail_tr and "background" in rail_tr, rail_tr)
+        check("UI: 홈 버튼 호버 배경 표시", rail_bg not in ("rgba(0, 0, 0, 0)", "transparent"), rail_bg)
+
         page.click("#settings-btn")
         page.wait_for_timeout(400)
         check("UI: 설정 버튼 → 설정 모달",
               page.evaluate("()=>document.getElementById('settings-mask').classList.contains('show')") is True)
+        # v2.0.4 — 설정 테마 = 슬라이딩 pill
+        pill = page.evaluate("()=>{const seg=document.getElementById('set-theme');if(!seg) return {};"
+                            "const on=seg.querySelector('button.on');return {cls:seg.className,"
+                            "n:seg.querySelectorAll('button').length,thumb:!!seg.querySelector('.pill-thumb'),"
+                            "on:on&&on.dataset?on.dataset.themeKey:null};}")
+        check("UI: 설정 테마가 슬라이딩 pill", "pill-seg" in str(pill.get("cls")) and pill.get("n") == 3
+              and pill.get("thumb") is True, str(pill))
+        page.click('#set-theme [data-theme-key="ice"]')
+        page.wait_for_timeout(650)
+        moved = page.evaluate("()=>{const seg=document.getElementById('set-theme');"
+                              "const t=seg.querySelector('.pill-thumb');const on=seg.querySelector('button.on');"
+                              "return {x:t.style.transform, w:t.style.width,"
+                              "theme:document.documentElement.getAttribute('data-theme'),"
+                              "on:on&&on.dataset?on.dataset.themeKey:null};}")
+        check("UI: 테마 클릭 → pill 이동 · 즉시 적용",
+              moved.get("theme") == "ice" and moved.get("on") == "ice"
+              and moved.get("x") not in ("", "translateX(0px)"), str(moved))
+        page.screenshot(path=str(SHOTS / "v204-settings-theme.png"))
+        page.click('#set-theme [data-theme-key="coral"]')
+        page.wait_for_timeout(400)
+
         check("UI: 설정 닉네임 칸 보임",
               page.evaluate("()=>{const e=document.getElementById('set-nick');const r=e.getBoundingClientRect();return r.width>0&&r.height>0}") is True)
         page.fill("#set-nick", "휴가중.")
@@ -1274,8 +1374,12 @@ def test_v203_scout_overlay() -> None:
     check("스카우팅: 하단 그룹 제목", any(t.startswith("하단 5명") for t in texts), str(texts[:6]))
     check("스카우팅: 이름 10명", sum(1 for t in texts if t.startswith("플레이어")) == 10,
           str(sum(1 for t in texts if t.startswith("플레이어"))))
-    check("스카우팅: 솔로 10줄", sum(1 for t in texts if t.startswith("솔로")) == 10)
-    check("스카우팅: 파티 10줄", sum(1 for t in texts if t.startswith("파티")) == 10)
+    check("스카우팅: 솔로·파티 열 라벨",
+          sum(1 for t in texts if t.strip() in ("솔로", "파티")) == 4, str(texts[:6]))
+    check("스카우팅: 스탯 20칸(10명 × 2열)",
+          sum(1 for t in texts if "K/D" in t) == 20, str(sum(1 for t in texts if "K/D" in t)))
+    check("스카우팅: 1행 3열 · 접두어 없음",
+          not any(t.startswith(("솔로 ", "파티 ")) for t in texts), str(texts[:8]))
     check("스카우팅: 맵 승률·딜 없음", not any(("맵 승률" in t or "딜" in t) for t in texts), str(texts))
     bottom = max(p["y"] + p["h"] for p in spec["prims"] if p["type"] in ("rect", "text"))
     check("스카우팅: 창 안에 들어감", bottom <= 470, str(bottom))
@@ -1293,10 +1397,13 @@ def test_v203_scout_overlay() -> None:
                                        576, 389)
     legacy_texts = [str(p.get("text")) for p in legacy["prims"] if p["type"] == "text"]
     check("스카우팅: 예전 5명 페이로드 호환",
-          any(t.startswith("솔로") for t in legacy_texts) and any(t.startswith("파티") for t in legacy_texts))
-    check("스카우팅: 10인 창은 5명 창보다 큼",
-          __import__("app.overlay", fromlist=["x"]).scout_overlay_rect((0, 0, 1920, 1080))["h"] > 389,
-          "")
+          any(t.strip() == "솔로" for t in legacy_texts) and any(t.strip() == "파티" for t in legacy_texts))
+    rect = __import__("app.overlay", fromlist=["x"]).scout_overlay_rect((0, 0, 1920, 1080))
+    check("스카우팅: 콤팩트 폭(540~580) · 낮은 높이",
+          540 <= rect["w"] <= 580 and rect["h"] <= 330, str(rect))
+    check("스카우팅: 글씨 크기(이름 12.5 · 스탯 11.5)",
+          any(p.get("size") == 12.5 for p in spec["prims"] if p["type"] == "text")
+          and any(p.get("size") == 11.5 for p in spec["prims"] if p["type"] == "text"))
 
 
 def test_v203_scout_speed() -> None:

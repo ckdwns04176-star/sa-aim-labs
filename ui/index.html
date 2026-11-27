@@ -2530,6 +2530,67 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
 .goals{height:auto;flex:0 0 auto}
 
 .v2-grass-foot .ghost svg,.v2-recent-foot .ghost svg,.hm-hd .ghost svg{fill:none;stroke:currentColor;stroke-width:1.8}
+
+/* ==================================================================
+   v2.0.4 — 내 계정 3칸 · 설정 테마 슬라이딩 pill · 홈 버튼 피드백
+   ================================================================== */
+/* ---- 1. 홈 버튼(레일 로고) 호버 · 클릭 피드백 ---- */
+#rail-home{position:relative;border-radius:9px;cursor:pointer;
+  transition:transform .16s ease,color .16s ease,background .16s ease,box-shadow .16s ease}
+#rail-home:hover{color:var(--txt);background:rgba(255,255,255,.055);transform:scale(1.07);
+  box-shadow:0 0 0 1px rgba(255,255,255,.06)}
+#rail-home:active{transform:scale(.92)}
+#rail-home.on{background:var(--ac10);color:var(--ac);box-shadow:0 0 0 1px var(--ac22)}
+#rail-home:focus-visible{outline:2px solid var(--ac40);outline-offset:2px}
+#rail-home svg{transition:transform .18s ease}
+#rail-home:hover svg{transform:rotate(-6deg)}
+
+/* ---- 2. 내 계정 3칸 (홈 · 병영수첩) ---- */
+.acct-bar{display:flex;align-items:center;gap:6px;min-width:0;flex-wrap:nowrap}
+.acct-bar .acct-lb{display:flex;align-items:center;gap:5px;font-size:9px;font-weight:800;
+  letter-spacing:.05em;color:var(--txt2);white-space:nowrap;margin-right:2px}
+.acct-slot{position:relative;display:flex;align-items:center;gap:6px;height:30px;padding:0 8px;
+  border-radius:8px;border:1px solid var(--line);background:rgba(255,255,255,.03);color:var(--txt);
+  font-size:10.5px;font-weight:700;cursor:pointer;transition:background .16s,border-color .16s,
+  transform .12s,box-shadow .16s}
+.acct-slot b{width:15px;height:15px;border-radius:4px;display:grid;place-items:center;
+  font-family:var(--num);font-size:9px;font-weight:800;color:var(--txt2);background:rgba(255,255,255,.07)}
+.acct-slot:hover{border-color:var(--line2);background:rgba(255,255,255,.065);transform:translateY(-1px)}
+.acct-slot:active{transform:translateY(0) scale(.98)}
+.acct-slot.on{border-color:var(--ac40);background:var(--ac10);box-shadow:inset 0 0 0 1px var(--ac22)}
+.acct-slot.on b{color:#13161F;background:var(--ac)}
+.acct-slot.empty{color:#6B7C93;border-style:dashed;font-weight:600}
+.acct-slot .acct-name{max-width:86px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.acct-slot .acct-edit{display:grid;place-items:center;width:17px;height:17px;border-radius:4px;
+  color:#7C8BA3;font-size:10px;opacity:0;transition:opacity .14s,background .14s}
+.acct-slot:hover .acct-edit,.acct-slot.on .acct-edit{opacity:.85}
+.acct-slot .acct-edit:hover{background:rgba(255,255,255,.12);color:var(--txt)}
+.acct-slot input{width:84px;height:20px;border-radius:5px;border:1px solid var(--ac40);
+  background:#0B0E14;color:var(--txt);font-size:10.5px;font-weight:700;padding:0 5px;outline:none}
+.acct-bar .acct-hint{font-size:9px;color:#66788F;white-space:nowrap}
+.acct-bar.hm-acct{margin-top:7px}
+.acct-bar.br{margin:0 0 10px;padding:9px 12px;border-radius:12px;border:1px solid var(--line);
+  background:linear-gradient(180deg,rgba(255,255,255,.04),rgba(255,255,255,.012))}
+.acct-bar.br .acct-slot{height:38px;font-size:12.5px;padding:0 12px}
+.acct-bar.br .acct-slot b{width:18px;height:18px;font-size:10px}
+.acct-bar.br .acct-slot .acct-name{max-width:128px}
+.acct-bar.br .acct-slot .acct-edit{width:19px;height:19px;font-size:11px}
+.acct-bar.br .acct-lb{font-size:10px}
+
+/* ---- 3. 설정 테마 선택 — 슬라이딩 pill ---- */
+.pill-seg{position:relative;display:flex;gap:2px;padding:3px;border-radius:9px;
+  border:1px solid var(--line);background:rgba(255,255,255,.03)}
+.pill-seg .pill-thumb{position:absolute;top:3px;left:0;height:calc(100% - 6px);border-radius:7px;
+  background:linear-gradient(180deg,rgba(255,255,255,.16),var(--ac22));border:1px solid var(--ac40);
+  box-shadow:0 2px 8px rgba(0,0,0,.35);pointer-events:none;
+  transition:transform .30s cubic-bezier(.34,1.15,.4,1),width .30s cubic-bezier(.34,1.15,.4,1)}
+.pill-seg button{position:relative;z-index:1;flex:1;height:29px;border:0;background:none;
+  color:var(--txt2);font-size:10.5px;font-weight:700;cursor:pointer;
+  display:flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap;
+  transition:color .18s ease}
+.pill-seg button:hover{color:var(--txt)}
+.pill-seg button.on{color:var(--txt)}
+.pill-seg button i{width:10px;height:10px;border-radius:50%;display:block;flex:0 0 10px}
 </style>
 </head>
 <body>
@@ -2717,6 +2778,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
                   <span id="home-sub-updated">전적 최신화 —</span>
                 </div>
                 <div class="hm-deltas" id="home-deltas"></div>
+                <div class="acct-bar hm-acct" id="home-accounts"></div>
               </div>
             </div>
 
@@ -2853,6 +2915,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
           </div>
         </div>
 
+        <div class="acct-bar br" id="br-accounts"></div>
         <div class="br-search-result" id="br-search-result" hidden></div>
         <div class="br-peek-bar" id="br-peek-bar" hidden>
           <span class="pk-lb">다른 유저 병영수첩</span>
@@ -3000,12 +3063,6 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
           <div class="head-right">
             <span class="chip" id="util-sum">적용 <b>0</b> / 3</span>
           </div>
-        </div>
-
-        <div class="mtabs" id="util-tabs" style="flex:0 0 auto;max-width:420px">
-          <button data-util-tab="scout" class="on">오버레이 · 스카우팅</button>
-          <button data-util-tab="duo">듀오 · 맵 밴픽</button>
-          <button data-util-tab="system">시스템 최적화</button>
         </div>
 
         <!-- ===== 오버레이 · 스카우팅 ===== -->
@@ -4407,25 +4464,18 @@ function showScreen(name){
   if(name==='barracks'){ /* bridge 가 병영수첩을 다시 그린다 */ }
 }
 $$('.nav-item').forEach(b=>b.addEventListener('click',()=>{ showScreen(b.dataset.screen); if(window.AL&&window.AL.onScreen) window.AL.onScreen(b.dataset.screen); }));
-/* v1.4.0 — 전술 도구 서브탭 (전술 분석 / 시스템 최적화) */
-(function(){
-  const tabs=$('#util-tabs'); if(!tabs) return;
-  tabs.addEventListener('click',(e)=>{
-    const b=e.target.closest('[data-util-tab]'); if(!b) return;
-    const key=b.dataset.utilTab;
-    tabs.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
-    ['scout','duo','system'].forEach(k=>{
-      const pane=$('#util-pane-'+k); if(pane) pane.hidden = k!==key;
-    });
-    /* 레일 메뉴의 active 표시도 탭에 맞춘다 */
-    $$('.nav-item').forEach(n=>{ if(n.dataset.util) n.classList.toggle('on', n.dataset.util===key); });
-    if(key==='system' && window.AL && AL.refreshUtils) AL.refreshUtils();
-    if(key==='scout' && window.AL && AL.onScreen) AL.onScreen('utils');
-  });
-})();
+/* v2.0.4 — 전술 도구 상단 탭 줄은 없앴다. 왼쪽 레일 메뉴 3개가 곧 탭이다. */
 window.showUtilTab=function(key){
-  const b=document.querySelector('#util-tabs [data-util-tab="'+key+'"]');
-  if(b) b.click();
+  const k = ['scout','duo','system'].includes(String(key)) ? String(key) : 'scout';
+  ['scout','duo','system'].forEach(x=>{
+    const pane=document.getElementById('util-pane-'+x); if(pane) pane.hidden = x!==k;
+  });
+  document.querySelectorAll('.nav-item').forEach(n=>{
+    if(n.dataset.util) n.classList.toggle('on', n.dataset.util===k);
+  });
+  if(k==='system' && window.AL && AL.refreshUtils) AL.refreshUtils();
+  if(k==='scout' && window.AL && AL.onScreen) AL.onScreen('utils');
+  return k;
 };
 /* v2.0.0 — 게임/무기 토글은 없앴다 (에임 연습 제거) */
 

@@ -345,26 +345,25 @@ def _mapban_spec(payload: dict[str, Any], width: int, height: int) -> dict[str, 
     return _spec(width, height, prims)
 
 
-def _scout_mode_line(label: str, stats: dict[str, Any] | None) -> str:
-    """`솔로 그마 III · 52% · K/D 58%` — 오버레이 한 줄.
+def _scout_stat_line(stats: dict[str, Any] | None) -> str:
+    """`그마 II · 52% · K/D 58%` — 한 모드의 스탯 한 줄 (접두어 없음).
 
-    맵별 승률은 게임 카운트다운에서는 알 수 없고 조회도 느려서 표시하지 않는다.
-    티어 · 승률 · K/D 만 남긴다.
+    표본이 없으면 `언랭크 · -` / `그마 II · -` 로 짧게 남긴다.  맵별 승률은
+    카운트다운에서 알 수 없고 조회도 느려서 쓰지 않는다.
     """
     stats = stats or {}
-    bits = [label]
     tier = str(stats.get("short") or "").strip()
-    if tier:
-        bits.append("언랭크" if tier in ("언랭", "언랭크") else tier)
+    if tier in ("", "언랭", "언랭크"):
+        tier = "언랭크"
     games = int(stats.get("games") or 0)
     if not games:
-        bits.append("표본 없음")
-    else:
-        win, kd = stats.get("win"), stats.get("kd")
-        if win is not None:
-            bits.append(f"{round(float(win))}%")
-        if kd is not None:
-            bits.append(f"K/D {round(float(kd))}%")
+        return f"{tier} · -"
+    bits = [tier]
+    win, kd = stats.get("win"), stats.get("kd")
+    if win is not None:
+        bits.append(f"{round(float(win))}%")
+    if kd is not None:
+        bits.append(f"K/D {round(float(kd))}%")
     return " · ".join(bits)
 
 
@@ -395,63 +394,56 @@ def scout_groups(payload: dict[str, Any]) -> list[tuple[str, list[dict[str, Any]
 
 
 def _scout_spec(payload: dict[str, Any], width: int, height: int) -> dict[str, Any]:
-    """우하단 — 상단 5명 / 하단 5명, 각자 솔로(티어·승률·K/D) / 파티(티어·승률·K/D).
+    """우하단 — **1행 3열**: 닉네임 | 솔로 | 파티 (헤더 줄 없음).
 
-    맵 승률은 넣지 않는다(사용자 요청).  10인 카운트다운에서 4~5초 안에 읽히도록
-    한 행은 이름 1줄 + 솔로 1줄 + 파티 1줄로 압축한다.
+    - 맵 이름·타이틀·서브타이틀은 넣지 않는다(사용자 요청).
+    - 그룹 줄(`상단 5명` / `하단 5명`) 오른쪽에 작은 `솔로` `파티` 열 라벨만 둔다.
+    - 행마다 "솔로/파티" 접두어를 붙이지 않아 10명이 10줄에 들어간다.
     """
     groups = scout_groups(payload)
     prims = [rect(0, 0, width, height, COLORS["panel"], alpha=0.9, radius=10,
                   stroke=COLORS["line"], stroke_alpha=0.9)]
-    head_h = 34.0
-    title = str(payload.get("map") or "10인 스카우팅")[:24]
-    prims.append(text(14, 5, width - 28, 19, title, size=13, color="text", bold=True))
-    if payload.get("loading"):
-        state = "분석 중…"
-    else:
-        total = sum(len(rows) for _, rows in groups)
-        elapsed = payload.get("elapsed")
-        state = f"상단 {len(groups[0][1])}명 · 하단 {len(groups[-1][1]) if len(groups) > 1 else 0}명"
-        if total:
-            state += f" · 솔로 / 파티 · {total}명"
-        if elapsed:
-            state += f" · {round(float(elapsed) * 1000)}ms"
-    prims.append(text(14, 21, width - 28, 12, state, size=9, color="muted"))
-    prims.append(line(12, head_h - 1, width - 12, head_h - 1, "line", 0.8))
-
-    group_head = 15.0
-    slots = sum(max(1, len(rows)) for _, rows in groups)
     pad = 6.0
-    usable = max(60.0, height - head_h - pad - group_head * len(groups))
-    row_h = max(18.0, usable / max(1, slots))
-    top = head_h
+    group_head = 17.0
+    slots = sum(max(1, len(rows)) for _, rows in groups)
+    usable = max(40.0, height - pad * 2 - group_head * len(groups))
+    row_h = max(16.0, usable / max(1, slots))
+
+    name_x = 14.0
+    name_w = width * 0.32
+    solo_x = width * 0.335
+    solo_w = width * 0.325
+    party_x = width * 0.665
+    party_w = width - party_x - 10
+
+    top = pad
     for group_index, (label, rows) in enumerate(groups):
         tone = "ice" if group_index == 0 else "coral"
-        prims.append(text(14, top, width - 28, group_head, label, size=9.5, color=tone, bold=True))
+        head = label
+        if payload.get("loading") and group_index == 0:
+            head = f"{label} · 분석 중…"
+        prims.append(text(name_x - 2, top, name_w, group_head, head, size=11.0, color=tone, bold=True))
+        prims.append(text(solo_x, top, solo_w, group_head, "솔로", size=10.0, color="muted", bold=True))
+        prims.append(text(party_x, top, party_w, group_head, "파티", size=10.0, color="muted", bold=True))
         top += group_head
         for index in range(max(1, len(rows))):
             row = rows[index] if index < len(rows) else None
-            prims.append(rect(8, top + 0.5, width - 16, row_h - 2.0, COLORS["panel2"],
+            prims.append(rect(6, top + 0.5, width - 12, row_h - 2.0, COLORS["panel2"],
                               alpha=0.65 if row else 0.22, radius=5))
             if row:
-                name = str(row.get("name") or "")[:14]
+                name = str(row.get("name") or "")[:12]
                 error = str(row.get("error") or "")
-                prims.append(text(16, top, width * 0.31, row_h - 2, name, size=11,
+                prims.append(text(name_x, top, name_w - 4, row_h - 2, name, size=12.5,
                                   color="text", bold=True))
                 if error:
-                    prims.append(text(width * 0.31, top, width * 0.69 - 12, row_h - 2, error,
-                                      size=9.0, color="gold", align="right"))
+                    prims.append(text(solo_x, top, party_w, row_h - 2, error, size=10.5, color="gold"))
                 else:
-                    solo_line = _scout_mode_line("솔로", row.get("solo_stats"))
-                    party_line = _scout_mode_line("파티", row.get("party_stats"))
-                    text_left = width * 0.31
-                    text_w = width - text_left - 16
-                    prims.append(text(text_left, top + 0.5, text_w, (row_h - 2) * 0.5, solo_line,
-                                      size=9.5, color="ice", align="right"))
-                    prims.append(text(text_left, top + (row_h - 2) * 0.5, text_w, (row_h - 2) * 0.5,
-                                      party_line, size=9.5, color="gold", align="right"))
+                    prims.append(text(solo_x, top, solo_w, row_h - 2,
+                                      _scout_stat_line(row.get("solo_stats")), size=11.5, color="ice"))
+                    prims.append(text(party_x, top, party_w, row_h - 2,
+                                      _scout_stat_line(row.get("party_stats")), size=11.5, color="gold"))
             else:
-                prims.append(text(16, top, width - 32, row_h - 2, "—", size=10, color="muted"))
+                prims.append(text(name_x, top, width - 28, row_h - 2, "—", size=11.5, color="muted"))
             top += row_h
     return _spec(width, height, prims)
 
