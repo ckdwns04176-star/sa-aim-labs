@@ -313,7 +313,12 @@ def test_ocr() -> None:
     rows = party_lobby.validate_names(client, ["시티캣", "시티캐트", "????"], ["시티캣", "상대에이스"])
     check("OCR: 정확히 읽은 이름은 ok", rows[0]["status"] == "ok" and rows[0]["ouid"], str(rows[0]))
     check("OCR: 애매한 이름은 확인 필요", rows[1]["status"] == "needs_check", str(rows[1]))
-    check("OCR: 애매한 이름은 API 조회 스킵", "시티캐트" not in client.lookups, str(client.lookups))
+    # v2.0.2 — OCR 원문을 먼저 한 번 조회하는 쪽으로 바뀌었다(오인식 이름이 실제로
+    # 존재할 수 있어서). 대신 엉뚱한 다른 이름으로 보정하지는 않는다.
+    check("OCR: 애매한 이름도 원문 그대로 1회 조회",
+          client.lookups.count("시티캐트") == 1, str(client.lookups))
+    check("OCR: 애매할 때 다른 이름으로 후보 조회 안 함",
+          all(name in ("시티캣", "시티캐트", "????") for name in client.lookups), str(client.lookups))
     check("OCR: 확신 없는 보정 안 함", rows[1]["name"] == "시티캐트" and rows[1]["ouid"] is None)
     check("OCR: 못 읽은 칸은 확인 필요", rows[2]["status"] == "needs_check")
     corrected = party_lobby.validate_names(FakeNexon(), ["상대에이스."], ["상대에이스"])
@@ -1021,11 +1026,466 @@ def test_code_clean() -> None:
         check(f"ui: {word} 문자열 없음", word not in ui_src)
 
 
+# ======================================================================
+# v2.0.3 — GDI+ 인자 순서 / DPI·고속 OCR / 넓은 대기실 띠 / 10인 상·하단 스카우팅
+# ======================================================================
+def test_v203_gdiplus() -> None:
+    import types as _types
+
+    from app import native_overlay
+
+    class FakeGp:
+        """GDI+ 호출을 기록만 하는 대역 — 리눅스에서도 인자 순서를 검사한다."""
+
+        def __init__(self, *, hdc_rc: int = 0, family_rc: int = 0, path_rc: int = 0) -> None:
+            self.calls: dict[str, list[tuple]] = {}
+            self.hdc_rc, self.family_rc, self.path_rc = hdc_rc, family_rc, path_rc
+            self.text_aa: int | None = None
+
+        def __getattr__(self, name: str):
+            def call(*args):
+                self.calls.setdefault(name, []).append(args)
+                if name == "create_from_hdc":
+                    if self.hdc_rc == 0:
+                        args[1]._obj.value = 0x1234
+                    return self.hdc_rc
+                if name == "create_family":
+                    if self.family_rc == 0:
+                        args[2]._obj.value = 0x5678
+                    return self.family_rc
+                if name == "create_path":
+                    if self.path_rc == 0:
+                        args[1]._obj.value = 0x9ABC
+                    return self.path_rc
+                if name == "set_text_aa":
+                    self.text_aa = int(args[1])
+                if name in ("create_solid", "create_pen", "create_font", "create_format"):
+                    args[-1]._obj.value = 0x77
+                return 0
+
+            return call
+
+        def color(self, value, alpha: float = 1.0) -> int:
+            return 0xFF101010
+
+    gp = FakeGp()
+    bitmap = _types.SimpleNamespace(hdc=0xDEAD, width=200, height=100)
+    prims = [native_overlay.rect(0, 0, 120, 22, "panel", radius=6, stroke="line"),
+             native_overlay.text(4, 2, 110, 16, "휴가중.", size=11, bold=True),
+             native_overlay.line(2, 20, 118, 20, "ice", 0.8)]
+    ok = native_overlay._render_gdiplus(gp, bitmap, prims)
+    check("GDI+: 그리기 성공(폴백 아님)", ok is True)
+    hdc_args = gp.calls.get("create_from_hdc", [()])[0]
+    check("GDI+: GdipCreateFromHDC(hdc, &graphics) 순서",
+          len(hdc_args) == 2 and hdc_args[0] == 0xDEAD and hasattr(hdc_args[1], "_obj"),
+          str(hdc_args))
+    fam_args = gp.calls.get("create_family", [()])[0]
+    check("GDI+: create_family(이름, None, &family) 순서",
+          len(fam_args) == 3 and fam_args[0] == native_overlay.FONT and fam_args[1] is None
+          and hasattr(fam_args[2], "_obj"), str(fam_args))
+    path_args = gp.calls.get("create_path", [()])[0]
+    check("GDI+: create_path(0, &path) 순서",
+          len(path_args) == 2 and path_args[0] == 0 and hasattr(path_args[1], "_obj"),
+          str(path_args))
+    check("GDI+: 텍스트 렌더링 힌트 4(AntiAlias)", gp.text_aa == 4, str(gp.text_aa))
+    check("GDI+: 둥근 사각형은 경로로 채움",
+          bool(gp.calls.get("fill_path")) and bool(gp.calls.get("draw_path")))
+    check("GDI+: 글꼴·브러시·포맷 해제",
+          bool(gp.calls.get("delete_brush")) and bool(gp.calls.get("delete_font"))
+          and bool(gp.calls.get("delete_format")))
+    check("GDI+: 줄 그리기 포함", bool(gp.calls.get("draw_line")))
+
+    broken = FakeGp(hdc_rc=1)
+    failed = native_overlay._render_gdiplus(broken, bitmap, prims)
+    check("GDI+: HDC 그래픽스 실패 시 GDI 폴백",
+          failed is False and not broken.calls.get("create_family"), str(list(broken.calls)))
+
+    src = (ROOT / "app" / "native_overlay.py").read_text(encoding="utf-8")
+    check("GDI+: ClearTypeGridFit(3) 제거", "set_text_aa(graphics, 3)" not in src)
+    check("GDI+: 뒤집힌 인자 순서 제거",
+          "create_from_hdc(ctypes.byref(graphics), bitmap.hdc)" not in src
+          and "create_family(ctypes.byref(family)" not in src
+          and "create_path(ctypes.byref(path), 0)" not in src)
+    check("레이어드 창: UpdateLayeredWindow hdcDst 는 NULL",
+          "ctypes.c_void_p(self.hwnd), None, ctypes.byref(dst)" in src)
+    check("레이어드 창: WM_CLOSE 로 정상 종료", "WM_CLOSE, 0, 0" in src)
+    check("레이어드 창: 클래스 ATOM 재사용",
+          "_class_atoms: dict[str, int]" in src and "_class_atoms[class_name] = atom" in src)
+    check("레이어드 창: 진단 표식", native_overlay.OVERLAY_DIAG_BUILD in native_overlay.NativeOverlayWindow("toast", "t").diag())
+
+
+def test_v203_capture() -> None:
+    from app import capture
+
+    for token in ("SetProcessDpiAwarenessContext", "SetProcessDpiAwareness", "SetProcessDPIAware"):
+        check(f"캡처: DPI 인식({token})", token in capture._CS_HELPER)
+    check("캡처: DPI 를 스크립트 맨 앞에서 올림", "[SaDpi]::MakeAware()" in capture._OCR_HEAD)
+    check("캡처: 지문 스크립트도 DPI 인식", "[SaDpi]::MakeAware()" in capture._SIGNATURE_SCRIPT)
+    check("캡처: LockBits 고속 전처리",
+          "LockBits" in capture._CS_HELPER and "Marshal.Copy" in capture._CS_HELPER)
+    check("캡처: NearestNeighbor 확대", "InterpolationMode.NearestNeighbor" in capture._CS_HELPER)
+    check("캡처: Bicubic 확대 제거",
+          "HighQualityBicubic" not in capture._OCR_HEAD + capture._SLOTS_SCRIPT + capture._REGION_SCRIPT)
+    check("캡처: SetPixel 2중 루프 제거",
+          "SetPixel" not in capture._SLOTS_SCRIPT and ".GetPixel($xx" not in capture._SLOTS_SCRIPT)
+    check("캡처: 1회 캡처 후 메모리 크롭",
+          "Capture-Union" in capture._SLOTS_SCRIPT and "[SaFast]::Crop" in capture._SLOTS_SCRIPT)
+    check("캡처: 흰색·금색 닉네임 마스크",
+          "[SaFast]::Mask($shot, 1, 175)" in capture._SLOTS_SCRIPT
+          and "bool bright = lum >= brightCut" in capture._CS_HELPER)
+    check("캡처: 줄 좌표 OCR (BoundingRect)",
+          "Add-OcrLineBoxes" in capture._OCR_HEAD and "BoundingRect" in capture._OCR_HEAD
+          and "Add-OcrLineBoxes" in capture._REGION_SCRIPT)
+
+    script = capture._fill(capture._SLOTS_SCRIPT, RECTS="@({x=1;y=2;w=3;h=4})", DEBUG_DIR_B64="")
+    check("캡처: 슬롯 스크립트 치환", "__CS__" not in script and "__RECTS__" not in script
+          and "public static class SaFast" in script, "")
+    region = capture._fill(capture._REGION_SCRIPT, RECTS="@({x=1;y=2;w=3;h=4})", SCALE="2",
+                           DEBUG_DIR_B64="")
+    check("캡처: 영역 스크립트 치환", "__SCALE__" not in region and "$scale = 2" in region)
+    empty = capture.ocr_region((0, 0, 0, 0))
+    check("캡처: 빈 영역 거부", empty.get("ok") is False and empty.get("lines") == [])
+    linux = capture.ocr_region((0, 0, 100, 80))
+    check("캡처: 리눅스에서는 supported=False", linux.get("supported") is False, str(linux))
+    check("캡처: 영역 OCR 도 리눅스에서 안전", capture.ocr_region((0, 0, 100, 80)).get("lines") == [])
+
+
+def _synthetic_team_lines(width: int, height: int, *, inset: float = 0.0,
+                          labels: bool = True) -> list[dict]:
+    """10인 카운트다운 캡처 안의 OCR 줄 흉내 — inset 이 크면 창이 작아진 경우."""
+    lines: list[dict] = []
+    if labels:
+        lines.append({"text": "Red Team", "x": int(width * 0.12), "y": int(height * 0.10),
+                      "w": 90, "h": 18})
+        lines.append({"text": "Blue Team", "x": int(width * 0.62), "y": int(height * 0.60),
+                      "w": 90, "h": 18})
+        lines.append({"text": "9", "x": int(width * 0.49), "y": int(height * 0.44),
+                      "w": 14, "h": 34})
+        lines.append({"text": "000 003 000", "x": int(width * 0.35), "y": int(height * 0.02),
+                      "w": 160, "h": 16})
+    span = 1.0 - inset * 2
+    for name, base in (("상단", 0.26), ("하단", 0.70)):
+        for index in range(5):
+            lines.append({
+                "text": f"{name}{index + 1}님",
+                "x": int(width * (inset + span * (0.10 + 0.18 * index))),
+                "y": int(height * (base - (0.0 if base < 0.5 else 0.0))),
+                "w": max(30, int(width * 0.10)),
+                "h": max(12, int(height * 0.026)),
+            })
+    return lines
+
+
+def test_v203_countdown_split() -> None:
+    from app import overlay, party_lobby
+
+    cases = ((1114, 778, "1920×1080"), (1485, 1037, "2560×1440"), (960, 680, "1280×720"))
+    for width, height, label in cases:
+        split = party_lobby.split_top_bottom(_synthetic_team_lines(width, height))
+        check(f"10인 분리({label}): 상단 5명",
+              [r["name"] for r in split["top"]] == [f"상단{i}님" for i in range(1, 6)],
+              str([r["name"] for r in split["top"]]))
+        check(f"10인 분리({label}): 하단 5명",
+              [r["name"] for r in split["bottom"]] == [f"하단{i}님" for i in range(1, 6)],
+              str([r["name"] for r in split["bottom"]]))
+        check(f"10인 분리({label}): 10명", split["count"] == 10, str(split["count"]))
+
+    # 해상도가 높아 창이 화면 대비 절반으로 작아진 경우 — 비율 슬롯이면 여기서 빗나간다.
+    small = party_lobby.split_top_bottom(_synthetic_team_lines(1485, 1037, inset=0.25))
+    check("10인 분리(작은 창): 상단 5명", [r["name"] for r in small["top"]] == [f"상단{i}님" for i in range(1, 6)],
+          str([r["name"] for r in small["top"]]))
+    check("10인 분리(작은 창): 하단 5명", [r["name"] for r in small["bottom"]] == [f"하단{i}님" for i in range(1, 6)],
+          str([r["name"] for r in small["bottom"]]))
+    check("10인 분리: 팀 라벨·숫자는 닉네임이 아님",
+          all("Team" not in r["name"] and not r["name"].isdigit()
+              for r in small["top"] + small["bottom"]),
+          str([r["name"] for r in small["top"] + small["bottom"]]))
+
+    empty = party_lobby.split_top_bottom([])
+    check("10인 분리: 빈 화면", empty["count"] == 0 and empty["top"] == [] and empty["bottom"] == [])
+
+    # 캡처 영역은 항상 게임 창 정중앙, 해상도에 비례(최소 폭·높이 보장)
+    full = overlay.countdown_capture_rect((0, 0, 1920, 1080))
+    qhd = overlay.countdown_capture_rect((0, 0, 2560, 1440))
+    check("카운트다운 캡처: 1920 중앙", full["x"] == (1920 - full["w"]) // 2
+          and abs(full["w"] - int(1920 * 0.58)) <= 1, str(full))
+    check("카운트다운 캡처: 2560 중앙", qhd["x"] == (2560 - qhd["w"]) // 2
+          and abs(qhd["w"] - int(2560 * 0.58)) <= 1, str(qhd))
+    low = overlay.countdown_capture_rect((0, 0, 1024, 768))
+    check("카운트다운 캡처: 저해상도는 최소 폭·높이까지 넓힘", low["w"] == 960 and low["h"] == 680, str(low))
+    check("카운트다운 캡처: 창이 화면을 벗어나지 않음",
+          full["x"] >= 0 and full["y"] >= 0 and full["x"] + full["w"] <= 1920
+          and full["y"] + full["h"] <= 1080)
+
+
+def test_v203_scan_teams() -> None:
+    from app import capture, party_lobby
+
+    class FakeClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def resolve_ouid(self, name: str) -> str:
+            self.calls += 1
+            return "ouid-" + str(name)
+
+        def user_basic(self, ouid: str) -> dict:
+            return {"user_name": ouid.replace("ouid-", ""), "clan_name": ""}
+
+    recorded: dict = {}
+    original = capture.ocr_region
+
+    def fake_region(rect, **kwargs):
+        recorded["rect"] = tuple(rect)
+        lines = _synthetic_team_lines(int(rect[2]), int(rect[3]))
+        return {"ok": True, "lines": lines, "count": len(lines)}
+
+    capture.ocr_region = fake_region
+    try:
+        res = party_lobby.scan_teams((0, 0, 2560, 1440), [], FakeClient())
+    finally:
+        capture.ocr_region = original
+
+    check("10인 스캔: 중앙 1회 캡처",
+          recorded["rect"][0] == (2560 - recorded["rect"][2]) // 2, str(recorded.get("rect")))
+    check("10인 스캔: 상단 5명", [r["name"] for r in res["top"]] == [f"상단{i}님" for i in range(1, 6)],
+          str([r["name"] for r in res["top"]]))
+    check("10인 스캔: 하단 5명", [r["name"] for r in res["bottom"]] == [f"하단{i}님" for i in range(1, 6)],
+          str([r["name"] for r in res["bottom"]]))
+    check("10인 스캔: 10명 API 확인", res["count"] == 10 and res["confirmed"] == 10,
+          f"{res.get('count')}/{res.get('confirmed')}")
+    check("10인 스캔: rows 는 상단 먼저", [r["name"] for r in res["rows"]][:1] == ["상단1님"])
+    check("10인 스캔: 성공 메시지", "상단 5명" in res["message"] and "하단 5명" in res["message"],
+          res["message"])
+
+
+def test_v203_scout_overlay() -> None:
+    from app import native_overlay
+
+    rows = [{"name": f"플레이어{i}",
+             "solo_stats": {"short": "그마 II", "win": 52.0, "kd": 58.0, "games": 12},
+             "party_stats": {"short": "마스터 I", "win": 47.0, "kd": 55.0, "games": 8}}
+            for i in range(1, 11)]
+    payload = {"tab": "scout", "top_team": rows[:5], "bottom_team": rows[5:],
+               "loading": False, "elapsed": 2.4}
+    spec = native_overlay.build_spec("match", payload, 700, 470)
+    texts = [str(p.get("text")) for p in spec["prims"] if p["type"] == "text"]
+    check("스카우팅: 상단 그룹 제목", any(t.startswith("상단 5명") for t in texts), str(texts[:4]))
+    check("스카우팅: 하단 그룹 제목", any(t.startswith("하단 5명") for t in texts), str(texts[:6]))
+    check("스카우팅: 이름 10명", sum(1 for t in texts if t.startswith("플레이어")) == 10,
+          str(sum(1 for t in texts if t.startswith("플레이어"))))
+    check("스카우팅: 솔로 10줄", sum(1 for t in texts if t.startswith("솔로")) == 10)
+    check("스카우팅: 파티 10줄", sum(1 for t in texts if t.startswith("파티")) == 10)
+    check("스카우팅: 맵 승률·딜 없음", not any(("맵 승률" in t or "딜" in t) for t in texts), str(texts))
+    bottom = max(p["y"] + p["h"] for p in spec["prims"] if p["type"] in ("rect", "text"))
+    check("스카우팅: 창 안에 들어감", bottom <= 470, str(bottom))
+    groups = native_overlay.scout_groups({"rows": rows})
+    check("스카우팅: rows 10개도 상·하단 분리", [len(g[1]) for g in groups] == [5, 5],
+          str([len(g[1]) for g in groups]))
+    loading = native_overlay.scout_groups({"top": 5, "bottom": 4})
+    check("스카우팅: 분석 중에도 상·하단 빈 칸", [len(g[1]) for g in loading] == [5, 4],
+          str([len(g[1]) for g in loading]))
+    loading_spec = native_overlay.build_spec("match", {"tab": "scout", "loading": True, "top": 5,
+                                                       "bottom": 5}, 700, 470)
+    loading_texts = [str(p.get("text")) for p in loading_spec["prims"] if p["type"] == "text"]
+    check("스카우팅: 분석 중 표시", any("분석 중" in t for t in loading_texts), str(loading_texts[:4]))
+    legacy = native_overlay.build_spec("match", {"tab": "scout", "rows": rows[:3], "loading": False},
+                                       576, 389)
+    legacy_texts = [str(p.get("text")) for p in legacy["prims"] if p["type"] == "text"]
+    check("스카우팅: 예전 5명 페이로드 호환",
+          any(t.startswith("솔로") for t in legacy_texts) and any(t.startswith("파티") for t in legacy_texts))
+    check("스카우팅: 10인 창은 5명 창보다 큼",
+          __import__("app.overlay", fromlist=["x"]).scout_overlay_rect((0, 0, 1920, 1080))["h"] > 389,
+          "")
+
+
+def test_v203_scout_speed() -> None:
+    from app import scouting
+
+    class Fake:
+        def __init__(self) -> None:
+            self.detail = 0
+            self.calls = 0
+
+        def resolve_ouid(self, name: str) -> str:
+            self.calls += 1
+            return "ouid-" + name
+
+        def user_basic(self, ouid: str) -> dict:
+            self.calls += 1
+            return {"user_name": ouid.replace("ouid-", ""), "clan_name": "리드"}
+
+        def user_tier(self, ouid: str) -> dict:
+            self.calls += 1
+            return {"solo_rank_match_score": 3200, "solo_rank_match_tier": "GRAND MASTER II",
+                    "party_rank_match_score": 2800, "party_rank_match_tier": "MASTER I"}
+
+        def user_recent(self, ouid: str) -> dict:
+            self.calls += 1
+            return {"recent_sniper_rate": 55.0, "recent_assault_rate": 45.0}
+
+        def matches(self, ouid: str, mtype: str, **kwargs) -> list:
+            self.calls += 1
+            time.sleep(0.01)
+            return [{"match_id": f"{ouid}-{i}", "match_result": "1" if i % 2 else "0",
+                     "kill": 10, "death": 8, "date_match": f"2026-11-20T10:0{i % 10}:00Z"}
+                    for i in range(20)]
+
+        def match_detail(self, match_id: str) -> dict:
+            self.detail += 1
+            return {}
+
+        def match_detail_cached(self, match_id: str) -> None:
+            self.detail += 1
+            return None
+
+    fake = Fake()
+    names = [f"상대{i}" for i in range(1, 11)]
+    started = time.monotonic()
+    res = scouting.quick_scout(fake, names, "", ledger=scouting.InFlight())
+    elapsed = time.monotonic() - started
+    rows = res.get("rows") or []
+    check("10인 스카우팅: 10명 행", len(rows) == 10, str(len(rows)))
+    check("10인 스카우팅: 1초 이내", elapsed < 1.0, f"{elapsed:.2f}s")
+    check("10인 스카우팅: match-detail 0건", fake.detail == 0, str(fake.detail))
+    check("10인 스카우팅: 순서 유지", [r["name"] for r in rows] == names, str([r["name"] for r in rows]))
+    check("10인 스카우팅: 솔로·파티 모두 계산",
+          all((r.get("solo_stats") or {}).get("win") is not None
+              and (r.get("party_stats") or {}).get("win") is not None for r in rows))
+    check("10인 스카우팅: 대상 10명 · 워커 20",
+          scouting.MAX_TARGETS == 10 and scouting.MAX_WORKERS == 20,
+          f"{scouting.MAX_TARGETS}/{scouting.MAX_WORKERS}")
+
+
+
+def test_v203_shutdown() -> None:
+    """종료 버튼이 UI 스레드를 붙잡지 않는지 — 사용자 제보 '강제 종료 창'."""
+    from app.api import Api
+    from app.store import Store
+
+    def make_api(prefix: str) -> Api:
+        tmp = Path(tempfile.mkdtemp(prefix=prefix))
+        api = Api(Store(tmp / "data.json"))
+        api.store.update_settings({"auto_cloud": True})
+        api._cloud_state = lambda: {"signed_in": True}
+        api.cloud_push = lambda: time.sleep(2.0) or {"ok": True}
+        return api
+
+    class FakeWindow:
+        def __init__(self) -> None:
+            self.hidden = False
+            self.destroyed = False
+            self.order: list[str] = []
+
+        def hide(self) -> None:
+            self.hidden = True
+            self.order.append("hide")
+
+        def destroy(self) -> None:
+            self.destroyed = True
+            self.order.append("destroy")
+
+    api = make_api("sa_close_")
+    window = FakeWindow()
+    api.attach(window)
+    started = time.monotonic()
+    result = api.close_window()
+    elapsed = time.monotonic() - started
+    check("종료: close_window 는 즉시 반환", bool(result.get("ok")) and elapsed < 0.3,
+          f"{elapsed:.2f}s")
+    check("종료: 창을 숨긴 뒤 destroy", window.hidden and window.destroyed and window.order[:2] == ["hide", "destroy"],
+          str(window.order))
+    check("종료: 감시 정지 플래그를 바로 세움",
+          api._cloud_stop.is_set() and api._match_stop.is_set())
+    time.sleep(0.4)
+
+    api2 = make_api("sa_close2_")
+    started = time.monotonic()
+    out = api2.shutdown("exit", cloud_timeout=0.3)
+    elapsed = time.monotonic() - started
+    check("종료: 마지막 백업은 시간 제한 안에서", elapsed < 0.9, f"{elapsed:.2f}s")
+    check("종료: 느린 백업은 건너뜀",
+          str((out.get("cloud") or {}).get("skipped", "")).startswith("종료 시간 초과"),
+          str(out.get("cloud")))
+    again = api2.shutdown("exit", cloud_timeout=0.3)
+    check("종료: 두 번 불러도 한 번만", again.get("skipped") == "이미 종료 처리됨", str(again))
+
+    src = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
+    close_src = src.split("def close_window", 1)[1].split("def _close_async", 1)[0]
+    check("종료: close_window 안에서 블로킹 shutdown 호출 없음",
+          'self.shutdown("exit")' not in close_src, close_src[-200:])
+    check("종료: 정리는 백그라운드 스레드", "_close_async" in close_src and "daemon=True" in
+          src.split("def _close_async", 1)[1][:900])
+    main_src = (ROOT / "main.py").read_text(encoding="utf-8")
+    check("종료: main.py finally 도 시간 제한", 'api.shutdown("exit", cloud_timeout=' in main_src)
+
+
+
+def test_v203_overlay_scout_api() -> None:
+    """Home 스카우팅 — 화면 상단 5명 / 하단 5명이 그대로 오버레이에 나뉘어 뜨는지."""
+    from app import api as api_mod, native_overlay, party_lobby, scouting
+    from app.store import Store
+
+    tmp = Path(tempfile.mkdtemp(prefix="sa_scout_"))
+    api = api_mod.Api(Store(tmp / "data.json"),
+                      overlay_factory=lambda kind, title: native_overlay.FakeWindow(kind, title))
+    api.store.update_settings({"nickname": "휴가중."})
+    api._client = lambda: object()
+    top = [f"상단{i}" for i in range(1, 6)]
+    bottom = [f"하단{i}" for i in range(1, 6)]
+
+    real_scan = party_lobby.scan_teams
+    real_quick = scouting.quick_scout
+    captured: dict = {}
+
+    def fake_scan(game, known, client, **kwargs):
+        return {"ok": True, "top": [{"name": n} for n in top],
+                "bottom": [{"name": n} for n in bottom], "rows": [], "count": 10,
+                "message": "상단 5명 · 하단 5명 인식",
+                "capture_rect": {"x": 403, "y": 151, "w": 1114, "h": 778}}
+
+    def fake_quick(client, targets, map_name="", **kwargs):
+        captured["targets"] = list(targets)
+        rows = [{"name": name,
+                 "solo_stats": {"short": "그마 II", "win": 50.0, "kd": 55.0, "games": 10},
+                 "party_stats": {"short": "마스터 I", "win": 45.0, "kd": 50.0, "games": 8}}
+                for name in targets]
+        if kwargs.get("on_update"):
+            kwargs["on_update"](rows)
+        return {"ok": True, "rows": rows, "elapsed": 0.8, "message": "10/10명 분석"}
+
+    party_lobby.scan_teams = fake_scan
+    scouting.quick_scout = fake_quick
+    try:
+        res = api.overlay_scout_start()
+    finally:
+        party_lobby.scan_teams = real_scan
+        scouting.quick_scout = real_quick
+
+    check("스카우팅 API: 상단 5명", [r["name"] for r in res.get("top_team") or []] == top,
+          str([r.get("name") for r in res.get("top_team") or []]))
+    check("스카우팅 API: 하단 5명", [r["name"] for r in res.get("bottom_team") or []] == bottom,
+          str([r.get("name") for r in res.get("bottom_team") or []]))
+    check("스카우팅 API: 10명 조회", captured.get("targets") == top + bottom, str(captured.get("targets")))
+    check("스카우팅 API: 중앙 캡처 사용", res.get("source") == "center-ocr", str(res.get("source")))
+    win = api._overlay._windows.get("match")
+    spec = win.specs[-1] if win and win.specs else {}
+    texts = [str(p.get("text")) for p in spec.get("prims") or [] if p.get("type") == "text"]
+    check("스카우팅 API: 오버레이에 상단/하단 그룹",
+          any(t.startswith("상단 5명") for t in texts) and any(t.startswith("하단 5명") for t in texts),
+          str(texts[:5]))
+    check("스카우팅 API: 오버레이 10명 이름",
+          sum(1 for t in texts if t.startswith("상단") or t.startswith("하단")) >= 12, str(len(texts)))
+
+
 def main() -> int:
     for fn in (test_nvapi, test_store, test_auth, test_insights, test_duo, test_ocr,
                test_scouting, test_overlay, test_api,
                test_v201_hotkeys, test_v201_win32, test_v201_scouting, test_v201_tier_marks,
-               test_v201_updates, test_v201_backup, test_code_clean):
+               test_v201_updates, test_v201_backup, test_code_clean,
+               test_v203_gdiplus, test_v203_capture, test_v203_countdown_split,
+               test_v203_scan_teams, test_v203_scout_overlay, test_v203_scout_speed,
+               test_v203_shutdown, test_v203_overlay_scout_api):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001

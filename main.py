@@ -500,8 +500,10 @@ def main(argv: list[str] | None = None) -> int:
         _fatal(str(exc))
         return 1
     finally:
+        # v2.0.3 — 창이 이미 닫혔으면 여기서 오래 붙잡지 않는다.  마지막 백업은
+        # 1.5초까지만 기다리고, 감시·트레이는 플래그/짧은 join 으로 즉시 정리한다.
         try:
-            api.shutdown("exit")
+            api.shutdown("exit", cloud_timeout=1.5)
         except Exception:  # noqa: BLE001
             log.debug("final cloud backup failed", exc_info=True)
         try:

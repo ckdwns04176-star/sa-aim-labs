@@ -461,50 +461,178 @@ def scan_party(client: nexon.NexonClient, game: tuple[int, int, int, int],
 
 
 # ---------------------------------------------------------------- 10인 팀 스캔
-TEAM_ROWS = {
-    "red": (0.2632, 0.3470, 0.4700, 0.0230),
-    "blue": (0.2632, 0.7720, 0.4700, 0.0240),
-}
+# 10인 카운트다운 화면(Red Team 윗줄 / Blue Team 아랫줄)은 해상도가 높을수록
+# 화면 대비 창이 작아진다.  고정 비율 슬롯 10개를 찍으면 QHD 이상에서 빗나가므로,
+# 게임 창 **중앙을 한 번** 찍고 OCR 이 돌려준 줄 좌표로 위/아래를 나눈다.
+UI_LABEL_RE = re.compile(r"^(?:red|blue)?team$|^준비$|^ready$|^win$|^lose$", re.IGNORECASE)
+MIN_ROW_MEMBERS = 3
 
 
-def team_name_rects(game: tuple[int, int, int, int]) -> list[dict[str, Any]]:
-    """게임 시작 10인 화면 — Red/Blue 각 5칸 (비율 고정)."""
-    results: list[dict[str, Any]] = []
-    x, y, w, h = (int(v) for v in game[:4])
-    for team, (left, top, row_w, row_h) in TEAM_ROWS.items():
-        card_w = row_w / PARTY_SLOTS
-        for slot in range(PARTY_SLOTS):
-            # 이름표는 카드 폭의 76% 가운데
-            cx = x + int(round((left + card_w * (slot + 0.5)) * w))
-            half = int(round(card_w * w * 0.38))
-            results.append({
-                "team": team, "slot": slot,
-                "x": cx - half, "y": y + int(round(top * h)),
-                "w": max(40, half * 2), "h": max(12, int(round(row_h * h))),
-            })
-    return results
+def _line_row(line: dict[str, Any]) -> dict[str, Any] | None:
+    """OCR 한 줄 → 닉네임 후보 행 (UI 라벨·숫자·너무 짧은 줄은 버린다)."""
+    text = str((line or {}).get("text") or "").strip()
+    if not text:
+        return None
+    cleaned = clean_ocr_text(text)
+    if len(cleaned) < 2 or cleaned.isdigit():
+        return None
+    if UI_LABEL_RE.match(cleaned) or UI_LABEL_RE.match(text.replace(" ", "")):
+        return None
+    try:
+        x = int((line or {}).get("x") or 0)
+        y = int((line or {}).get("y") or 0)
+        w = int((line or {}).get("w") or 0)
+        h = int((line or {}).get("h") or 0)
+    except (TypeError, ValueError):
+        return None
+    return {"text": text, "name": cleaned, "x": x, "y": y, "w": max(0, w), "h": max(0, h)}
+
+
+def cluster_rows(lines: Sequence[dict[str, Any]], *, tolerance: int = 0) -> list[dict[str, Any]]:
+    """OCR 줄들을 Y 좌표로 묶어 '팀 한 줄' 단위로 만든다 (해상도 무관).
+
+    각 팀 줄은 카드 5개가 같은 Y 에 있으므로 3개 이상 모인 묶음을 팀 줄로 본다.
+    """
+    items = [row for row in (_line_row(line) for line in (lines or [])) if row]
+    items.sort(key=lambda row: (row["y"] + row["h"] * 0.5, row["x"]))
+    clusters: list[dict[str, Any]] = []
+    for item in items:
+        center = item["y"] + item["h"] * 0.5
+        tol = max(6, int(tolerance or item["h"] * 0.75))
+        if clusters and abs(center - clusters[-1]["center"]) <= tol:
+            group = clusters[-1]
+            group["items"].append(item)
+            group["center"] = sum(i["y"] + i["h"] * 0.5 for i in group["items"]) / len(group["items"])
+        else:
+            clusters.append({"center": center, "items": [item], "tol": tol})
+    for group in clusters:
+        group["items"].sort(key=lambda row: row["x"])
+    return clusters
+
+
+def _dedupe_x(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+    """같은 자리에서 두 번 읽힌 줄(전처리 2경로)을 하나로 — X 가 가까우면 같은 사람."""
+    out: list[dict[str, Any]] = []
+    for item in sorted(items, key=lambda row: row["x"]):
+        duplicate = False
+        for kept in out:
+            if abs(kept["x"] - item["x"]) <= max(12, int(min(kept["w"], item["w"]) * 0.35)):
+                duplicate = True
+                break
+        if not duplicate:
+            out.append(item)
+    return out
+
+
+def _team_row(cluster: dict[str, Any], limit: int = PARTY_SLOTS) -> list[dict[str, Any]]:
+    items = _dedupe_x(cluster.get("items") or [])[:limit]
+    rows: list[dict[str, Any]] = []
+    for slot, item in enumerate(items):
+        rows.append({"slot": slot, "name": item["name"], "raw": item["text"],
+                     "x": item["x"], "y": item["y"], "w": item["w"], "h": item["h"]})
+    return rows
+
+
+def split_top_bottom(lines: Sequence[dict[str, Any]]) -> dict[str, Any]:
+    """10인 화면 OCR 줄 → 윗줄 5명 / 아랫줄 5명 (순수 함수).
+
+    * 같은 Y 에 3명 이상 모인 줄만 팀 줄로 인정한다(팀 라벨·점수·카운트 숫자 제외).
+    * 위/아래는 화면 Y 좌표로만 결정한다 — 해상도·창 크기가 달라도 그대로다.
+    """
+    clusters = cluster_rows(lines)
+    groups = [group for group in clusters if len(group["items"]) >= MIN_ROW_MEMBERS]
+    top: dict[str, Any] | None = None
+    bottom: dict[str, Any] | None = None
+    if len(groups) >= 2:
+        top, bottom = groups[0], groups[1]
+    elif len(groups) == 1:
+        top = groups[0]
+        rest = [group for group in clusters if group is not groups[0]]
+        wide = [group for group in rest if len(group["items"]) >= 2]
+        if wide:
+            bottom = max(wide, key=lambda group: len(group["items"]))
+    elif clusters:
+        # 한 줄로 뭉쳤으면(줄이 매우 가까움) X 순서로 앞 5명 / 뒤 5명.
+        merged = max(clusters, key=lambda group: len(group["items"]))
+        if len(merged["items"]) >= 6:
+            items = _dedupe_x(merged["items"])
+            top = {"items": items[:PARTY_SLOTS]}
+            bottom = {"items": items[PARTY_SLOTS:PARTY_SLOTS * 2]}
+    top_rows = _team_row(top) if top else []
+    bottom_rows = _team_row(bottom) if bottom else []
+    return {"top": top_rows, "bottom": bottom_rows,
+            "count": len(top_rows) + len(bottom_rows),
+            "clusters": len(clusters)}
 
 
 def scan_teams(game: tuple[int, int, int, int], known: Iterable[str],
-               client: nexon.NexonClient) -> dict[str, Any]:
+               client: nexon.NexonClient, *, debug: bool = False) -> dict[str, Any]:
+    """게임 시작 10인 카운트다운 — 중앙 1회 캡처 → 줄 좌표로 상/하단 분리 → API 확인.
+
+    고정 비율 슬롯 대신 넓은 중앙 캡처를 쓰므로 1920×1080·2560×1440 등
+    해상도가 달라져 창이 작아져도 상단 5명 / 하단 5명을 위치로 나눌 수 있다.
+    """
+    from . import overlay
+
     known_list = [str(n).strip() for n in known if str(n or "").strip()]
-    rects = team_name_rects(game)
-    shot = capture.ocr_regions([(r["x"], r["y"], r["w"], r["h"]) for r in rects])
-    if not shot.get("ok"):
-        return {"ok": False, "rows": [], "message": shot.get("message") or "10인 화면을 읽지 못했습니다"}
-    rows: list[dict[str, Any]] = []
-    for meta, lines in zip(rects, shot.get("lines") or []):
-        name, candidates = pick_line(lines, known_list)
-        if not name:
-            continue
-        corrected, score = best_candidate(name, known_list)
-        rows.append({"team": meta["team"], "slot": meta["slot"], "raw": name,
-                     "name": corrected, "score": round(score, 2),
-                     "lines": " / ".join(candidates[:3])})
-    message = f"10인 화면 · {len(rows)}명 인식"
-    if not rows and shot.get("errors"):
-        message += " · OCR 상세: " + str(shot["errors"][0])[:120]
-    return {"ok": bool(rows), "rows": rows, "message": message}
+    rect = overlay.countdown_capture_rect(game)
+    debug_dir = None
+    if debug:
+        debug_dir = paths.log_dir() / "team_ocr_debug"
+        try:
+            debug_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            debug_dir = None
+    shot = capture.ocr_region((rect["x"], rect["y"], rect["w"], rect["h"]),
+                             scale=2, timeout=8.0, debug_dir=debug_dir)
+    split = split_top_bottom(shot.get("lines") or [])
+
+    names = [row["name"] for row in (split["top"] + split["bottom"])]
+    validated: list[dict[str, Any]] = []
+    api_error = ""
+    if names:
+        try:
+            validated = validate_names(client, names, known_list, workers=5)
+        except Exception as exc:  # noqa: BLE001 - API 실패가 OCR 원문을 지우지 않게
+            api_error = f"{type(exc).__name__}: {exc}"
+            validated = [{"slot": i, "raw": name, "name": name, "ouid": None,
+                          "status": "needs_check"} for i, name in enumerate(names)]
+    by_index = {i: row for i, row in enumerate(validated)}
+
+    def _team(rows: Sequence[dict[str, Any]], offset: int) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for local, row in enumerate(rows):
+            found = by_index.get(offset + local) or {}
+            out.append({**row, "slot": local,
+                        "name": found.get("name") or row.get("name") or "",
+                        "ouid": found.get("ouid"),
+                        "status": found.get("status") or "needs_check"})
+        return out
+
+    top_rows = _team(split["top"], 0)
+    bottom_rows = _team(split["bottom"], len(split["top"]))
+    confirmed = [r for r in top_rows + bottom_rows if r.get("ouid")]
+    count = len(top_rows) + len(bottom_rows)
+    if count == 0:
+        message = "10인 화면에서 닉네임 줄을 찾지 못했습니다"
+    else:
+        message = f"상단 {len(top_rows)}명 · 하단 {len(bottom_rows)}명 인식"
+        if confirmed:
+            message += f" · API {len(confirmed)}명 확인"
+        if api_error:
+            message += " · API 오류: " + api_error[:100]
+    return {
+        "ok": count > 0,
+        "top": top_rows,
+        "bottom": bottom_rows,
+        "rows": top_rows + bottom_rows,
+        "count": count,
+        "confirmed": len(confirmed),
+        "capture_rect": rect,
+        "ocr_count": int(shot.get("count") or 0),
+        "debug_dir": str(debug_dir or ""),
+        "message": message,
+    }
 
 
 def last_match_teams(client: nexon.NexonClient, my_nick: str) -> dict[str, Any]:

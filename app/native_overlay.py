@@ -48,6 +48,7 @@ AC_SRC_OVER = 0x00
 AC_SRC_ALPHA = 0x01
 HTTRANSPARENT = -1
 WM_DESTROY = 0x0002
+WM_CLOSE = 0x0010
 WM_NCHITTEST = 0x0084
 WM_ERASEBKGND = 0x0014
 WM_DISPLAYCHANGE = 0x007E
@@ -71,6 +72,14 @@ COLORS = {
 }
 FONT = "Malgun Gothic"
 FONT_FALLBACK = "Segoe UI"
+
+# 진단 표식 — 실기 로그에서 어느 오버레이 빌드가 도는지 바로 확인한다.
+OVERLAY_DIAG_BUILD = "class-atom-v3-20261127"
+
+# GDI+ TextRenderingHint
+#   3 = ClearTypeGridFit → 32bpp 레이어드 창에서 알파가 깨져 글자가 검게 뭉친다
+#   4 = AntiAlias      → 투명 창에서도 획 가장자리 알파가 정상
+TEXT_RENDERING_HINT = 4
 
 
 # ---------------------------------------------------------------- Win32 (64비트 안전)
@@ -337,7 +346,11 @@ def _mapban_spec(payload: dict[str, Any], width: int, height: int) -> dict[str, 
 
 
 def _scout_mode_line(label: str, stats: dict[str, Any] | None) -> str:
-    """`솔로 그마 III · 52% · K/D 58%` — 오버레이 한 줄."""
+    """`솔로 그마 III · 52% · K/D 58%` — 오버레이 한 줄.
+
+    맵별 승률은 게임 카운트다운에서는 알 수 없고 조회도 느려서 표시하지 않는다.
+    티어 · 승률 · K/D 만 남긴다.
+    """
     stats = stats or {}
     bits = [label]
     tier = str(stats.get("short") or "").strip()
@@ -355,41 +368,91 @@ def _scout_mode_line(label: str, stats: dict[str, Any] | None) -> str:
     return " · ".join(bits)
 
 
+def scout_groups(payload: dict[str, Any]) -> list[tuple[str, list[dict[str, Any]]]]:
+    """스카우팅 페이로드 → [(그룹 제목, 행 목록)] — 상단 5명 · 하단 5명.
+
+    10인 카운트다운 화면은 **윗줄 5명 / 아랫줄 5명**이다.  아군·적군 추정은 하지
+    않고 화면 그대로 위/아래로 나눈다(사용자 요청).  예전 5명 페이로드(`rows`)도
+    그대로 받아 한 그룹으로 그린다.
+    """
+    top = [r for r in (payload.get("top_team") or []) if isinstance(r, dict)]
+    bottom = [r for r in (payload.get("bottom_team") or []) if isinstance(r, dict)]
+    if top or bottom:
+        return [("상단 5명", top[:5]), ("하단 5명", bottom[:5])]
+    rows = [r for r in (payload.get("rows") or []) if isinstance(r, dict)]
+    if len(rows) > 5:
+        return [("상단 5명", rows[:5]), ("하단 5명", rows[5:10])]
+    # 분석 중 — 화면에서 읽은 인원수만큼 빈 칸을 미리 보여 준다.
+    try:
+        top_n = int(payload.get("top") or 0)
+        bottom_n = int(payload.get("bottom") or 0)
+    except (TypeError, ValueError):
+        top_n = bottom_n = 0
+    if top_n or bottom_n:
+        return [("상단 5명", [{}] * max(0, min(5, top_n))),
+                ("하단 5명", [{}] * max(0, min(5, bottom_n)))]
+    return [("상대 팀", rows[:5])]
+
+
 def _scout_spec(payload: dict[str, Any], width: int, height: int) -> dict[str, Any]:
-    """우하단 5줄 — 이름 + 솔로(티어·승률·K/D) / 파티(티어·승률·K/D)."""
-    rows = list(payload.get("rows") or [])[:5]
+    """우하단 — 상단 5명 / 하단 5명, 각자 솔로(티어·승률·K/D) / 파티(티어·승률·K/D).
+
+    맵 승률은 넣지 않는다(사용자 요청).  10인 카운트다운에서 4~5초 안에 읽히도록
+    한 행은 이름 1줄 + 솔로 1줄 + 파티 1줄로 압축한다.
+    """
+    groups = scout_groups(payload)
     prims = [rect(0, 0, width, height, COLORS["panel"], alpha=0.9, radius=10,
                   stroke=COLORS["line"], stroke_alpha=0.9)]
     head_h = 34.0
-    title = str(payload.get("map") or "상대 스카우팅")
-    prims.append(text(14, 6, width - 28, 20, title, size=13, color="text", bold=True))
-    state = "분석 중…" if payload.get("loading") else f"상대 {len(rows)}명 · 솔로 / 파티 랭크"
-    prims.append(text(14, 22, width - 28, 12, state, size=9, color="muted"))
+    title = str(payload.get("map") or "10인 스카우팅")[:24]
+    prims.append(text(14, 5, width - 28, 19, title, size=13, color="text", bold=True))
+    if payload.get("loading"):
+        state = "분석 중…"
+    else:
+        total = sum(len(rows) for _, rows in groups)
+        elapsed = payload.get("elapsed")
+        state = f"상단 {len(groups[0][1])}명 · 하단 {len(groups[-1][1]) if len(groups) > 1 else 0}명"
+        if total:
+            state += f" · 솔로 / 파티 · {total}명"
+        if elapsed:
+            state += f" · {round(float(elapsed) * 1000)}ms"
+    prims.append(text(14, 21, width - 28, 12, state, size=9, color="muted"))
     prims.append(line(12, head_h - 1, width - 12, head_h - 1, "line", 0.8))
-    row_h = max(20.0, (height - head_h - 8) / 5.0)
-    for index in range(5):
-        top = head_h + index * row_h
-        row = rows[index] if index < len(rows) else None
-        prims.append(rect(8, top + 1, width - 16, row_h - 3, COLORS["panel2"],
-                          alpha=0.65 if row else 0.25, radius=5))
-        if not row:
-            prims.append(text(16, top, width - 32, row_h, "—", size=10, color="muted"))
-            continue
-        name = str(row.get("name") or "")
-        error = str(row.get("error") or "")
-        prims.append(text(16, top, width * 0.33, row_h, name, size=11, color="text", bold=True))
-        if error:
-            prims.append(text(width * 0.33, top, width * 0.67 - 8, row_h, error, size=9.5,
-                              color="gold", align="right"))
-            continue
-        solo_line = _scout_mode_line("솔로", row.get("solo_stats"))
-        party_line = _scout_mode_line("파티", row.get("party_stats"))
-        text_left = width * 0.33
-        text_w = width - text_left - 24
-        prims.append(text(text_left, top + row_h * 0.04, text_w, row_h * 0.46, solo_line,
-                          size=9.5, color="ice", align="right"))
-        prims.append(text(text_left, top + row_h * 0.50, text_w, row_h * 0.46, party_line,
-                          size=9.5, color="gold", align="right"))
+
+    group_head = 15.0
+    slots = sum(max(1, len(rows)) for _, rows in groups)
+    pad = 6.0
+    usable = max(60.0, height - head_h - pad - group_head * len(groups))
+    row_h = max(18.0, usable / max(1, slots))
+    top = head_h
+    for group_index, (label, rows) in enumerate(groups):
+        tone = "ice" if group_index == 0 else "coral"
+        prims.append(text(14, top, width - 28, group_head, label, size=9.5, color=tone, bold=True))
+        top += group_head
+        for index in range(max(1, len(rows))):
+            row = rows[index] if index < len(rows) else None
+            prims.append(rect(8, top + 0.5, width - 16, row_h - 2.0, COLORS["panel2"],
+                              alpha=0.65 if row else 0.22, radius=5))
+            if row:
+                name = str(row.get("name") or "")[:14]
+                error = str(row.get("error") or "")
+                prims.append(text(16, top, width * 0.31, row_h - 2, name, size=11,
+                                  color="text", bold=True))
+                if error:
+                    prims.append(text(width * 0.31, top, width * 0.69 - 12, row_h - 2, error,
+                                      size=9.0, color="gold", align="right"))
+                else:
+                    solo_line = _scout_mode_line("솔로", row.get("solo_stats"))
+                    party_line = _scout_mode_line("파티", row.get("party_stats"))
+                    text_left = width * 0.31
+                    text_w = width - text_left - 16
+                    prims.append(text(text_left, top + 0.5, text_w, (row_h - 2) * 0.5, solo_line,
+                                      size=9.5, color="ice", align="right"))
+                    prims.append(text(text_left, top + (row_h - 2) * 0.5, text_w, (row_h - 2) * 0.5,
+                                      party_line, size=9.5, color="gold", align="right"))
+            else:
+                prims.append(text(16, top, width - 32, row_h - 2, "—", size=10, color="muted"))
+            top += row_h
     return _spec(width, height, prims)
 
 
@@ -574,23 +637,29 @@ def render_prims(bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
 
 def _render_gdiplus(gp: _GdiPlus, bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
     graphics = ctypes.c_void_p()
-    if gp.create_from_hdc(ctypes.byref(graphics), bitmap.hdc) != 0:
+    # GdipCreateFromHDC(HDC hdc, GpGraphics** graphics) — HDC 가 먼저, 결과 포인터가 뒤.
+    # (예전 코드는 순서가 거꾸로라 스택 주소를 HDC 로 넘겨 늘 GDI 폴백으로 떨어졌다.)
+    if gp.create_from_hdc(bitmap.hdc, ctypes.byref(graphics)) != 0 or not graphics:
+        log.debug("GdipCreateFromHDC 실패 · GDI 폴백")
         return _render_gdi(bitmap, prims)
     try:
-        gp.set_smoothing(graphics, 4)       # SmoothingModeAntiAlias
-        gp.set_text_aa(graphics, 3)         # TextRenderingHintClearTypeGridFit → 4? use AntiAlias
+        gp.set_smoothing(graphics, 4)                    # SmoothingModeAntiAlias
+        gp.set_text_aa(graphics, TEXT_RENDERING_HINT)    # AntiAlias (ClearType 는 알파 깨짐)
         family = ctypes.c_void_p()
-        if gp.create_family(ctypes.byref(family), FONT, None) != 0:
-            gp.create_family(ctypes.byref(family), FONT_FALLBACK, None)
+        # GdipCreateFontFamilyFromName(WCHAR* name, GpFontCollection*, GpFontFamily**)
+        if gp.create_family(FONT, None, ctypes.byref(family)) != 0 or not family:
+            gp.create_family(FONT_FALLBACK, None, ctypes.byref(family))
 
         def brush(color: int) -> Any:
             out = ctypes.c_void_p()
-            gp.create_solid(color, ctypes.byref(out))
+            if gp.create_solid(color, ctypes.byref(out)) != 0:
+                return None
             return out
 
         def pen(color: int, width: float) -> Any:
             out = ctypes.c_void_p()
-            gp.create_pen(color, ctypes.c_float(max(0.5, width)), 2, ctypes.byref(out))
+            if gp.create_pen(color, ctypes.c_float(max(0.5, width)), 2, ctypes.byref(out)) != 0:
+                return None
             return out
 
         for prim in prims:
@@ -598,51 +667,64 @@ def _render_gdiplus(gp: _GdiPlus, bitmap: _Bitmap, prims: Sequence[dict[str, Any
             if kind == "rect":
                 color = gp.color(prim.get("fill") or "panel", prim.get("alpha", 1.0))
                 fill = brush(color)
+                if fill is None:
+                    continue
                 x, y, w, h = (float(prim["x"]), float(prim["y"]), float(prim["w"]), float(prim["h"]))
                 radius = float(prim.get("radius") or 0)
                 if radius > 0.5:
                     path = _rounded_path(gp, x, y, w, h, radius)
-                    gp.fill_path(graphics, fill, path)
+                    if path:
+                        gp.fill_path(graphics, fill, path)
                     if prim.get("stroke"):
                         stroke = pen(gp.color(prim["stroke"], prim.get("stroke_alpha", 1.0)),
                                      float(prim.get("stroke_width") or 1.0))
-                        gp.draw_path(graphics, stroke, path)
-                        gp.delete_pen(stroke)
-                    gp.delete_path(path)
+                        if path and stroke is not None:
+                            gp.draw_path(graphics, stroke, path)
+                        if stroke is not None:
+                            gp.delete_pen(stroke)
+                    if path:
+                        gp.delete_path(path)
                 else:
                     gp.fill_rect(graphics, fill, ctypes.c_float(x), ctypes.c_float(y),
                                  ctypes.c_float(w), ctypes.c_float(h))
                     if prim.get("stroke"):
                         stroke = pen(gp.color(prim["stroke"], prim.get("stroke_alpha", 1.0)),
                                      float(prim.get("stroke_width") or 1.0))
-                        gp.draw_rect(graphics, stroke, ctypes.c_float(x), ctypes.c_float(y),
-                                     ctypes.c_float(w), ctypes.c_float(h))
-                        gp.delete_pen(stroke)
+                        if stroke is not None:
+                            gp.draw_rect(graphics, stroke, ctypes.c_float(x), ctypes.c_float(y),
+                                         ctypes.c_float(w), ctypes.c_float(h))
+                            gp.delete_pen(stroke)
                 gp.delete_brush(fill)
             elif kind == "line":
                 stroke = pen(gp.color(prim.get("color") or "line", prim.get("alpha", 1.0)),
                              float(prim.get("width") or 1.0))
+                if stroke is None:
+                    continue
                 gp.draw_line(graphics, stroke, ctypes.c_float(prim["x1"]), ctypes.c_float(prim["y1"]),
                              ctypes.c_float(prim["x2"]), ctypes.c_float(prim["y2"]))
                 gp.delete_pen(stroke)
             elif kind == "text" and family:
                 font = ctypes.c_void_p()
                 style = 1 if prim.get("bold") else 0   # FontStyleBold
-                gp.create_font(family, ctypes.c_float(float(prim.get("size") or 12)),
-                               style, 3, ctypes.byref(font))
+                if gp.create_font(family, ctypes.c_float(float(prim.get("size") or 12)),
+                                  style, 3, ctypes.byref(font)) != 0 or not font:
+                    continue
                 fmt = ctypes.c_void_p()
                 gp.create_format(0, 0, ctypes.byref(fmt))
-                align = {"left": 0, "center": 1, "right": 2}.get(str(prim.get("align")), 0)
-                gp.set_align(fmt, align)
-                gp.set_line_align(fmt, 0)
+                if fmt:
+                    align = {"left": 0, "center": 1, "right": 2}.get(str(prim.get("align")), 0)
+                    gp.set_align(fmt, align)
+                    gp.set_line_align(fmt, 0)
                 color = gp.color(prim.get("color") or "text", prim.get("alpha", 1.0))
                 fill = brush(color)
-                rectf = (ctypes.c_float * 4)(float(prim["x"]), float(prim["y"]),
-                                             float(prim["w"]), float(prim["h"]))
-                gp.draw_string(graphics, str(prim.get("text") or ""), -1, font,
-                               ctypes.byref(rectf), fmt, fill)
-                gp.delete_brush(fill)
-                gp.delete_format(fmt)
+                if fill is not None:
+                    rectf = (ctypes.c_float * 4)(float(prim["x"]), float(prim["y"]),
+                                                 float(prim["w"]), float(prim["h"]))
+                    gp.draw_string(graphics, str(prim.get("text") or ""), -1, font,
+                                   ctypes.byref(rectf), fmt, fill)
+                    gp.delete_brush(fill)
+                if fmt:
+                    gp.delete_format(fmt)
                 gp.delete_font(font)
         if family:
             gp.delete_family(family)
@@ -654,7 +736,8 @@ def _render_gdiplus(gp: _GdiPlus, bitmap: _Bitmap, prims: Sequence[dict[str, Any
 def _rounded_path(gp: _GdiPlus, x: float, y: float, w: float, h: float, radius: float) -> Any:
     r = max(1.0, min(radius, min(w, h) / 2))
     path = ctypes.c_void_p()
-    gp.create_path(ctypes.byref(path), 0)
+    # GdipCreatePath(FillMode brushMode, GpPath** path)
+    gp.create_path(0, ctypes.byref(path))
     gp.add_arc(path, x, y, r * 2, r * 2, 180, 90)
     gp.add_arc(path, x + w - r * 2, y, r * 2, r * 2, 270, 90)
     gp.add_arc(path, x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, 90)
@@ -699,19 +782,19 @@ def _render_gdi(bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
 
 # ---------------------------------------------------------------- 창
 _WINFUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)   # 리눅스 테스트용 폴백
-WNDPROC = _WINFUNCTYPE(
-    ctypes.c_ssize_t,   # LRESULT
-    ctypes.c_void_p,    # HWND
-    ctypes.c_uint32,    # UINT
-    ctypes.c_size_t,    # WPARAM
-    ctypes.c_ssize_t,   # LPARAM
-)
+# LRESULT(HWND, UINT, WPARAM, LPARAM) — Win64 에서 WPARAM 은 포인터 크기다.
+WNDPROC = _WINFUNCTYPE(ctypes.c_ssize_t, ctypes.c_void_p, ctypes.c_uint32,
+                       ctypes.c_size_t, ctypes.c_ssize_t)
 
 
 class NativeOverlayWindow:
     """레이어드 창 하나 — show/hide/update/destroy."""
 
     _class_registered: set[str] = set()
+    # Win32 는 등록된 클래스/콜백을 우리 프로세스 메모리에서 참조한다.
+    # 콜백 객체가 GC 되면 창 메시지가 들어올 때 프로세스가 죽으므로 모듈 수준에 보관한다.
+    _class_wndprocs: dict[str, Any] = {}
+    _class_atoms: dict[str, int] = {}
 
     def __init__(self, kind: str, title: str):
         self.kind = kind
@@ -723,6 +806,11 @@ class NativeOverlayWindow:
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self._size = (10, 10)
+
+    def diag(self) -> str:
+        """실기 로그용 한 줄 — 어느 오버레이 빌드가 창을 만들었는지."""
+        return (f"overlay={self.kind} hwnd={self.hwnd} size={self._size} "
+                f"build={OVERLAY_DIAG_BUILD}")
 
     # -------------------------------------------------- 공개 API
     def create(self, rect: dict[str, int], spec: dict[str, Any]) -> bool:
@@ -738,7 +826,11 @@ class NativeOverlayWindow:
                 self.error = "창 생성 시간 초과"
                 return False
             if self.hwnd:
-                self.update(spec)
+                # 첫 그리기가 실패하면 창만 보이고 내용이 없는 상태가 되므로 실패로 돌려준다.
+                if not self.update(spec):
+                    self.error = self.error or "오버레이 첫 렌더에 실패했습니다"
+                    return False
+            log.info("native overlay created · %s", self.diag())
             return bool(self.hwnd)
         except Exception as exc:  # noqa: BLE001
             self.error = str(exc)
@@ -792,7 +884,9 @@ class NativeOverlayWindow:
             return
         try:
             if self.hwnd:
-                win32().user32.PostMessageW(ctypes.c_void_p(self.hwnd), WM_DESTROY, 0, 0)
+                # WM_DESTROY 를 직접 post 하면 창 파괴 절차가 돌지 않는다.
+                # WM_CLOSE → DefWindowProc → DestroyWindow 경로를 쓴다.
+                win32().user32.PostMessageW(ctypes.c_void_p(self.hwnd), WM_CLOSE, 0, 0)
         except Exception:  # noqa: BLE001
             pass
         if self.bitmap is not None:
@@ -823,7 +917,7 @@ class NativeOverlayWindow:
         user32.GetWindowRect(ctypes.c_void_p(self.hwnd), ctypes.byref(rect))
         dst = POINT(rect.left, rect.top)
         ok = user32.UpdateLayeredWindow(
-            ctypes.c_void_p(self.hwnd), self.bitmap.hdc, ctypes.byref(dst), ctypes.byref(size),
+            ctypes.c_void_p(self.hwnd), None, ctypes.byref(dst), ctypes.byref(size),
             self.bitmap.hdc, ctypes.byref(src), 0, ctypes.byref(blend), ULW_ALPHA)
         if not ok:
             code = libs.last_error()
@@ -832,6 +926,8 @@ class NativeOverlayWindow:
 
     def _run(self) -> None:
         try:
+            from ctypes import wintypes
+
             libs = win32()
             user32 = libs.user32
             kernel32 = libs.kernel32
@@ -853,12 +949,7 @@ class NativeOverlayWindow:
                 if msg == WM_DESTROY:
                     user32.PostQuitMessage(0)
                     return 0
-                return user32.DefWindowProcW(
-                    ctypes.c_void_p(hwnd),
-                    msg,
-                    wparam,
-                    lparam,
-                )
+                return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
 
             self._wndproc = wndproc
             if class_name not in NativeOverlayWindow._class_registered:
@@ -876,18 +967,24 @@ class NativeOverlayWindow:
                 wc.lpfnWndProc = wndproc
                 wc.hInstance = hinstance
                 wc.lpszClassName = class_name
-                if not user32.RegisterClassExW(ctypes.byref(wc)):
+                atom = user32.RegisterClassExW(ctypes.byref(wc))
+                if not atom:
                     code = libs.last_error()
                     self.error = f"RegisterClassExW 실패 · {libs.error_text(code)}"
                     log.error(self.error)
                     self._ready.set()
                     return
+                # ATOM 을 캐시해 두고 재등록 없이 CreateWindowExW 에 바로 넘긴다.
+                atom = int(atom)
+                NativeOverlayWindow._class_atoms[class_name] = atom
+                NativeOverlayWindow._class_wndprocs[class_name] = wndproc
                 NativeOverlayWindow._class_registered.add(class_name)
-
+            class_atom = NativeOverlayWindow._class_atoms.get(class_name) or 0
+            class_atom_arg = ctypes.cast(ctypes.c_void_p(class_atom), wintypes.LPCWSTR)
             ex_style = (WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE
                         | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW)
             hwnd = user32.CreateWindowExW(
-                ex_style, class_name, self.title, WS_POPUP,
+                ex_style, class_atom_arg, self.title, WS_POPUP,
                 0, 0, self._size[0], self._size[1], None, None, hinstance, None)
             if not hwnd:
                 code = libs.last_error()

@@ -71,10 +71,18 @@ PARTY_BADGE_H = 0.030688
 PARTY_MAPS_TOP = 0.538624
 PARTY_MAPS_H = 0.033862
 
-SCOUT_SIZE = (0.300, 0.360)
+SCOUT_SIZE = (0.360, 0.430)
 SCOUT_MARGIN = (0.012, 0.020)
 TOAST_SIZE = (372, 96)
 TOAST_MARGIN = 18
+
+# 10인 카운트다운 화면 — 게임 창 중앙 영역을 통째로 읽는다.
+# 해상도가 높을수록 UI 가 화면 대비 작아지므로 "비율 슬롯 10개" 대신 중앙 캡처 +
+# OCR 줄 좌표로 상단 5명 / 하단 5명을 나눈다.
+COUNTDOWN_MIN_W = 960
+COUNTDOWN_MIN_H = 680
+COUNTDOWN_W_RATIO = 0.58
+COUNTDOWN_H_RATIO = 0.72
 
 # 16:9 · 4:3 공통 — 창은 게임 **클라이언트 비율**로만 계산하므로 해상도가
 # 바뀌어도 같은 자리에 붙는다.  아래 RATIO_TOLERANCE 는 테스트·진단용.
@@ -142,10 +150,12 @@ def party_card_rects(game: tuple[int, int, int, int],
     """5개 파티 카드의 닉네임 탐색 영역.
 
     구형 대기실(참고 영상)은 이름 줄이 화면 높이 약 47~50%에,
-    현재 대기실은 약 51~54%에 나타난다. 두 UI를 모두 포함하는 세로 띠를
-    읽고, capture.ocr_regions()가 청록색 닉네임을 우선 분리한다.
+    현재 대기실은 약 51~54%에 나타난다.  클랜랭크·토너먼트 대기실은 카드가
+    한 줄 더 내려가거나 올라가서 "위아래만 다르다" — 그래서 세로 띠를
+    **0.415 ~ 0.575 (높이 0.160)** 로 잡아 세 화면을 모두 덮고,
+    capture 쪽이 그 띠 안에서 가장 뚜렷한 닉네임 줄을 스스로 찾는다.
     """
-    scan_top, scan_height = 0.445, 0.112
+    scan_top, scan_height = 0.415, 0.160
     # 닉네임은 카드 중앙 정렬. 중앙 80%를 사용해 긴 영문 닉네임도 자르지 않되
     # 좌우의 무기/상태 아이콘이 OCR에 섞이는 것을 줄인다.
     rows = [(col[0] + col[2] * 0.10, scan_top, col[2] * 0.80, scan_height)
@@ -210,15 +220,33 @@ def party_layout(rect: dict[str, int], game: tuple[int, int, int, int]) -> dict[
 
 
 def scout_overlay_rect(game: tuple[int, int, int, int]) -> dict[str, int]:
-    """상대 스카우팅 창 — 게임 창 오른쪽 아래."""
+    """상대 스카우팅 창 — 게임 창 오른쪽 아래 (10명 = 2그룹 × 5줄)."""
     x, y, w, h = (int(v) for v in game[:4])
     rw, rh = SCOUT_SIZE
     mx, my = SCOUT_MARGIN
-    win_w = max(330, int(round(rw * w)))
-    win_h = max(210, int(round(rh * h)))
+    win_w = max(420, int(round(rw * w)))
+    win_h = max(300, int(round(rh * h)))
     left = x + w - win_w - int(round(mx * w))
     top = y + h - win_h - int(round(my * h))
     return {"x": max(x, left), "y": max(y, top), "w": win_w, "h": win_h}
+
+
+def countdown_capture_rect(game: tuple[int, int, int, int]) -> dict[str, int]:
+    """10인 카운트다운 창을 담는 **게임 창 정중앙** 캡처 영역.
+
+    사용자 제보: 해상도가 높을수록(예: QHD) 카운트다운 창이 화면 대비 작아져
+    고정 비율 슬롯 10개가 닉네임을 비껴간다.  그래서 위치를 찍지 않고
+    중앙을 넓게 한 장 찍은 뒤, OCR 이 돌려준 줄 좌표로 상/하단을 나눈다.
+    낮은 해상도(1280 이하)에서도 창을 놓치지 않게 최소 폭·높이를 둔다.
+    """
+    x, y, w, h = (int(v) for v in game[:4])
+    w = max(1, w)
+    h = max(1, h)
+    cap_w = min(w, max(COUNTDOWN_MIN_W, int(round(w * COUNTDOWN_W_RATIO))))
+    cap_h = min(h, max(COUNTDOWN_MIN_H, int(round(h * COUNTDOWN_H_RATIO))))
+    left = x + (w - cap_w) // 2
+    top = y + (h - cap_h) // 2
+    return {"x": left, "y": top, "w": cap_w, "h": cap_h}
 
 
 def toast_rect(screen: tuple[int, int, int, int], position: str = "br",

@@ -94,6 +94,10 @@ class Api:
         self._match_interval = MATCH_REFRESH_SECONDS
         self._match_stop = __import__("threading").Event()
         self._match_thread: Any = None
+        # v2.0.3 — 종료는 한 번만.  닫기 창에서 부른 정리와 main.py 의 finally 가
+        # 겹쳐 두 번 백업하거나 UI 스레드를 붙잡지 않게 한다.
+        self._shutdown_done = False
+        self._shutdown_lock = __import__("threading").Lock()
         self._cleanup_cache_once()
 
     def set_display(self, width: int = 0, height: int = 0, scale: float = 1.0) -> dict[str, Any]:
@@ -179,16 +183,56 @@ class Api:
                         message="이 앱은 1200×750 고정 크기로만 동작합니다")
 
     def close_window(self) -> dict[str, Any]:
-        """완전 종료 — OS 닫기 이벤트가 이 선택을 막지 않게 허용 플래그를 먼저 세운다."""
+        """완전 종료 — **UI 스레드를 붙잡지 않는다** (v2.0.3).
+
+        예전에는 ``destroy()`` 전에 ``shutdown("exit")`` 을 불렀고, 그 안의
+        클라우드 업로드가 네트워크를 기다리는 동안 WebView2 스레드가 멈춰
+        Windows 가 "응답 없음 → 강제 종료" 창을 띄웠다.  이제 여기서는
+        종료 플래그만 즉시 세우고, 창을 바로 숨긴 뒤 destroy 한다.
+        마지막 백업·오버레이 정리는 백그라운드 스레드(:meth:`_close_async`)가 맡는다.
+        """
         global _CLOSE_ALLOWED
         _CLOSE_ALLOWED = True
-        try:
-            self.shutdown("exit")
-        except Exception:  # noqa: BLE001 - 종료를 막지 않는다
-            log.debug("shutdown before close failed", exc_info=True)
-        if self._win:
-            self._win.destroy()
+        # 감시 스레드 정지 플래그는 여기서 바로 — 네트워크는 기다리지 않는다.
+        for name in ("_cloud_stop", "_match_stop"):
+            try:
+                getattr(self, name).set()
+            except Exception:  # noqa: BLE001
+                pass
+        self._close_async("exit")
+        window = self._win
+        if window:
+            try:
+                window.hide()          # 먼저 화면에서 치운다 — 즉시 사라져 보이게
+            except Exception:  # noqa: BLE001
+                log.debug("window hide during close failed", exc_info=True)
+            try:
+                window.destroy()
+            except Exception:  # noqa: BLE001 - 종료를 막지 않는다
+                log.debug("window destroy during close failed", exc_info=True)
         return self._ok()
+
+    def _close_async(self, reason: str = "exit", *, cloud_timeout: float = 1.5) -> None:
+        """창이 사라진 뒤 남은 정리 — 오버레이 닫기 + 마지막 백업(시간 제한).
+
+        daemon 스레드라 프로세스 종료를 붙잡지 않는다.  백업이 늦으면 그냥
+        건너뛰고 다음 실행의 주기 백업에 맡긴다.
+        """
+        def _run() -> None:
+            try:
+                self._overlay.hide_all()
+            except Exception:  # noqa: BLE001
+                log.debug("overlay cleanup on close failed", exc_info=True)
+            try:
+                self.shutdown(reason, cloud_timeout=cloud_timeout)
+            except Exception:  # noqa: BLE001
+                log.debug("background shutdown failed", exc_info=True)
+
+        import threading as _threading
+
+        _threading.Thread(target=_run, daemon=True, name="sa-close").start()
+
+    _close_async._serializable = False  # type: ignore[attr-defined]
 
     def allow_close(self) -> bool:
         """main.py 의 WM_CLOSE / clossing 핸들러가 확인한다 (v1.5.0 · #23)."""
@@ -1331,8 +1375,31 @@ class Api:
         return winutil.copy_text(text)
 
     # ---------------------------------------------------------- 클라우드 자동 백업
-    def cloud_auto_sync(self, reason: str = "periodic") -> dict[str, Any]:
-        """30분 주기 · 앱 시작/종료 자동 백업 (#17)."""
+    def cloud_auto_sync(self, reason: str = "periodic", *,
+                        timeout: float | None = None) -> dict[str, Any]:
+        """30분 주기 · 앱 시작/종료 자동 백업 (#17).
+
+        ``timeout`` 을 주면 그 시간 안에 끝난 백업만 반영하고 돌아온다 —
+        종료할 때 네트워크가 느려도 창이 붙잡히지 않게 하기 위한 것.
+        """
+        if timeout is not None:
+            limit = max(0.2, float(timeout))
+            box: dict[str, Any] = {}
+            import threading as _threading
+
+            def _bounded() -> None:
+                try:
+                    box["result"] = self.cloud_auto_sync(reason)
+                except Exception as exc:  # noqa: BLE001
+                    box["result"] = {"ok": False, "message": str(exc)}
+
+            worker = _threading.Thread(target=_bounded, daemon=True, name="sa-cloud-exit")
+            worker.start()
+            worker.join(limit)
+            if worker.is_alive():
+                return {"ok": False, "reason": reason,
+                        "skipped": f"종료 시간 초과({limit:.1f}s) · 다음 실행에서 백업"}
+            return box.get("result") or {"ok": False, "reason": reason, "skipped": "백업 결과 없음"}
         try:
             if not self.store.settings.get("auto_cloud", True):
                 return {"ok": False, "skipped": "자동 백업이 꺼져 있습니다"}
@@ -1367,12 +1434,30 @@ class Api:
 
     start_cloud_auto._serializable = False  # type: ignore[attr-defined]
 
-    def shutdown(self, reason: str = "exit") -> dict[str, Any]:
-        """앱 종료 직전 — 자동 백업 1회 + 감시 정지."""
+    def shutdown(self, reason: str = "exit", *, cloud_timeout: float | None = None) -> dict[str, Any]:
+        """앱 종료 직전 — 자동 백업 1회 + 감시 정지 (두 번 불러도 한 번만).
+
+        ``cloud_timeout`` 을 주면 그 시간까지만 백업을 기다린다 — 종료 버튼이
+        네트워크를 기다리며 멈추지 않게 한다.  이미 정리했으면 즉시 돌아간다.
+        """
         out: dict[str, Any] = {}
+        lock = getattr(self, "_shutdown_lock", None)
+        if lock is not None:
+            acquired = lock.acquire(timeout=0.2)
+            if not acquired:
+                return {"ok": True, "skipped": "종료 정리 중"}
+            try:
+                if getattr(self, "_shutdown_done", False):
+                    return {"ok": True, "skipped": "이미 종료 처리됨"}
+                self._shutdown_done = True
+            finally:
+                lock.release()
         try:
             self._cloud_stop.set()
-            out["cloud"] = self.cloud_auto_sync(reason)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            out["cloud"] = self.cloud_auto_sync(reason, timeout=cloud_timeout)
         except Exception:  # noqa: BLE001
             out["cloud"] = {"ok": False}
         try:
@@ -2739,7 +2824,9 @@ class Api:
                                                  seconds=10))
         if kind == "scout":
             area = overlay.game_area()
-            payload = {"tab": "scout", "rows": _sample_scout_rows(), "map": "제3보급창고"}
+            rows = _sample_scout_rows()
+            payload = {"tab": "scout", "map": "제3보급창고",
+                       "top_team": rows[:5], "bottom_team": rows[5:], "rows": rows}
             return self._ok(**self._overlay.show("match", payload, rect=overlay.scout_overlay_rect(area),
                                                  seconds=12))
         return self._err("알 수 없는 미리보기 종류입니다")
@@ -2968,6 +3055,11 @@ class Api:
 
     # ------------------------------------------------------------ 10초 상대 스카우팅
     def overlay_scout_start(self, red: Any = None, blue: Any = None, map_name: str = "") -> dict[str, Any]:
+        """Home 단축키 — 10인 카운트다운의 **상단 5명 / 하단 5명**을 4~5초 안에 분석.
+
+        화면에서 위/아래를 그대로 나누고(아군/적군 추정 없음), 각자
+        솔로(티어·승률·K/D) · 파티(티어·승률·K/D) 만 보여 준다.  맵 승률은 뺐다.
+        """
         settings = self._overlay_settings()
         if not settings.get("enabled"):
             return self._err("오버레이가 꺼져 있습니다")
@@ -2982,55 +3074,76 @@ class Api:
         try:
             client = self._client()
             me = self._store_nick()
-            rows: list[dict[str, Any]] = []
-            source = "ocr"
+            top_names: list[str] = []
+            bottom_names: list[str] = []
+            source = "center-ocr"
+            scan_message = ""
+            scan_rect: dict[str, Any] = {}
             if red or blue:
-                rows = [{"team": "red", "name": n, "slot": i} for i, n in enumerate(party_lobby.clean_members(red, 5))]
-                rows += [{"team": "blue", "name": n, "slot": i} for i, n in enumerate(party_lobby.clean_members(blue, 5))]
+                top_names = party_lobby.clean_members(red, 5)
+                bottom_names = party_lobby.clean_members(blue, 5)
                 source = "manual"
             else:
                 area = overlay.game_area()
                 scan = party_lobby.scan_teams(area, self._known_names(), client)
-                rows = scan.get("rows") or []
-                if len([r for r in rows if r.get("name")]) < 6:
-                    fallback = party_lobby.last_match_teams(client, me)
+                top_names = [str(r.get("name")) for r in scan.get("top") or [] if r.get("name")]
+                bottom_names = [str(r.get("name")) for r in scan.get("bottom") or [] if r.get("name")]
+                scan_message = str(scan.get("message") or "")
+                scan_rect = scan.get("capture_rect") or {}
+                if len(top_names) + len(bottom_names) < 6:
+                    fallback = party_lobby.last_match_teams(client, me) if me else {"ok": False}
                     if fallback.get("ok"):
-                        rows, source = fallback.get("rows") or [], "last-match"
-            if not me:
-                return self._err("설정에서 서든 닉네임을 먼저 저장해 주세요")
-            split = party_lobby.team_of(rows, me)
-            opponents = [str(r.get("name") or "") for r in split.get("opponents") or [] if r.get("name")]
-            if not opponents:
-                return self._err("상대 팀을 가르지 못했습니다 · 10인 화면에서 다시 눌러 주세요",
-                                 rows=rows)
+                        rows = fallback.get("rows") or []
+                        top_names = [str(r.get("name")) for r in rows
+                                     if r.get("team") == "mine" and r.get("name")][:5]
+                        bottom_names = [str(r.get("name")) for r in rows
+                                        if r.get("team") == "opp" and r.get("name")][:5]
+                        source = "last-match"
+            targets = top_names + bottom_names
+            if not targets:
+                return self._err(scan_message or "10인 화면에서 닉네임을 찾지 못했습니다 · 카운트다운에서 다시 눌러 주세요")
             area = overlay.game_area()
-            payload = {"tab": "scout", "map": map_name or "", "rows": [],
-                       "loading": True, "mine": [r.get("name") for r in split.get("mine") or []],
-                       "opponents": opponents, "source": source, "seconds": 12}
+            head = max(1, len(top_names))
+
+            def _split(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+                rows = list(rows or [])
+                return rows[:head], rows[head:head + 5]
+
+            payload: dict[str, Any] = {
+                "tab": "scout", "map": map_name or "",
+                "top_team": [], "bottom_team": [], "loading": True,
+                "top": len(top_names), "bottom": len(bottom_names), "seconds": 16,
+            }
             shown = self._overlay.show("match", payload, rect=overlay.scout_overlay_rect(area),
-                                        seconds=14)
+                                        seconds=16)
 
             def _update(rows_payload: list[dict[str, Any]]) -> None:
-                self._overlay.refresh("match", {**payload, "rows": rows_payload,
+                top_rows, bottom_rows = _split(rows_payload)
+                self._overlay.refresh("match", {**payload, "top_team": top_rows,
+                                                "bottom_team": bottom_rows,
                                                 "loading": len(rows_payload) == 0})
 
-            result = scouting.quick_scout(client, opponents, map_name, on_update=_update)
+            result = scouting.quick_scout(client, targets, map_name, on_update=_update)
             if result.get("busy"):
                 return {"ok": False, "busy": True, "shown": shown, "rows": [],
                         "message": result.get("message") or "이미 같은 상대를 분석 중입니다"}
             self._account_use("overlay")
-            payload["rows"] = result.get("rows") or []
+            rows = result.get("rows") or []
+            top_rows, bottom_rows = _split(rows)
+            payload["top_team"] = top_rows
+            payload["bottom_team"] = bottom_rows
             payload["loading"] = False
             payload["elapsed"] = result.get("elapsed")
-            payload["stale"] = bool(result.get("stale"))
             self._overlay.refresh("match", payload)
             cache = self.store.overlay_cache()
-            cache["last_team"] = payload["rows"]
+            cache["last_team"] = rows
             self.store.save()
-            return {"ok": bool(result.get("ok")), "shown": shown, "rows": payload["rows"],
-                    "opponents": opponents, "mine": payload["mine"], "source": source,
+            return {"ok": bool(result.get("ok")), "shown": shown, "rows": rows,
+                    "top_team": top_rows, "bottom_team": bottom_rows,
+                    "names": targets, "source": source, "capture_rect": scan_rect,
                     "elapsed": result.get("elapsed"),
-                    "message": result.get("message") or f"상대 {len(opponents)}명 분석"}
+                    "message": (result.get("message") or f"상단 {len(top_names)}명 · 하단 {len(bottom_names)}명 분석")
+                               + (f" · {scan_message}" if scan_message else "")}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc, rows=[])
 
@@ -3093,29 +3206,32 @@ def _sample_plan() -> dict[str, Any]:
 
 
 def _sample_scout_rows() -> list[dict[str, Any]]:
-    """오버레이 '상대 분석' 미리보기용 — 실제 응답과 같은 솔로/파티 구조."""
+    """오버레이 '상단/하단 스카우팅' 미리보기 — 10명(윗줄 5 · 아랫줄 5)."""
     from . import scouting as _sc
 
     rows: list[dict[str, Any]] = []
-    spec = [("적팀1", "스나", "별레전드", 3610, 57.1, 61.2, "그랜드마스터 III", 3400, 48.3, 55.0),
-            ("적팀2", "라플", "그랜드마스터 II", 3240, 44.0, 52.9, "마스터 I", 2500, 51.0, 58.0),
-            ("적팀3", "스나", "그랜드마스터 II", 3261, 55.0, 63.0, "언랭크", 0, None, None),
-            ("적팀4", "스나", "불레전드", 3720, 52.0, 58.0, "레전드", 3600, 46.0, 54.0),
-            ("적팀5", "라플", "마스터 III", 2900, 47.0, 49.0, "골드 I", 1900, 53.0, 56.0)]
+    spec = [("상단1", "스나", "별레전드", 3610, 57.1, 61.2, "그랜드마스터 III", 3400, 48.3, 55.0),
+            ("상단2", "라플", "그랜드마스터 II", 3240, 44.0, 52.9, "마스터 I", 2500, 51.0, 58.0),
+            ("상단3", "스나", "그랜드마스터 II", 3261, 55.0, 63.0, "언랭크", 0, None, None),
+            ("상단4", "스나", "불레전드", 3720, 52.0, 58.0, "레전드", 3600, 46.0, 54.0),
+            ("상단5", "라플", "마스터 III", 2900, 47.0, 49.0, "골드 I", 1900, 53.0, 56.0),
+            ("하단1", "라플", "그랜드마스터 I", 3130, 50.0, 57.0, "마스터 II", 2700, 49.0, 53.0),
+            ("하단2", "스나", "마스터 I", 2760, 45.0, 51.0, "언랭크", 0, None, None),
+            ("하단3", "라플", "레전드", 3505, 54.0, 59.0, "별레전드", 3810, 51.0, 57.0),
+            ("하단4", "스나", "골드 I", 1980, 41.0, 44.0, "실버 II", 1600, 38.0, 42.0),
+            ("하단5", "라플", "언랭크", 0, None, None, "골드 III", 1850, 50.0, 55.0)]
     for name, weapon, solo_t, solo_rp, solo_w, solo_kd, party_t, party_rp, party_w, party_kd in spec:
         row = {
             "name": name, "clan": "", "weapon": weapon,
             "solo": solo_rp, "solo_tier": solo_t,
             "party": party_rp or None, "party_tier": party_t if party_rp else "언랭크",
             "solo_stats": {"tier": solo_t, "rp": solo_rp, "win": solo_w, "kd": solo_kd,
-                           "games": 12, "short": _sc.short_tier(solo_t)},
+                           "games": 12 if solo_rp else 0, "short": _sc.short_tier(solo_t)},
             "party_stats": {"tier": party_t if party_rp else "", "rp": party_rp, "win": party_w,
                             "kd": party_kd, "games": 8 if party_rp else 0,
                             "short": _sc.short_tier(party_t) if party_rp else "언랭"},
-            "kd": solo_kd, "win": solo_w,
-            "badge": "", "error": None,
+            "kd": solo_kd, "win": solo_w, "badge": "", "error": None,
         }
-        row["badge"] = _sc.badge_text({**row, "solo_stats": {"games": 12, "win": solo_w, "kd": solo_kd},
-                                       "party_stats": {"games": 8 if party_rp else 0, "win": party_w, "kd": party_kd}})
+        row["badge"] = _sc.badge_text(row)
         rows.append(row)
     return rows

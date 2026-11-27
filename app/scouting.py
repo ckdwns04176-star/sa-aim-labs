@@ -27,8 +27,11 @@ from . import nexon
 
 # 모드별로 볼 최근 판 수 — 목록이 1000건까지 올 수 있어 잘라 쓴다
 SCOUT_GAMES = 20
-DEFAULT_BUDGET = 3.0
-PROFILE_BUDGET = 1.6
+# 10인 카운트다운: 10명 × (id·tier·솔로·파티·최근정보) = 50콜을 20워커로 병렬
+MAX_TARGETS = 10
+MAX_WORKERS = 20
+DEFAULT_BUDGET = 4.5
+PROFILE_BUDGET = 1.8
 
 WEAPON_KO = {"sniper": "스나", "rifle": "라플", "special": "특화"}
 
@@ -336,7 +339,7 @@ def fetch_rows(client: nexon.NexonClient, targets: Sequence[str], *,
     if jobs:
         remaining = max(0.3, deadline - time.monotonic())
         done, more_timeout = run_pool(lambda job: _endpoint(client, job[1], job[2]), jobs,
-                                      workers=min(12, len(jobs)), timeout=remaining)
+                                      workers=min(MAX_WORKERS, len(jobs)), timeout=remaining)
         timed_out = timed_out or more_timeout
         for job, value in done:
             if value is not None:
@@ -376,7 +379,7 @@ def quick_scout(client: nexon.NexonClient, names: Sequence[str], map_name: str =
     같은 요청(같은 닉네임 조합·맵)이 이미 돌고 있으면 ``busy=True`` 로 즉시 돌아간다.
     ``depth`` · ``map_name`` 은 예전 호출부 호환용이며 더 이상 쓰지 않는다.
     """
-    targets = [str(n).strip() for n in names if str(n or "").strip()][:6]
+    targets = [str(n).strip() for n in names if str(n or "").strip()][:MAX_TARGETS]
     if not targets:
         return {"ok": False, "rows": [], "message": "분석할 닉네임이 없습니다"}
     ledger = ledger or INFLIGHT

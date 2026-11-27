@@ -244,7 +244,8 @@ class TrayIcon:
         except Exception:  # noqa: BLE001
             pass
         if self._thread and self._thread.is_alive():
-            self._thread.join(timeout=1.5)
+            # 종료 버튼이 트레이 스레드를 1.5초씩 기다리지 않게 1초로 줄인다.
+            self._thread.join(timeout=1.0)
         self._hwnd = None
 
     def set_hotkey(self, enabled: bool) -> bool:
