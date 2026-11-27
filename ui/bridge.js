@@ -7,7 +7,7 @@
    · 병영수첩 전적 불러오기 · 순위표 일괄 갱신 · 닉네임 등록·삭제
    · 스카우팅(솔로/파티 분리) · 듀오 시너지 · 내전 팀 · 파티 맵 밴픽
    · 인게임 오버레이 (대기실 맵 밴 · 상대 분석 · 경기 종료 토스트)
-   · 최적화 유틸 (Drs 라플·스나, 마우스 가속, 전원/게임 모드, 백업/복원)
+   · 최적화 유틸 (Drs 서든어택 그래픽 · 마우스 가속, 전원/게임 모드, 백업/복원)
    · 설정 (닉네임 · 오버레이 단축키 · 회원 로그인/클라우드 동기화)
    · 서버가 돌려준 state 로 홈·병영수첩·맵 분석·순위표 다시 그리기
 
@@ -1304,8 +1304,11 @@
   }
 
   async function applyNvidia(mode) {
-    const label = mode === 'rifle' ? '라플' : '스나';
-    busy(true, `${label} 프로필 적용 중… (Drs DB 백업 후 교체)`);
+    /* v2.0.5 — UI는 '서든어택 그래픽 최적화' 버튼 하나만 보낸다(rifle). 라플·스나 팩의
+       suddenattack.exe 프로필 값이 같아서 예전처럼 나눠 적용할 이유가 없다.
+       API는 하위 호환으로 rifle / sniper 를 그대로 받는다. */
+    if (!['rifle', 'sniper'].includes(String(mode))) mode = 'rifle';
+    busy(true, '서든어택 그래픽 최적화 적용 중… (Drs DB 백업 후 교체)');
     let result = await call('apply_nvidia_profile', mode, false);
     busy(false);
     if (result && !result.ok && (result.can_elevate || result.needs_admin)) {
@@ -1328,7 +1331,7 @@
     AL.lastChanges = bundle;
     toast(result.message || (result.game_running
       ? '✅ 적용 완료! 서든어택을 재실행해야 적용됩니다'
-      : `${mode === 'rifle' ? '🔫 라플' : '🎯 스나'} 프로필 적용 완료`), true, 5200);
+      : '서든어택 그래픽 최적화 적용 완료'), true, 5200);
     /* 항상 변경 내역 창을 연다 — 바뀐 값이 없으면 이유와 현재 프로필 값을 보여 준다 */
     setTimeout(() => {
       if (typeof window.openChanges === 'function') window.openChanges(bundle);

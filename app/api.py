@@ -1525,6 +1525,8 @@ class Api:
         return {"ok": True, "utils": self._drs_summary(), "state": self._build_state()}
 
     def apply_nvidia_profile(self, mode: str, elevate: bool = False) -> dict[str, Any]:
+        # v2.0.5 — 화면은 '서든어택 그래픽 최적화' 버튼 하나라 mode='rifle' 만 보낸다.
+        # 라플·스나 팩의 suddenattack.exe 값이 같아 예전 이름(sniper)도 그대로 받는다.
         mode = str(mode or "").strip()
         if mode == "alias":
             mode = "stairfix"

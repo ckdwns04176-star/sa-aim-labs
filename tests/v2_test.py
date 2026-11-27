@@ -1528,6 +1528,82 @@ def test_v203_shutdown() -> None:
 
 
 
+def test_v205_nvidia_single() -> None:
+    """v2.0.5 — 엔비디아 그래픽 최적화 버튼 하나(서든어택 그래픽 최적화).
+
+    라플·스나 팩의 suddenattack.exe 값이 같아 화면 버튼을 하나로 합쳤다.
+    API(apply_nvidia_profile)는 rifle / sniper 를 그대로 받는다(하위 호환).
+    """
+    from app import drs, nvidia
+    from playwright.sync_api import sync_playwright
+
+    rifle = drs.profile_dwords((ROOT / "assets" / "profiles" / "rifle" / "nvdrsdb0.bin").read_bytes())
+    sniper = drs.profile_dwords((ROOT / "assets" / "profiles" / "sniper" / "nvdrsdb0.bin").read_bytes())
+    check("v2.0.5: 라플·스나 팩 서든 프로필 값 동일", rifle == sniper and len(rifle) >= 5, str(len(rifle)))
+    check("v2.0.5: 버튼 이름 통일", nvidia.MODES["rifle"] == nvidia.MODES["sniper"] == "서든어택 그래픽 최적화",
+          str(nvidia.MODES))
+    check("v2.0.5: API 모드 하위 호환", set(nvidia.PACK_MODES) <= set(nvidia.MODES))
+
+    html = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.js").read_text(encoding="utf-8")
+    check("v2.0.5: 적용 버튼 1개", html.count('data-apply="rifle"') == 1 and 'data-apply="sniper"' not in html)
+    check("v2.0.5: 옛 두 버튼 이름 제거", "라플 최적화" not in html and "스나 최적화" not in html)
+    check("v2.0.5: 합친 버튼 문구", "서든어택 그래픽 최적화" in html)
+    check("v2.0.5: 바뀐 내역은 통합 이름으로",
+          "(mode==='rifle'||mode==='sniper')?'서든어택 그래픽 최적화'" in html)
+    check("v2.0.5: 브리지도 rifle/sniper 만 허용",
+          "if (!['rifle', 'sniper'].includes(String(mode))) mode = 'rifle';" in bridge)
+
+    state = build_state()
+    state["digest"]["show"] = False
+    state["onboarding"] = {"needed": False}
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=["--no-sandbox"])
+        page = browser.new_page(viewport={"width": 1200, "height": 750})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.add_init_script(mock_js(state))
+        page.goto((ROOT / "ui" / "index.html").as_uri())
+        page.wait_for_selector("#app-splash", state="hidden", timeout=20000)
+        page.evaluate("""()=>{document.querySelectorAll('.screen').forEach(s=>{s.hidden=(s.id!=='s-utils')});
+          document.querySelectorAll('.nav-item').forEach(b=>b.classList.toggle('on',b.dataset.screen==='system'));
+          if(window.AL&&AL.onScreen) AL.onScreen('utils');
+          if(window.renderUtils) renderUtils();
+          if(window.showUtilTab) showUtilTab('system');}""")
+        page.wait_for_timeout(500)
+
+        apply_btns = page.eval_on_selector_all("#s-utils .util-card.nv [data-apply]", "els=>els.length")
+        check("UI: 엔비디아 적용 버튼 1개", apply_btns == 1, str(apply_btns))
+        names = page.eval_on_selector_all("#s-utils .util-card.nv .util-name", "els=>els.map(e=>e.textContent.trim())")
+        check("UI: 버튼 이름 = 서든어택 그래픽 최적화", names == ["서든어택 그래픽 최적화"], str(names))
+        check("UI: 적용 전 배지", page.eval_on_selector("#nv-chip", "e=>e.textContent.trim()") == "적용 전")
+        check("UI: 적용 개수 / 1", "/ 1" in page.eval_on_selector("#util-sum", "e=>e.textContent"))
+        sub = page.eval_on_selector("#s-utils .util-card.nv .card-sub", "e=>e.textContent")
+        check("UI: 서든어택 전용 안내 문구 유지", "suddenattack.exe" in sub and "다른 게임 설정은 그대로" in sub, sub)
+        guide = page.eval_on_selector("#s-utils .util-card.nv", "e=>e.innerText")
+        check("UI: 변경 내역·복구 지점 유지", "변경 내역" in guide and "복구 지점" in guide)
+        card_h = page.evaluate("()=>Math.round(document.querySelector('#s-utils .util-card.nv').getBoundingClientRect().height)")
+        right_h = page.evaluate("""()=>{const b=document.getElementById('bk-card').getBoundingClientRect();
+          return Math.round(b.bottom - document.querySelector('#s-utils .util-card.nv').getBoundingClientRect().top)}""")
+        check("UI: 카드가 빈 공간 없이 오른쪽 열과 높이 균형", card_h >= 260 and abs(card_h - right_h) <= 24,
+              f"card={card_h} right={right_h}")
+        page.query_selector("#s-utils").screenshot(path=str(SHOTS / "v205-utils.png"))
+
+        page.click("#s-utils .util-card.nv [data-apply]")
+        page.wait_for_timeout(600)
+        calls = page.evaluate("()=>window.__CALLS.filter(c=>c[0]==='apply_nvidia').map(c=>c[1])")
+        check("UI: 버튼 → apply_nvidia_profile('rifle') 한 번", calls == ["rifle"], str(calls))
+        check("UI: 클릭 → 적용됨 배지", page.eval_on_selector("#nv-chip", "e=>e.textContent.trim()") == "적용됨")
+        check("UI: 클릭 → 행 상태 적용됨",
+              page.eval_on_selector("#s-utils .util-card.nv .ustate[data-state]", "e=>e.textContent.trim()") == "적용됨")
+        check("UI: 적용 개수 1 / 1", "1 / 1" in page.eval_on_selector("#util-sum", "e=>e.textContent"))
+        check("UI: v2.0.5 클릭 오류 없음", not errors, str(errors[:3]))
+        page.evaluate("()=>document.getElementById('changes-mask')?.classList.remove('show')")
+        page.wait_for_timeout(250)
+        page.query_selector("#s-utils").screenshot(path=str(SHOTS / "v205-utils-applied.png"))
+        browser.close()
+
+
 def test_v203_overlay_scout_api() -> None:
     """Home 스카우팅 — 화면 상단 5명 / 하단 5명이 그대로 오버레이에 나뉘어 뜨는지."""
     from app import api as api_mod, native_overlay, party_lobby, scouting
@@ -1592,7 +1668,7 @@ def main() -> int:
                test_v201_updates, test_v201_backup, test_code_clean,
                test_v203_gdiplus, test_v203_capture, test_v203_countdown_split,
                test_v203_scan_teams, test_v203_scout_overlay, test_v203_scout_speed,
-               test_v203_shutdown, test_v203_overlay_scout_api):
+               test_v203_shutdown, test_v203_overlay_scout_api, test_v205_nvidia_single):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001

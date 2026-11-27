@@ -236,7 +236,7 @@ def mock_js(state: dict) -> str:
       async check_update() { return {ok:true, newer:false}; },
       async update_gate() { return {ok:true, gate:{blocked:false}, update:{}}; },
       async install_update() { return {ok:false, message:'테스트'}; },
-      async apply_nvidia_profile(m) { window.__CALLS.push(['apply_nvidia', m]); return {ok:true, message:'적용', result:{ok:true, changes:[], verified:true}, update:{mode:m}}; },
+      async apply_nvidia_profile(m) { window.__CALLS.push(['apply_nvidia', m]); const st=S(); if (st.utils) st.utils.mode = m; return {ok:true, message:'적용', result:{ok:true, changes:[], verified:true}, update:{mode:m}, state: st}; },
       async restore_nvidia_profile() { return {ok:true, message:'복구'}; },
       async toggle_nvidia_alias() { return {ok:true}; },
       async set_mouse_accel() { return {ok:true}; },

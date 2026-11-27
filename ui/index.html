@@ -1836,6 +1836,17 @@ th.sortable.on .ar{opacity:1;color:var(--ac)}
   background:var(--ac14);border:1px solid var(--ac40);border-radius:4px;padding:0 4px;line-height:15px;height:15px;display:inline-flex;align-items:center}
 
 /* ---- 11. 최적화 유틸 (컴팩트) ---- */
+.util-card.nv .util-row.nv-single{flex:0 0 104px;min-height:104px}
+.util-card.nv .util-row.nv-single .util-ic{width:46px;height:46px}
+.util-card.nv .util-row.nv-single .util-name{font-size:14px}
+.util-card.nv .util-row.nv-single .util-desc{font-size:9.5px;margin-top:5px;color:#8293A9;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.util-card.nv .util-row.nv-single .util-desc b{color:#B9C6D8;font-weight:700}
+.nv-mix{flex:0 0 auto;padding:9px 11px 10px;border-radius:10px;background:rgba(7,11,19,.34);border:1px solid rgba(255,255,255,0.1)}
+.nv-mix-hd{display:flex;align-items:center;gap:8px;font-size:9px;font-weight:800;letter-spacing:.02em;color:#C6D2E2;margin-bottom:7px}
+.nv-mix-hd span{margin-left:auto;font-size:8.4px;font-weight:600;letter-spacing:0;color:#67788F}
+.nv-mix-grid{display:grid;grid-template-columns:1fr 1fr;gap:5px 10px}
+.nv-mix-i{display:flex;align-items:center;gap:6px;font-size:9.4px;font-weight:600;color:#A9B9CE;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.nv-mix-i svg{width:11px;height:11px;flex:0 0 11px;color:#4ADE80;opacity:.85}
 .util-card.nv .nv-guide.compact{padding:7px 10px;gap:0;flex:0 0 auto;background:transparent;border:0;border-top:1px dashed rgba(255,255,255,0.14);border-radius:0}
 .util-card.nv .nv-guide.compact .gi{font-size:9px;line-height:1.5;color:#7E8FA5;white-space:nowrap;overflow:hidden}
 .util-card.nv .nv-guide.compact .gi b{margin-right:6px;font-family:var(--num);color:var(--txt)}
@@ -3061,7 +3072,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
             <div class="sub"><span>상대분석</span><span class="sep">/</span><span>듀오 시너지</span><span class="sep">/</span><span>내전 팀</span><span class="sep">/</span><span>파티 맵 밴·픽</span></div>
           </div>
           <div class="head-right">
-            <span class="chip" id="util-sum">적용 <b>0</b> / 3</span>
+            <span class="chip" id="util-sum">적용 <b>0</b> / 1</span>
           </div>
         </div>
 
@@ -3192,21 +3203,26 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
               <span class="ustate" id="nv-chip">적용 전</span>
             </div>
             <div class="util-body" style="gap:9px">
-              <div class="util-row" data-prof="rifle">
-                <div class="util-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width:22px;height:22px;color:var(--txt2)"><use href="#i-rifle"/></svg></div>
+              <!-- v2.0.5 — 라플/스나 팩의 suddenattack.exe 값이 같아 버튼 하나로 합쳤다 -->
+              <div class="util-row nv-single" data-prof="rifle">
+                <div class="util-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:22px;height:22px;color:var(--txt)"><use href="#i-bolt"/></svg></div>
                 <div style="min-width:0">
-                  <div class="util-name">라플 최적화</div>
+                  <div class="util-name">서든어택 그래픽 최적화</div>
+                  <div class="util-desc">라플·스나 공용 프로필 · <b>적용 전 자동 백업</b></div>
                 </div>
                 <span class="ustate" data-state="rifle">대기</span>
                 <button class="ubtn" data-apply="rifle">적용</button>
               </div>
-              <div class="util-row" data-prof="sniper">
-                <div class="util-ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="width:22px;height:22px;color:var(--txt)"><use href="#i-sniper"/></svg></div>
-                <div style="min-width:0">
-                  <div class="util-name">스나 최적화</div>
+              <div class="nv-mix">
+                <div class="nv-mix-hd">프로필에 들어가는 값<span>없는 항목은 전역 설정 상속</span></div>
+                <div class="nv-mix-grid">
+                  <div class="nv-mix-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><use href="#i-check"/></svg>계단현상 끄기</div>
+                  <div class="nv-mix-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><use href="#i-check"/></svg>저지연 모드 켬</div>
+                  <div class="nv-mix-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><use href="#i-check"/></svg>수직 동기 끔</div>
+                  <div class="nv-mix-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><use href="#i-check"/></svg>사전 렌더 1프레임</div>
+                  <div class="nv-mix-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><use href="#i-check"/></svg>텍스처 필터 성능</div>
+                  <div class="nv-mix-i"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><use href="#i-check"/></svg>전원 관리 최대 성능</div>
                 </div>
-                <span class="ustate" data-state="sniper">대기</span>
-                <button class="ubtn" data-apply="sniper">적용</button>
               </div>
               <div class="nv-guide compact" id="nv-guide">
                 <div id="nv-points" style="display:flex;flex-direction:column;gap:2px">
@@ -4144,26 +4160,28 @@ function appToast(msg, ok, action){
   clearTimeout(utilToastT);
   utilToastT=setTimeout(()=>t.classList.remove('show'), 2600);
 }
-function utilCount(){ return (UTIL.rifle?1:0)+(UTIL.sniper?1:0); }
+function utilCount(){ return (UTIL.rifle || UTIL.sniper) ? 1 : 0; }
 
 function renderUtils(){
+  /* v2.0.5 — 라플/스나 두 버튼을 '서든어택 그래픽 최적화' 하나로 합쳤다.
+     적용 여부는 어느 한쪽 팩이 잡혀 있어도 켜진 것으로 본다. */
+  const on = !!(UTIL.rifle || UTIL.sniper);
   $$('#s-utils .util-row').forEach(row=>{
-    const k=row.dataset.prof, on=!!UTIL[k];
+    const k=row.dataset.prof;
     if(!['rifle','sniper'].includes(k)) return;
     row.classList.toggle('on',on);
     const st=row.querySelector('.ustate'), btn=row.querySelector('.ubtn');
     if(st){ st.textContent = on ? '적용됨' : '대기'; st.classList.toggle('on',on); }
     if(btn){ btn.classList.toggle('on',on); btn.textContent = on?'다시 적용':'적용'; }
   });
-  const sum=$('#util-sum'); if(sum) sum.innerHTML = `적용 <b>${utilCount()}</b> / 2`;
+  const sum=$('#util-sum'); if(sum) sum.innerHTML = `적용 <b>${utilCount()}</b> / 1`;
   const chip=$('#nv-chip');
   if(chip){
-    chip.className='ustate'+(utilCount()?' on':'');
-    chip.textContent = UTIL.rifle ? '라플 프로필 + 계단현상 끄기'
-                     : UTIL.sniper ? '스나 프로필 + 계단현상 끄기' : '적용 전';
+    chip.className='ustate'+(on?' on':'');
+    chip.textContent = on ? '적용됨' : '적용 전';
   }
   const cur=$('#nv-current');
-  if(cur) cur.textContent = UTIL.rifle ? 'Drs DB · 라플 + 계단현상' : UTIL.sniper ? 'Drs DB · 스나 + 계단현상' : '기본값';
+  if(cur) cur.textContent = on ? 'Drs DB · 서든어택 + 계단현상' : '기본값';
   const bk=$('#nv-backup'); if(bk) bk.textContent = utilBackup;
   renderAccel();
   renderPerfSwitch();
@@ -4190,13 +4208,13 @@ function renderPerfSwitch(){
 }
 
 function applyProfile(k){
-  UTIL[k]=true;
-  if(k!=='rifle') UTIL.rifle=false;
-  if(k!=='sniper') UTIL.sniper=false;
-  addPoint(k==='rifle'?'라플 프로필 적용 전':'스나 프로필 적용 전');
+  /* v2.0.5 — 버튼 하나로 통합. 예전 팩 이름(rifle/sniper)이 와도 같은 프로필을 적용한다 */
+  if(!['rifle','sniper'].includes(k)) k='rifle';
+  UTIL.rifle=true; UTIL.sniper=false;
+  addPoint('서든어택 그래픽 최적화 적용 전');
   utilBackup=nowHMS();
   renderUtils();
-  appToast(`${k==='rifle'?'🔫 라플':'🎯 스나'} 최적화 적용 완료 · 계단현상 끄기 포함 · 이전 설정 자동 백업`, true);
+  appToast('서든어택 그래픽 최적화 적용 완료 · 계단현상 끄기 포함 · 이전 설정 자동 백업', true);
 }
 function restoreAll(){
   const had=utilCount();
@@ -4231,7 +4249,7 @@ function renderChanges(data){
   const profile=d.profile_items||[];
   const checklist=d.checklist||[];
   const mode=d.mode||'';
-  const packName = mode==='rifle'?'라플 프로필':mode==='sniper'?'스나 프로필':mode==='stairfix'?'계단현상 끄기':(d.label||'엔비디아 설정');
+  const packName = mode==='stairfix'?'계단현상 끄기':(mode==='rifle'||mode==='sniper')?'서든어택 그래픽 최적화':(d.label||'엔비디아 설정');
   let html='';
   if(d.reason){
     html+=`<div class="digest-advice" style="margin:0 0 6px"><span class="ic">ℹ️</span><span>${d.reason}</span></div>`;

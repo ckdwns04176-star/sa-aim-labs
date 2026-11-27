@@ -2,8 +2,9 @@
 
 Windows keeps per-application 3D settings in
 ``C:\\ProgramData\\NVIDIA Corporation\\Drs`` (``nvdrsdb0.bin``, ``nvdrsdb1.bin``,
-``nvdrssel.bin``, ``nvAppTimestamps``, ``nvdrswr.lk``).  The two shipped packs
-replace that folder with a Sudden Attack profile tuned for rifle or sniper aim.
+``nvdrssel.bin``, ``nvAppTimestamps``, ``nvdrswr.lk``).  The shipped pack
+replaces the Sudden Attack profile with a tuned one (v2.0.5 — 라플·스나 팩의
+``suddenattack.exe`` 값이 같아 UI는 '서든어택 그래픽 최적화' 버튼 하나다).
 
 Safety rules implemented here
 -----------------------------
@@ -34,7 +35,10 @@ DRS_FILES = ("nvdrsdb0.bin", "nvdrsdb1.bin", "nvdrssel.bin", "nvAppTimestamps", 
 CORE_FILES = ("nvdrsdb0.bin", "nvdrsdb1.bin")
 GAME_EXE = drs.GAME_EXE
 KEEP_BACKUPS = 3
-MODES = {"rifle": "라플 프로필", "sniper": "스나 프로필", "stairfix": "계단현상 끄기"}
+# v2.0.5 — 버튼은 하나('서든어택 그래픽 최적화'). 두 팩의 서든 프로필 값이 같아서
+# 이름만 나뉘어 있었고, 예전 화면/호출과의 호환을 위해 rifle / sniper 키는 그대로 둔다.
+MODES = {"rifle": "서든어택 그래픽 최적화", "sniper": "서든어택 그래픽 최적화",
+         "stairfix": "계단현상 끄기"}
 PACK_MODES = ("rifle", "sniper")
 RESULT_FILE = "elevated_result.json"
 
@@ -466,9 +470,10 @@ class DrsManager:
         value_match = (all(before_values.get(sid) == value for sid, value in pack_values.items()
                            if sid not in stair_ids and sid in before_values)
                        and all(sid in before_values for sid in pack_game_ids))
-        # 다른 팩이 이미 적용된 상태면(prev_mode) 같은 값이어도 '전환'으로 본다 —
-        # 팩 두 개가 서든 프로필 값을 공유해도 사용자가 고른 모드로 기록해야 한다.
-        matched = (prev_mode == mode) or (prev_mode is None and value_match)
+        # v2.0.5 — 라플·스나 팩은 서든 프로필 값이 같아 같은 설정이다.
+        # 예전에 '스나'로 적용해 둔 PC에서 새 버튼(rifle)을 눌러도 이미 적용된 상태로 본다.
+        matched = (prev_mode == mode) or (prev_mode in PACK_MODES and mode in PACK_MODES) \
+            or (prev_mode is None and value_match)
         if matched:
             merged = self._merge_stairfix()
             after_blob = self.live_blob()
@@ -486,7 +491,7 @@ class DrsManager:
                     "profile_items": drs.profile_items(after_blob),
                     "checklist": drs.checklist_state(after_blob),
                     "unchanged_reason": _readiness(after_blob, [], [], mode),
-                    "message": f"{MODES[mode]}이 이미 적용되어 있습니다"}
+                    "message": f"{MODES[mode]}가 이미 적용되어 있습니다"}
 
         backup = self._make_backup(f"{MODES[mode]} 적용 전", self.current_mode())
         patched, report = drs.apply_profile_values(live, pack_values)
