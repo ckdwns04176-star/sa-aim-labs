@@ -30,6 +30,13 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
+      - name: Verify overlay source marker
+        shell: pwsh
+        run: |
+          if (!(Select-String -Path "app/native_overlay.py" -Pattern 'OVERLAY_DIAG_BUILD = "class-atom-v3-20261127"')) {
+            throw "Overlay source marker is missing; refusing to build an unverified EXE."
+          }
+
       - name: Syntax check (compileall)
         shell: pwsh
         run: python -m compileall -q app main.py
@@ -64,7 +71,6 @@ jobs:
 
       - name: Attach EXE to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
-        continue-on-error: true
         uses: softprops/action-gh-release@v2
         with:
           files: dist/SA_Aim_Labs.exe
