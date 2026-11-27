@@ -2841,7 +2841,18 @@ class Api:
             except Exception:  # noqa: BLE001 - 폴백 실패는 원래 메시지를 보여 준다
                 log.debug("party fallback failed", exc_info=True)
         if not rows:
-            return {**scan, "message": scan.get("message") or "대기실 닉네임을 읽지 못했습니다"}
+            # OCR 및 직전 경기 API 폴백이 모두 실패해도 Insert 오버레이 창은 표시한다.
+            # 빈 슬롯으로 화면을 열어 사용자가 인식 실패 여부를 확인할 수 있게 한다.
+            rows = [
+                {"slot": i, "name": "", "status": "empty", "score": 0.0}
+                for i in range(5)
+            ]
+            scan = {
+                **scan,
+                "rows": rows,
+                "names": [],
+                "message": scan.get("message") or "닉네임을 읽지 못했습니다 · 대기실 화면을 확인해 주세요",
+            }
         payload = self._party_overlay_payload(rows)
         shown = self._overlay.show("party", payload, rect=overlay.party_overlay_rect(overlay.game_area()),
                                    seconds=settings.get("party_seconds"))
