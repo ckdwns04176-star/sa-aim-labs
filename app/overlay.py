@@ -346,20 +346,46 @@ class OverlayHub:
         self.set_payload(kind, payload)
         spec = spec_for(kind, payload, rect)
         try:
+            # 창 생성/갱신/표시를 한 임계 구역으로 묶어 같은 kind 의 단축키·토스트
+            # 호출이 겹쳐도 중복 HWND 가 생기거나 한 창 참조를 덮어쓰지 않게 한다.
             with self._lock:
                 window = self._windows.get(kind)
-            if window is None:
-                window = native_overlay.make_window(kind, TITLES[kind], self._window_factory)
-                if not window.create(rect, spec):
-                    message = getattr(window, "error", None) or "오버레이 창을 만들지 못했습니다"
+                is_new = window is None
+                if window is None:
+                    window = native_overlay.make_window(kind, TITLES[kind], self._window_factory)
+                    if not window.create(rect, spec):
+                        message = getattr(window, "error", None) or "오버레이 창을 만들지 못했습니다"
+                        self.last_error = message
+                        try:
+                            window.destroy()
+                        except Exception:  # noqa: BLE001
+                            pass
+                        return {"ok": False, "supported": True, "message": message}
+                elif not window.update(spec):
+                    message = getattr(window, "error", None) or "오버레이 내용을 갱신하지 못했습니다"
                     self.last_error = message
+                    self._windows.pop(kind, None)
+                    self._cancel(kind)
+                    try:
+                        window.destroy()
+                    except Exception:  # noqa: BLE001
+                        pass
                     return {"ok": False, "supported": True, "message": message}
-                with self._lock:
+
+                if not window.show(rect):
+                    message = getattr(window, "error", None) or "오버레이 창을 표시하지 못했습니다"
+                    self.last_error = message
+                    if not is_new:
+                        self._windows.pop(kind, None)
+                        self._cancel(kind)
+                    try:
+                        window.destroy()
+                    except Exception:  # noqa: BLE001
+                        pass
+                    return {"ok": False, "supported": True, "message": message}
+                if is_new:
                     self._windows[kind] = window
-                self.created += 1
-            else:
-                window.update(spec)
-            window.show(rect)
+                    self.created += 1
         except Exception as exc:  # noqa: BLE001 - 오버레이 실패는 앱을 막지 않는다
             log.exception("overlay %s could not open", kind)
             self.last_error = str(exc)
