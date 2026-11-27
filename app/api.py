@@ -3075,10 +3075,29 @@ def _sample_plan() -> dict[str, Any]:
 
 
 def _sample_scout_rows() -> list[dict[str, Any]]:
-    return [
-        {"name": "적팀1", "badge": "스나 · 이 맵 64% · KD 61%", "weapon": "스나", "map_win": 64, "kd": 61},
-        {"name": "적팀2", "badge": "라플 · 이 맵 48% · KD 54%", "weapon": "라플", "map_win": 48, "kd": 54},
-        {"name": "적팀3", "badge": "스나 · 이 맵 71% · KD 66%", "weapon": "스나", "map_win": 71, "kd": 66},
-        {"name": "적팀4", "badge": "스나 · 전체 55% · KD 58%", "weapon": "스나", "win": 55, "kd": 58},
-        {"name": "적팀5", "badge": "라플 · 이 맵 44% · KD 49%", "weapon": "라플", "map_win": 44, "kd": 49},
-    ]
+    """오버레이 '상대 분석' 미리보기용 — 실제 응답과 같은 솔로/파티 구조."""
+    from . import scouting as _sc
+
+    rows: list[dict[str, Any]] = []
+    spec = [("적팀1", "스나", "별레전드", 3610, 57.1, 61.2, "그랜드마스터 III", 3400, 48.3, 55.0),
+            ("적팀2", "라플", "그랜드마스터 II", 3240, 44.0, 52.9, "마스터 I", 2500, 51.0, 58.0),
+            ("적팀3", "스나", "그랜드마스터 II", 3261, 55.0, 63.0, "언랭크", 0, None, None),
+            ("적팀4", "스나", "불레전드", 3720, 52.0, 58.0, "레전드", 3600, 46.0, 54.0),
+            ("적팀5", "라플", "마스터 III", 2900, 47.0, 49.0, "골드 I", 1900, 53.0, 56.0)]
+    for name, weapon, solo_t, solo_rp, solo_w, solo_kd, party_t, party_rp, party_w, party_kd in spec:
+        row = {
+            "name": name, "clan": "", "weapon": weapon,
+            "solo": solo_rp, "solo_tier": solo_t,
+            "party": party_rp or None, "party_tier": party_t if party_rp else "언랭크",
+            "solo_stats": {"tier": solo_t, "rp": solo_rp, "win": solo_w, "kd": solo_kd,
+                           "games": 12, "short": _sc.short_tier(solo_t)},
+            "party_stats": {"tier": party_t if party_rp else "", "rp": party_rp, "win": party_w,
+                            "kd": party_kd, "games": 8 if party_rp else 0,
+                            "short": _sc.short_tier(party_t) if party_rp else "언랭"},
+            "kd": solo_kd, "win": solo_w,
+            "badge": "", "error": None,
+        }
+        row["badge"] = _sc.badge_text({**row, "solo_stats": {"games": 12, "win": solo_w, "kd": solo_kd},
+                                       "party_stats": {"games": 8 if party_rp else 0, "win": party_w, "kd": party_kd}})
+        rows.append(row)
+    return rows
