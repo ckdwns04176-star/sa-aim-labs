@@ -598,8 +598,8 @@ def _render_gdiplus(gp: _GdiPlus, bitmap: _Bitmap, prims: Sequence[dict[str, Any
         gp.set_smoothing(graphics, 4)       # SmoothingModeAntiAlias
         gp.set_text_aa(graphics, 3)         # TextRenderingHintClearTypeGridFit → 4? use AntiAlias
         family = ctypes.c_void_p()
-        if gp.create_family(ctypes.byref(family), FONT, None) != 0:
-            gp.create_family(ctypes.byref(family), FONT_FALLBACK, None)
+        if gp.create_family(FONT, None, ctypes.byref(family)) != 0:
+            gp.create_family(FONT_FALLBACK, None, ctypes.byref(family))
 
         def brush(color: int) -> Any:
             out = ctypes.c_void_p()
@@ -672,7 +672,7 @@ def _render_gdiplus(gp: _GdiPlus, bitmap: _Bitmap, prims: Sequence[dict[str, Any
 def _rounded_path(gp: _GdiPlus, x: float, y: float, w: float, h: float, radius: float) -> Any:
     r = max(1.0, min(radius, min(w, h) / 2))
     path = ctypes.c_void_p()
-    gp.create_path(ctypes.byref(path), 0)
+    gp.create_path(0, ctypes.byref(path))
     gp.add_arc(path, x, y, r * 2, r * 2, 180, 90)
     gp.add_arc(path, x + w - r * 2, y, r * 2, r * 2, 270, 90)
     gp.add_arc(path, x + w - r * 2, y + h - r * 2, r * 2, r * 2, 0, 90)
