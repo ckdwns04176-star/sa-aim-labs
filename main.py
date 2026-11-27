@@ -366,7 +366,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception:  # noqa: BLE001 - 감시 실패가 앱 시작을 막지 않는다
         log.debug("match auto refresh could not start", exc_info=True)
 
-    # ── v1.0.0 · 인게임 오버레이 단축키(F8/F9) · 경기 종료 토스트 감시 ──
+    # ── 인게임 오버레이 단축키(기본 Insert/Home) · 경기 종료 토스트 감시 ──
     try:
         overlay_state = api.start_overlays()
         log.info("overlays · %s", overlay_state)

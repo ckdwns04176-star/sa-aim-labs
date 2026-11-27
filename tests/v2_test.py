@@ -260,7 +260,7 @@ def test_insights() -> None:
     guides = insights.map_guides(maps[:2])
     check("맵 가이드: 2개", len(guides) == 2 and guides[0]["youtube"]["url"].startswith("https://"))
     band = insights.band_of(3261)
-    check("RP 3261 → 그랜드마스터", band["n"] == "그랜드마스터", str(band))
+    check("RP 3261 → 그랜드마스터 II", band["n"] == "그랜드마스터 II", str(band))
 
 
 # ======================================================================
@@ -572,6 +572,406 @@ def test_ui() -> list[str]:
 
 
 # ======================================================================
+# 11. v2.0.1 — 단축키 · Win32 64비트 · 스카우팅 · 티어 마크 · 보안 3종
+# ======================================================================
+def test_v201_hotkeys() -> None:
+    from app import overlay
+    from app.store import Store
+
+    tmp = Path(tempfile.mkdtemp(prefix="sa_hot_"))
+    store = Store(tmp / "data.json")
+    check("단축키 기본값: 대기실 Insert", store.settings["overlay_hotkey_lobby"] == "Insert",
+          store.settings.get("overlay_hotkey_lobby"))
+    check("단축키 기본값: 스카우팅 Home", store.settings["overlay_hotkey_scout"] == "Home",
+          store.settings.get("overlay_hotkey_scout"))
+    check("오버레이 DEFAULT_HOTKEYS", overlay.DEFAULT_HOTKEYS == {"lobby": "Insert", "scout": "Home"},
+          str(overlay.DEFAULT_HOTKEYS))
+    check("clean_hotkey 기본값 Insert", overlay.clean_hotkey("", "Insert") == "Insert")
+
+    legacy = tmp / "legacy.json"
+    legacy.write_text(json.dumps({"settings": {"overlay_hotkey_lobby": "F8", "overlay_hotkey_scout": "F9"}}),
+                      encoding="utf-8")
+    migrated = Store(legacy)
+    check("F8/F9 데이터 → Insert/Home 이전",
+          migrated.settings["overlay_hotkey_lobby"] == "Insert"
+          and migrated.settings["overlay_hotkey_scout"] == "Home",
+          f'{migrated.settings["overlay_hotkey_lobby"]}/{migrated.settings["overlay_hotkey_scout"]}')
+
+    custom = tmp / "custom.json"
+    custom.write_text(json.dumps({"settings": {"overlay_hotkey_lobby": "F10", "overlay_hotkey_scout": "Ctrl+Insert"}}),
+                      encoding="utf-8")
+    kept = Store(custom)
+    check("직접 고른 단축키는 유지",
+          kept.settings["overlay_hotkey_lobby"] == "F10" and kept.settings["overlay_hotkey_scout"] == "Ctrl+Insert",
+          f'{kept.settings["overlay_hotkey_lobby"]}/{kept.settings["overlay_hotkey_scout"]}')
+
+    ui = (ROOT / "ui" / "index.html").read_text(encoding="utf-8") + (ROOT / "ui" / "bridge.js").read_text(encoding="utf-8")
+    check("UI: 오버레이 안내에 Insert/Home", "Insert" in ui and "Home" in ui)
+    api_src = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
+    check("api: 기본 단축키 Insert/Home",
+          'clean_hotkey(set_.get("overlay_hotkey_lobby"), "Insert")' in api_src
+          and 'clean_hotkey(set_.get("overlay_hotkey_scout"), "Home")' in api_src)
+
+
+def test_v201_win32() -> None:
+    src = (ROOT / "app" / "native_overlay.py").read_text(encoding="utf-8")
+    for name in ("GetModuleHandleW", "RegisterClassExW", "CreateWindowExW", "DefWindowProcW",
+                 "SetWindowPos", "UpdateLayeredWindow", "GetWindowRect", "DrawTextW"):
+        check(f"native_overlay: {name} argtypes 지정", f"sig(u.{name}" in src or f"sig(k.{name}" in src, "")
+    check("native_overlay: 64비트 핸들 restype", "c_void_p" in src and "c_ssize_t" in src)
+    check("native_overlay: GetLastError 코드 표기",
+          "error_text" in src and "last_error" in src and "GetLastError" in src)
+    check("native_overlay: windll 직접 호출 제거",
+          "ctypes.windll.user32" not in src and "ctypes.windll.kernel32" not in src)
+    check("native_overlay: DIB 비트 주소로 clear", "self._bits" in src and "memset(self._bits" in src)
+    # GDI 폴백도 같은 서명을 쓴다
+    check("native_overlay: GDI 폴백이 서명된 gdi32 사용", "_render_gdi" in src)
+
+
+def test_v201_scouting() -> None:
+    from app import native_overlay, scouting, v140
+
+    class Fake:
+        def __init__(self) -> None:
+            self.detail_calls = 0
+            self.calls = 0
+
+        def resolve_ouid(self, name):
+            self.calls += 1
+            if name.lower() in ("ace", "sniper", "rifle"):
+                return "ouid-" + name.lower()
+            from app.nexon import NexonError
+            raise NexonError("없음")
+
+        def user_basic(self, ouid):
+            self.calls += 1
+            return {"user_name": ouid.replace("ouid-", ""), "clan_name": "리드"}
+
+        def user_tier(self, ouid):
+            self.calls += 1
+            if ouid == "ouid-ace":
+                return {"solo_rank_match_score": 3610, "solo_rank_match_tier": "HIGH RANKER",
+                        "party_rank_match_score": 3410, "party_rank_match_tier": "LEGEND"}
+            return {"solo_rank_match_score": 3240, "solo_rank_match_tier": "GRAND MASTER II",
+                    "party_rank_match_score": 0, "party_rank_match_tier": ""}
+
+        def user_recent(self, ouid):
+            self.calls += 1
+            return {"recent_sniper_rate": 61.0, "recent_assault_rate": 44.0}
+
+        def matches(self, ouid, mtype, **kw):
+            self.calls += 1
+            base = 1 if mtype.endswith("솔로") else 0
+            out = []
+            for i in range(24):
+                out.append({"match_id": f"{ouid}-{mtype}-{i}", "match_result": "1" if (i % 2) == base else "0",
+                            "kill": 12, "death": 9, "damage": 999,
+                            "date_match": f"2026-11-{20 - i % 7:02d}T10:00:00Z"})
+            return out
+
+        def match_detail(self, match_id):
+            self.detail_calls += 1
+            return {}
+
+        def match_detail_cached(self, match_id):
+            self.detail_calls += 1
+            return None
+
+    fake = Fake()
+    started = time.monotonic()
+    res = scouting.quick_scout(fake, ["ace", "sniper", "없는사람"], "이탈리아")
+    elapsed = time.monotonic() - started
+    check("스카우팅: match-detail 호출 0건", fake.detail_calls == 0, str(fake.detail_calls))
+    check("스카우팅: 빠른 응답(<1.5초)", elapsed < 1.5, f"{elapsed:.2f}s")
+    rows = res.get("rows") or []
+    check("스카우팅: 3명 행", len(rows) == 3, str(len(rows)))
+    ace = next((r for r in rows if r["name"] == "ace"), {})
+    check("스카우팅: 솔로 티어 이름", ace.get("solo_tier") == "별레전드", str(ace.get("solo_tier")))
+    check("스카우팅: 파티 티어 이름", ace.get("party_tier") == "레전드", str(ace.get("party_tier")))
+    check("스카우팅: 솔로 승률/K/D", (ace.get("solo_stats") or {}).get("win") is not None
+          and (ace.get("solo_stats") or {}).get("kd") is not None, str(ace.get("solo_stats")))
+    check("스카우팅: 파티 승률/K/D", (ace.get("party_stats") or {}).get("games") == 20
+          and (ace.get("party_stats") or {}).get("win") is not None, str(ace.get("party_stats")))
+    check("스카우팅: 데미지 항목 없음", ace.get("dmg") is None and "damage" not in ace, str(ace.keys()))
+    check("스카우팅: 배지에 솔로·파티", "솔로" in (ace.get("badge") or "") and "파티" in (ace.get("badge") or ""),
+          str(ace.get("badge")))
+    check("스카우팅: 없는 닉네임 오류 표시",
+          any(r.get("error") for r in rows if r["name"] == "없는사람"), str(rows[-1]))
+
+    # 오버레이 스펙 — 한 행에 솔로/파티 두 줄
+    spec = native_overlay.build_spec("match", {"tab": "scout", "rows": rows, "loading": False}, 576, 389)
+    texts = [p.get("text") for p in spec["prims"] if p["type"] == "text"]
+    check("오버레이: 솔로 줄 표시", any(str(t).startswith("솔로") for t in texts), str(texts[:6]))
+    check("오버레이: 파티 줄 표시", any(str(t).startswith("파티") for t in texts), str(texts[:6]))
+    check("오버레이: 데미지 표시 없음", not any("딜" in str(t) for t in texts))
+
+    # v140.scout_player — UI 경로도 상세 조회 없이 솔로/파티 분리
+    row = v140.scout_player(fake, "ace")
+    check("v140: 상세 조회 없음", fake.detail_calls == 0, str(fake.detail_calls))
+    check("v140: solo_stats/party_stats", isinstance(row.get("solo_stats"), dict)
+          and isinstance(row.get("party_stats"), dict))
+    check("v140: dmg 제거", row.get("dmg") is None)
+    check("v140: 위협도 계산", isinstance(row.get("threat"), int) and 0 <= row["threat"] <= 100, str(row.get("threat")))
+    check("v140: 스타일 설명에 딜량 없음", "딜량" not in ((row.get("style") or {}).get("desc") or ""),
+          str((row.get("style") or {}).get("desc")))
+
+
+def test_v201_tier_marks() -> None:
+    from app import insights
+
+    cases = [("별레전드", 3261, False, "solo_118"),
+             ("HIGH RANKER", 3261, False, "solo_118"),
+             ("불레전드", 3700, False, "solo_117"),
+             ("RANKER", 3700, False, "solo_117"),
+             ("레전드", 3600, False, "solo_116"),
+             ("그랜드마스터 III", 3500, False, "solo_115"),
+             ("그랜드마스터 II", 3261, False, "solo_114"),
+             ("GRAND MASTER 2", 3261, False, "solo_114"),
+             ("마스터 I", 2400, False, "solo_110"),
+             ("골드 II", 2000, False, "solo_108"),
+             ("", 0, False, "solo_100")]
+    for name, rp, party, want in cases:
+        got = insights.tier_img(name, rp, party)
+        check(f"티어 마크: {name or 'RP전용'} → {want}", got == want, got)
+    check("티어 마크: 별레전드 파티", insights.tier_img("별레전드", 3000, True) == "party_18")
+    check("티어 마크: 그마 II 파티", insights.tier_img("그랜드마스터 II", 3200, True) == "party_14")
+    check("RP 컷: 3261 = 그마 II", insights.band_of(3261)["n"] == "그랜드마스터 II", insights.band_of(3261)["n"])
+    check("RP 컷: 3600 = 레전드", insights.band_of(3600)["n"] == "레전드", insights.band_of(3600)["n"])
+    check("RP 컷: 0 = 언랭크", insights.band_of(0)["n"] == "언랭크")
+
+    state = build_state()
+    rank = (state.get("home") or {}).get("rank") or {}
+    check("state: home img = solo_114 (그마 II)", (rank.get("solo") or {}).get("img") == "solo_114",
+          str((rank.get("solo") or {}).get("img")))
+
+    html = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    for needle in ("'별레전드':['solo_118','party_18']", "'그랜드마스터 II':['solo_114','party_14']",
+                   "function tierMark(", "function tierKey("):
+        check(f"index.html: {needle[:28]}", needle in html)
+    js = (ROOT / "ui" / "bridge.js").read_text(encoding="utf-8")
+    check("bridge.js: 티어 마크 이름 우선", "tierMark(" in js and "bandImg(rp, name, party)" in js)
+
+
+def test_v201_updates() -> None:
+    from app import updates
+
+    tmp = Path(tempfile.mkdtemp(prefix="sa_upd_"))
+    payload = b"A" * (2 * 1024 * 1024)
+    import hashlib
+    good = hashlib.sha256(payload).hexdigest()
+
+    class Resp:
+        def __init__(self, data: bytes):
+            self.data, self.i = data, 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def read(self, n: int = -1):
+            if self.i >= len(self.data):
+                return b""
+            chunk = self.data[self.i:self.i + n] if n and n > 0 else self.data[self.i:]
+            self.i += len(chunk)
+            return chunk
+
+    original = updates.urllib.request.urlopen
+    try:
+        updates.urllib.request.urlopen = lambda *a, **k: Resp(payload)
+        ok = updates.download("https://example.com/SA_Aim_Labs.exe", tmp / "a.exe",
+                              expect_sha256="sha256:" + good)
+        check("업데이트: SHA256 일치 → 저장", ok.get("ok") and ok.get("verified"), str(ok)[:120])
+        bad = updates.download("https://example.com/SA_Aim_Labs.exe", tmp / "b.exe",
+                               expect_sha256="sha256:" + "0" * 64)
+        check("업데이트: SHA256 불일치 → 중단", bad.get("ok") is False, str(bad)[:120])
+        check("업데이트: 불일치 파일 삭제", not (tmp / "b.exe").exists() and not (tmp / "b.exe.part").exists())
+        prep = updates.prepare_install("https://example.com/SA_Aim_Labs.exe",
+                                       exe_path=str(tmp / "old.exe"), work_dir=str(tmp / "work"),
+                                       digest="sha256:" + "0" * 64)
+        check("업데이트: 검증 실패면 설치 중단", prep.get("ok") is False)
+        check("업데이트: 기존 실행 파일 보존", not (tmp / "old.exe").exists())
+    finally:
+        updates.urllib.request.urlopen = original
+
+    check("업데이트: digest 파싱", updates.clean_digest("sha256:" + good) == good)
+    check("업데이트: 잘못된 digest 거부", updates.clean_digest("sha1:abc") is None)
+    rel = {"assets": [{"name": "SA_Aim_Labs.exe", "digest": "sha256:" + good}]}
+    check("업데이트: 자산 digest 추출", updates.asset_digest(rel) == good)
+    check("업데이트: 교체 스크립트가 기존 exe 백업", ".bak" in updates.swap_script("C:/x/SA_Aim_Labs.exe", "C:/y/SA_Aim_Labs.exe"))
+
+
+def test_ui_v201() -> None:
+    """v2.0.1 — 실제 클릭으로 홈·설정·닫기 팝업·6개 레일 메뉴·로그인 안내·XSS 확인."""
+    from playwright.sync_api import sync_playwright
+
+    state = build_state(signed_in=False)
+    state["digest"]["show"] = False
+    state["onboarding"] = {"needed": False}
+    state["account"] = {**(state.get("account") or {}), "signed_in": False}
+    payload = '<img src=x onerror="window.__XSS=1">'
+    state["leaderboard"][1]["name"] = payload
+    state["leaderboard"][1]["clan"] = payload
+    shots: list[str] = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=["--no-sandbox"])
+        page = browser.new_page(viewport={"width": 1200, "height": 750})
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("console", lambda msg: errors.append("console:" + msg.text) if msg.type == "error" else None)
+        page.add_init_script(mock_js(state))
+        page.goto((ROOT / "ui" / "index.html").as_uri())
+        page.wait_for_selector("#app-splash", state="hidden", timeout=20000)
+        page.wait_for_timeout(1400)
+
+        check("UI: 부팅 오류 없음(v2.0.1)", not errors, str(errors[:3]))
+        login_open = page.evaluate("()=>document.getElementById('auth-mask').classList.contains('show')")
+        check("UI: 미로그인 → 로그인 모달 자동", login_open is True)
+        page.evaluate("()=>document.querySelector('#auth-mask [data-close]').click()")
+        page.wait_for_timeout(200)
+        check("UI: 로그인 모달 닫힘",
+              page.evaluate("()=>document.getElementById('auth-mask').classList.contains('show')") is False)
+
+        nav_count = page.eval_on_selector_all(".nav-item", "els=>els.length")
+        check("UI: 레일 메뉴 6개", nav_count == 6, str(nav_count))
+        check("UI: 전술 도구 단일 메뉴 없음",
+              page.eval_on_selector_all('.nav-item[data-screen="utils"]', "els=>els.length") == 0)
+        for name, want_screen, want_tab in (("barracks", "s-barracks", None), ("maps", "s-maps", None),
+                                            ("leaderboard", "s-leaderboard", None),
+                                            ("scout", "s-utils", "scout"), ("duo", "s-utils", "duo"),
+                                            ("system", "s-utils", "system")):
+            page.click(f'.nav-item[data-screen="{name}"]')
+            page.wait_for_timeout(320)
+            screen = page.evaluate("()=>{const s=document.querySelector('.screen:not([hidden])');return s?s.id:'NONE'}")
+            check(f"UI: {name} 클릭 → {want_screen}", screen == want_screen, screen)
+            if want_tab:
+                tab = page.evaluate("()=>{const b=document.querySelector('#util-tabs button.on');return b?b.dataset.utilTab:'-'}")
+                check(f"UI: {name} 탭 활성({want_tab})", tab == want_tab, tab)
+                active = page.evaluate(f"()=>document.querySelector('.nav-item[data-screen=\"{name}\"]').classList.contains('on')")
+                check(f"UI: {name} 메뉴 active", active is True)
+                pane = page.evaluate(f"()=>!document.getElementById('util-pane-{want_tab}').hidden")
+                check(f"UI: {name} 패널 표시", pane is True)
+        page.screenshot(path=str(SHOTS / "v201-utils-scout.png"))
+
+        page.click("#rail-home")
+        page.wait_for_timeout(320)
+        home = page.evaluate("()=>{const s=document.querySelector('.screen:not([hidden])');return s?s.id:'NONE'}")
+        check("UI: 홈 버튼 → 홈 화면", home == "s-home", home)
+
+        page.click("#settings-btn")
+        page.wait_for_timeout(400)
+        check("UI: 설정 버튼 → 설정 모달",
+              page.evaluate("()=>document.getElementById('settings-mask').classList.contains('show')") is True)
+        check("UI: 설정 닉네임 칸 보임",
+              page.evaluate("()=>{const e=document.getElementById('set-nick');const r=e.getBoundingClientRect();return r.width>0&&r.height>0}") is True)
+        page.fill("#set-nick", "휴가중.")
+        page.click('[data-act="save-nick"]')
+        page.wait_for_timeout(500)
+        calls = page.evaluate("()=>window.__CALLS.map(c=>c[0])")
+        check("UI: 닉네임 저장 → save_settings", "save_settings" in calls, str(calls[-3:]))
+        page.evaluate("()=>document.getElementById('settings-mask').classList.remove('show')")
+
+        page.click("#win-close")
+        page.wait_for_timeout(250)
+        check("UI: X → 닫기 확인 팝업",
+              page.evaluate("()=>document.getElementById('close-mask').classList.contains('show')") is True)
+        page.click("#close-to-tray")
+        page.wait_for_timeout(300)
+        calls = page.evaluate("()=>window.__CALLS.map(c=>c[0])")
+        check("UI: '트레이로 숨기기' → tray_hide", "tray_hide" in calls, str(calls[-3:]))
+        page.click("#win-close")
+        page.wait_for_timeout(200)
+        page.click("#close-quit")
+        page.wait_for_timeout(300)
+        calls = page.evaluate("()=>window.__CALLS.map(c=>c[0])")
+        check("UI: '프로그램 종료' → close_window", "close_window" in calls, str(calls[-3:]))
+
+        # 오버레이 미리보기 버튼 (스카우팅 패널)
+        page.click('.nav-item[data-screen="scout"]')
+        page.wait_for_timeout(300)
+        page.click("#pane-ov-scout")
+        page.wait_for_timeout(300)
+        calls = page.evaluate("()=>window.__CALLS.map(c=>c[0])")
+        check("UI: 오버레이 미리보기 호출", "overlay_preview" in calls, str(calls[-3:]))
+        label = page.eval_on_selector("#pane-ov-sub", "e=>e.textContent")
+        check("UI: 패널 단축키 Insert/Home", "Insert" in label and "Home" in label, label)
+
+        # XSS — 닉네임/클랜에 태그를 넣어도 실행되지 않는다
+        page.evaluate("()=>document.querySelectorAll('.screen').forEach(s=>{s.hidden=(s.id!=='s-leaderboard')}); if(window.drawLeaderboard) drawLeaderboard();")
+        page.wait_for_timeout(300)
+        xss = page.evaluate("()=>window.__XSS")
+        check("UI: 순위표 XSS 미실행", xss is None, str(xss))
+        literal = page.evaluate("()=>document.getElementById('lb-rows').innerText.includes('<img')")
+        check("UI: 닉네임이 글자로 표시", literal is True)
+        page.screenshot(path=str(SHOTS / "v201-leaderboard-xss.png"))
+
+        page.click('.nav-item[data-screen="scout"]')
+        page.wait_for_timeout(250)
+        page.click("#util-scout")
+        page.wait_for_timeout(250)
+        page.fill("#scout-nicks", "상대에이스")
+        page.click("#scout-run")
+        page.wait_for_timeout(700)
+        rows = page.eval_on_selector_all("#scout-table .scout-row", "els=>els.length")
+        check("UI: 스카우팅 표 렌더(헤더+1행)", rows >= 2, str(rows))
+        cells = page.evaluate("()=>[...document.querySelectorAll('#scout-table .mc')].map(e=>e.innerText)")
+        check("UI: 솔로/파티 칸 분리", len(cells) >= 2 and "승률" in cells[0], str(cells[:2]))
+        check("UI: 스카우팅 데미지 열 없음",
+              page.evaluate("()=>!document.getElementById('scout-table').innerText.includes('딜량')") is True)
+        page.screenshot(path=str(SHOTS / "v201-scout.png"))
+        shots.append("v201-scout.png")
+        check("UI: v2.0.1 클릭 테스트 오류 없음", not errors, str(errors[:3]))
+        browser.close()
+    return shots
+
+
+def test_v201_backup() -> None:
+    from app.store import Store
+
+    tmp = Path(tempfile.mkdtemp(prefix="sa_bak_"))
+    store = Store(tmp / "data.json")
+    store.update_settings({"nickname": "지킴이"})
+    good = store.export_backup(tmp / "good.json")
+    check("백업: 내보내기", good.exists())
+    store.import_backup(good)
+    check("백업: 정상 파일 복원", store.settings.get("nickname") == "지킴이")
+
+    before = json.dumps(store.data.get("leaderboard"), ensure_ascii=False)
+    cases = {
+        "목록": "[]",
+        "빈 객체": "{}",
+        "settings 배열": '{"settings": []}',
+        "leaderboard 행": '{"leaderboard": [1, 2]}',
+        "더 새로운 버전": '{"version": 99, "settings": {}}',
+        "version 문자": '{"version": "abc", "settings": {}}',
+        "깊은 구조": json.dumps({"settings": {}, "x": [[[[[[[[[[[[[[1]]]]]]]]]]]]]]}),
+    }
+    for label, content in cases.items():
+        f = tmp / f"bad_{abs(hash(label))}.json"
+        f.write_text(content, encoding="utf-8")
+        try:
+            store.import_backup(f)
+            check(f"백업: 비정상({label}) 거부", False, "예외 없음")
+        except ValueError:
+            check(f"백업: 비정상({label}) 거부", True)
+        except Exception as exc:  # noqa: BLE001
+            check(f"백업: 비정상({label}) 거부", False, type(exc).__name__)
+        check(f"백업: 비정상({label}) 후 데이터 유지",
+              json.dumps(store.data.get("leaderboard"), ensure_ascii=False) == before
+              and store.settings.get("nickname") == "지킴이")
+
+    big = tmp / "big.json"
+    with open(big, "wb") as fh:
+        fh.write(b"{" + b" " * (21 * 1024 * 1024) + b"}")
+    try:
+        store.import_backup(big)
+        check("백업: 20MB 초과 거부", False)
+    except ValueError as exc:
+        check("백업: 20MB 초과 거부", "너무 큽" in str(exc), str(exc)[:40])
+
+
+# ======================================================================
 # 11. 코드에 에임 연습 코드가 남아 있지 않은지
 # ======================================================================
 def test_code_clean() -> None:
@@ -588,13 +988,21 @@ def test_code_clean() -> None:
 
 def main() -> int:
     for fn in (test_nvapi, test_store, test_auth, test_insights, test_duo, test_ocr,
-               test_scouting, test_overlay, test_api, test_code_clean):
+               test_scouting, test_overlay, test_api,
+               test_v201_hotkeys, test_v201_win32, test_v201_scouting, test_v201_tier_marks,
+               test_v201_updates, test_v201_backup, test_code_clean):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001
             import traceback
             traceback.print_exc()
             check(f"{fn.__name__} 실행", False, str(exc))
+    try:
+        test_ui_v201()
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        check("test_ui_v201 실행", False, str(exc))
     try:
         shots = test_ui()
         print("screenshots:", len(shots))

@@ -668,13 +668,18 @@ def leaderboard_payload(members: Sequence[dict[str, Any]], client: NexonClient |
         solo = m.get("solo") or 0
         band = scoring.band_of(solo)
         party = m.get("party")
+        solo_tier = str(m.get("solo_tier") or "").strip() or band["n"]
+        party_band = scoring.party_band_of(party) if party else {"n": "언랭크"}
+        party_tier = str(m.get("party_tier") or "").strip() or party_band["n"]
         rows.append({
             **m,
             "solo": solo,
             "party": party,
-            "solo_tier": m.get("solo_tier") or band["n"],
-            "solo_img": band["img"],
-            "party_tier": m.get("party_tier") or (scoring.party_band_of(party)["n"] if party else "언랭크"),
+            "solo_tier": solo_tier,
+            # v2.0.1 — 아이콘은 티어 이름 우선 (별레전드 → solo_118)
+            "solo_img": scoring.tier_img(solo_tier, solo),
+            "party_img": scoring.tier_img(party_tier, party, party=True) if party else "solo_100",
+            "party_tier": party_tier,
             "unranked": solo <= 0,
             "kd": m.get("kd"),
             "dmg": m.get("dmg"),

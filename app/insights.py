@@ -22,31 +22,113 @@ from typing import Any, Iterable, Sequence
 
 UNRANKED_IMG = "solo_100"
 
-# 공식 티어 구간 (RP) — 병영수첩 CDN 의 원형 마크 번호와 1:1 로 맞춘다.
+# 공식 랭크전 티어 (2024 시즌 기준 · 17단계 + 랭커/하이 랭커)
+#   브론즈/실버/골드/마스터/그랜드마스터 각 I~III, 그 위가 레전드 · 랭커(불레전드) · 하이 랭커(별레전드).
+# 병영수첩 CDN 원형 마크 파일명은 솔로 `solo/{100~118}.png`, 파티 `party/{10~18}.png` 이고
+#   solo_100 = 언랭크/미참여, 101~103 브론즈 I~III, 104~106 실버, 107~109 골드,
+#   110~112 마스터, 113~115 그랜드마스터(마스터에 금색 테두리), 116 레전드(날개),
+#   117 랭커(불), 118 하이 랭커(별).
+# 파티는 마스터 등급부터 party_10~18 이 따로 있고, 그 아래는 같은 티어의 솔로 마크를 쓴다.
 SOLO_BANDS: list[dict[str, Any]] = [
     {"min": 0, "n": "언랭크", "img": UNRANKED_IMG},
-    {"min": 1, "n": "브론즈", "img": "solo_101"},
-    {"min": 1000, "n": "실버", "img": "solo_103"},
-    {"min": 1400, "n": "골드", "img": "solo_105"},
-    {"min": 1800, "n": "플래티넘", "img": "solo_107"},
-    {"min": 2200, "n": "다이아몬드", "img": "solo_109"},
-    {"min": 2600, "n": "마스터", "img": "solo_111"},
-    {"min": 3000, "n": "그랜드마스터", "img": "solo_113"},
-    {"min": 3400, "n": "불레전드", "img": "solo_115"},
-    {"min": 3700, "n": "별레전드", "img": "solo_117"},
+    {"min": 1, "n": "브론즈 I", "img": "solo_101"},
+    {"min": 800, "n": "브론즈 II", "img": "solo_102"},
+    {"min": 1000, "n": "브론즈 III", "img": "solo_103"},
+    {"min": 1200, "n": "실버 I", "img": "solo_104"},
+    {"min": 1400, "n": "실버 II", "img": "solo_105"},
+    {"min": 1600, "n": "실버 III", "img": "solo_106"},
+    {"min": 1800, "n": "골드 I", "img": "solo_107"},
+    {"min": 2000, "n": "골드 II", "img": "solo_108"},
+    {"min": 2200, "n": "골드 III", "img": "solo_109"},
+    {"min": 2400, "n": "마스터 I", "img": "solo_110"},
+    {"min": 2600, "n": "마스터 II", "img": "solo_111"},
+    {"min": 2800, "n": "마스터 III", "img": "solo_112"},
+    {"min": 3000, "n": "그랜드마스터 I", "img": "solo_113"},
+    {"min": 3200, "n": "그랜드마스터 II", "img": "solo_114"},
+    {"min": 3400, "n": "그랜드마스터 III", "img": "solo_115"},
+    {"min": 3600, "n": "레전드", "img": "solo_116"},
 ]
+# 파티 랭크는 상위 등급(마스터~)만 따로 마크가 있다. 그 아래는 같은 티어의 솔로 마크를 쓴다.
 PARTY_BANDS: list[dict[str, Any]] = [
     {"min": 0, "n": "언랭크", "img": UNRANKED_IMG},
-    {"min": 1, "n": "브론즈", "img": "party_10"},
-    {"min": 1300, "n": "실버", "img": "party_11"},
-    {"min": 1700, "n": "골드", "img": "party_12"},
-    {"min": 2100, "n": "플래티넘", "img": "party_13"},
-    {"min": 2500, "n": "다이아몬드", "img": "party_14"},
-    {"min": 2900, "n": "마스터", "img": "party_15"},
-    {"min": 3300, "n": "그랜드마스터", "img": "party_16"},
-    {"min": 3600, "n": "불레전드", "img": "party_17"},
-    {"min": 3900, "n": "별레전드", "img": "party_18"},
+    {"min": 1, "n": "브론즈 I", "img": "solo_101"},
+    {"min": 800, "n": "브론즈 II", "img": "solo_102"},
+    {"min": 1000, "n": "브론즈 III", "img": "solo_103"},
+    {"min": 1200, "n": "실버 I", "img": "solo_104"},
+    {"min": 1400, "n": "실버 II", "img": "solo_105"},
+    {"min": 1600, "n": "실버 III", "img": "solo_106"},
+    {"min": 1800, "n": "골드 I", "img": "solo_107"},
+    {"min": 2000, "n": "골드 II", "img": "solo_108"},
+    {"min": 2200, "n": "골드 III", "img": "solo_109"},
+    {"min": 2400, "n": "마스터 I", "img": "party_10"},
+    {"min": 2600, "n": "마스터 II", "img": "party_11"},
+    {"min": 2800, "n": "마스터 III", "img": "party_12"},
+    {"min": 3000, "n": "그랜드마스터 I", "img": "party_13"},
+    {"min": 3200, "n": "그랜드마스터 II", "img": "party_14"},
+    {"min": 3400, "n": "그랜드마스터 III", "img": "party_15"},
+    {"min": 3600, "n": "레전드", "img": "party_16"},
 ]
+
+# 티어 이름 → 파일명 (이름이 있으면 RP 보다 이름을 먼저 믿는다)
+_TIER_IMG = {
+    "언랭크": (UNRANKED_IMG, UNRANKED_IMG),
+    "브론즈 I": ("solo_101", "solo_101"), "브론즈 II": ("solo_102", "solo_102"),
+    "브론즈 III": ("solo_103", "solo_103"),
+    "실버 I": ("solo_104", "solo_104"), "실버 II": ("solo_105", "solo_105"),
+    "실버 III": ("solo_106", "solo_106"),
+    "골드 I": ("solo_107", "solo_107"), "골드 II": ("solo_108", "solo_108"),
+    "골드 III": ("solo_109", "solo_109"),
+    "마스터 I": ("solo_110", "party_10"), "마스터 II": ("solo_111", "party_11"),
+    "마스터 III": ("solo_112", "party_12"),
+    "그랜드마스터 I": ("solo_113", "party_13"), "그랜드마스터 II": ("solo_114", "party_14"),
+    "그랜드마스터 III": ("solo_115", "party_15"),
+    "레전드": ("solo_116", "party_16"),
+    "불레전드": ("solo_117", "party_17"),
+    "별레전드": ("solo_118", "party_18"),
+    "랭커": ("solo_117", "party_17"),
+    "하이 랭커": ("solo_118", "party_18"),
+    "하이랭커": ("solo_118", "party_18"),
+}
+_ROMAN = {"1": "I", "2": "II", "3": "III", "i": "I", "ii": "II", "iii": "III"}
+
+
+def tier_key(name: Any) -> str:
+    """API 티어 이름 → 표준 표기 ('GRAND MASTER 2' · '그랜드마스터 II' → '그랜드마스터 II')."""
+    text = str(name or "").strip()
+    if not text:
+        return ""
+    if all(ord(ch) < 128 for ch in text):
+        raw = " ".join(text.upper().replace("_", " ").replace("-", " ").split())
+        # 긴 이름부터 (HIGH RANKER → RANKER, GRAND MASTER → MASTER 보다 먼저)
+        families = (
+            ("HIGH RANKER", "별레전드"), ("HIGH RANK", "별레전드"), ("HIGHRANKER", "별레전드"),
+            ("RANKER", "불레전드"),
+            ("GRAND MASTER", "그랜드마스터"), ("GRANDMASTER", "그랜드마스터"),
+            ("UNRANKED", "언랭크"), ("UNRANK", "언랭크"),
+            ("BRONZE", "브론즈"), ("SILVER", "실버"), ("GOLD", "골드"),
+            ("MASTER", "마스터"), ("LEGEND", "레전드"),
+        )
+        for family, korean in families:
+            if raw.startswith(family):
+                tail = raw[len(family):].strip()
+                tail = _ROMAN.get(tail.lower(), tail.capitalize()) if tail else ""
+                return f"{korean} {tail}".strip() if tail else korean
+        return raw.title()
+    # 한국어: '그랜드마스터2' → '그랜드마스터 II'
+    for num, roman in (("3", "III"), ("2", "II"), ("1", "I")):
+        if text.endswith(num) and len(text) > len(num):
+            return text[: -len(num)].rstrip() + " " + roman
+    return text
+
+
+def tier_img(name: Any, rp: int | None = None, party: bool = False) -> str:
+    """티어 이름 우선 · 없으면 RP 구간으로 마크 파일명."""
+    key = tier_key(name)
+    pair = _TIER_IMG.get(key) or _TIER_IMG.get(str(key).replace(" ", ""))
+    if pair:
+        return pair[1] if party else pair[0]
+    band = party_band_of(rp) if party else band_of(rp)
+    return str(band.get("img") or UNRANKED_IMG)
 
 
 def num(value: Any, default: float | None = None) -> float | None:

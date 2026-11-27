@@ -1855,7 +1855,7 @@ th.sortable.on .ar{opacity:1;color:var(--ac)}
 .scout-sum .sc span{font-size:8.5px;font-weight:800;color:#71829A;letter-spacing:.05em;display:block}
 .scout-sum .sc b{font-family:var(--num);font-size:15px;color:var(--txt)}
 .scout-sum .sc.hl{border-color:var(--ac40);background:var(--ac06)}
-.scout-row{display:grid;grid-template-columns:minmax(0,1.1fr) 92px 92px 62px 66px 58px 56px;gap:7px;align-items:center;
+.scout-row{display:grid;grid-template-columns:minmax(0,1.05fr) 152px 152px 72px 62px;gap:8px;align-items:center;
   padding:7px 9px;border-radius:8px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.12)}
 .scout-row.hd{background:none;border:0;padding:0 9px 2px}
 .scout-row.hd span{font-size:8px;font-weight:800;color:#6E7F95;letter-spacing:.04em;text-align:right}
@@ -1863,6 +1863,10 @@ th.sortable.on .ar{opacity:1;color:var(--ac)}
 .scout-row .nm{font-size:11.5px;font-weight:800;color:var(--txt);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .scout-row .nm small{display:block;font-size:8.5px;color:var(--txt2);font-weight:600}
 .scout-row .v{font-family:var(--num);font-size:11px;font-weight:700;color:#C7D3E4;text-align:right;white-space:nowrap}
+.scout-row .v.mc{display:flex;flex-direction:column;align-items:flex-end;gap:1px;line-height:1.25}
+.scout-row .v.mc b{font-size:9.6px;font-weight:800;color:#E7EEF9;white-space:nowrap}
+.scout-row .v.mc i{font-family:'Pretendard',sans-serif;font-style:normal;font-size:8.6px;font-weight:700;color:#9FB0C6;white-space:nowrap}
+.scout-row .v.mc em{font-family:'Pretendard',sans-serif;font-style:normal;font-size:7.8px;font-weight:700;color:#6E7F95}
 .scout-row .th{height:20px;border-radius:5px;display:inline-flex;align-items:center;justify-content:center;
   font-size:9px;font-weight:800;font-family:var(--num)}
 .scout-row .th.hot{color:#FFD7D5;background:rgba(239,68,68,.14);border:1px solid rgba(239,68,68,.34)}
@@ -2070,7 +2074,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
    v1.5.0 · 전술 도구 · 파티 맵 밴·픽
    ============================================================ */
 .tac-pane{display:flex;flex-direction:column;gap:10px;flex:1;min-height:0}
-.tac-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;flex:0 0 96px}
+.tac-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;flex:0 0 96px}
 .tac-card{padding:11px 13px;display:flex;flex-direction:column;justify-content:space-between}
 .tac-hd{display:flex;align-items:center;gap:10px;min-width:0}
 .tac-ic{width:32px;height:32px;flex:0 0 32px;border-radius:9px;display:grid;place-items:center;
@@ -2189,7 +2193,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
 #util-tabs{margin-bottom:2px}
 #s-utils .head{height:auto;flex:0 0 auto}
 #s-utils .head .sub{display:flex}
-.tac-pane #util-recent{flex:0 1 auto;min-height:120px;max-height:290px;display:flex;flex-direction:column}
+.tac-pane #util-recent{flex:1 1 auto;min-height:120px;max-height:none;display:flex;flex-direction:column}
 .tac-pane .tac-party{flex:1 1 auto;min-height:0}
 .tac-pane #util-recent>div:last-child{flex:1;min-height:0;overflow:auto}
 
@@ -2678,7 +2682,9 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
         <button class="nav-item" data-screen="maps" title="맵·약점 분석"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#i-map"/></svg><span class="ni-t">맵·약점</span></button>
         <button class="nav-item" data-screen="leaderboard" title="친구·클랜 순위표"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><use href="#i-flag"/></svg><span class="ni-t">순위표</span></button>
         <div class="rail-sep"></div>
-        <button class="nav-item" data-screen="utils" title="전술 도구 · 최적화"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-sliders"/></svg><span class="ni-t">전술 도구</span></button>
+        <button class="nav-item" data-screen="scout" data-util="scout" title="상대 스카우팅 · 오버레이"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-target"/></svg><span class="ni-t">스카우팅</span></button>
+        <button class="nav-item" data-screen="duo" data-util="duo" title="듀오 시너지 · 맵 밴픽"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-user"/></svg><span class="ni-t">듀오·밴픽</span></button>
+        <button class="nav-item" data-screen="system" data-util="system" title="시스템 최적화 · 백업"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><use href="#i-sliders"/></svg><span class="ni-t">최적화</span></button>
       </nav>
 
       <div class="rail-spacer"></div>
@@ -2996,24 +3002,60 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
           </div>
         </div>
 
-        <div class="mtabs" id="util-tabs" style="flex:0 0 auto;max-width:300px">
-          <button data-util-tab="tactics" class="on">전술 분석</button>
+        <div class="mtabs" id="util-tabs" style="flex:0 0 auto;max-width:420px">
+          <button data-util-tab="scout" class="on">오버레이 · 스카우팅</button>
+          <button data-util-tab="duo">듀오 · 맵 밴픽</button>
           <button data-util-tab="system">시스템 최적화</button>
         </div>
 
-        <!-- ===== 전술 분석 ===== -->
-        <div id="util-pane-tactics" class="tac-pane">
+        <!-- ===== 오버레이 · 스카우팅 ===== -->
+        <div id="util-pane-scout" class="tac-pane">
           <div class="tac-grid">
             <div class="card tac-card">
               <div class="tac-hd">
                 <span class="tac-ic"><svg viewBox="0 0 24 24"><use href="#i-target"/></svg></span>
-                <div class="tac-tx"><b>최근게임 상대분석</b><i>5:5 · 최대 6명</i></div>
+                <div class="tac-tx"><b>최근게임 상대분석</b><i>5:5 · 최대 6명 · 솔로/파티 분리</i></div>
               </div>
               <div class="tac-btns">
                 <button class="btn btn-primary" id="util-scout-auto">방금 판 불러오기</button>
                 <button class="btn btn-ghost" id="util-scout">직접 입력</button>
               </div>
             </div>
+            <div class="card tac-card">
+              <div class="tac-hd">
+                <span class="tac-ic"><svg viewBox="0 0 24 24"><use href="#i-bolt"/></svg></span>
+                <div class="tac-tx"><b>인게임 오버레이</b><i id="pane-ov-sub">Insert 대기실 · 맵 밴 / Home 상대 분석</i></div>
+              </div>
+              <div class="tac-btns">
+                <button class="btn btn-primary" id="pane-ov-scout">상대 분석 미리보기</button>
+                <button class="btn btn-ghost" id="pane-ov-party">파티 배지</button>
+                <button class="btn btn-ghost" id="pane-ov-toast">결과 토스트</button>
+                <button class="btn btn-ghost" id="pane-ov-hide">오버레이 끄기</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="card" id="util-recent" style="padding:0;overflow:hidden;flex:1;min-height:170px">
+            <div class="card-hd" style="padding:10px 14px 4px">
+              <div class="card-title" style="font-size:11.5px"><span class="bar"></span>최근 상대 팀</div>
+              <div class="card-hd-r"><span class="chip" id="util-recent-meta">최근 매치</span></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1.25fr 1fr;gap:14px;padding:0 14px 10px">
+              <div>
+                <div class="tac-sub">상대 5명 · 방금 판에서</div>
+                <div id="util-opp" class="opp-list"></div>
+              </div>
+              <div>
+                <div class="tac-sub">자주 만난 사람</div>
+                <div id="util-friends" class="fri-list"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ===== 듀오 · 맵 밴픽 ===== -->
+        <div id="util-pane-duo" class="tac-pane" hidden>
+          <div class="tac-grid">
             <div class="card tac-card">
               <div class="tac-hd">
                 <span class="tac-ic"><svg viewBox="0 0 24 24"><use href="#i-user"/></svg></span>
@@ -3071,22 +3113,6 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
             </div>
           </div>
 
-          <div class="card" id="util-recent" style="padding:0;overflow:hidden">
-            <div class="card-hd" style="padding:10px 14px 4px">
-              <div class="card-title" style="font-size:11.5px"><span class="bar"></span>최근 상대 팀</div>
-              <div class="card-hd-r"><span class="chip" id="util-recent-meta">최근 매치</span></div>
-            </div>
-            <div style="display:grid;grid-template-columns:1.25fr 1fr;gap:14px;padding:0 14px 10px">
-              <div>
-                <div class="tac-sub">상대 5명 · 방금 판에서</div>
-                <div id="util-opp" class="opp-list"></div>
-              </div>
-              <div>
-                <div class="tac-sub">자주 만난 사람</div>
-                <div id="util-friends" class="fri-list"></div>
-              </div>
-            </div>
-          </div>
         </div>
 
         <!-- ===== 시스템 최적화 ===== -->
@@ -3240,6 +3266,7 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
         </div>
         <div class="field"><label>이메일</label><input id="auth-email" class="inp" type="email" autocomplete="username" placeholder="you@example.com"></div>
         <div class="field" id="auth-pw-field"><label>비밀번호</label><input id="auth-password" class="inp" type="password" autocomplete="current-password" placeholder="6자 이상"></div>
+        <div class="mnote" id="auth-auto-note" hidden style="color:#FBD48F">처음 실행이라 로그인 안내를 띄웠습니다 · 로그인 없이도 <b>닫기</b>를 누르면 그대로 쓸 수 있습니다</div>
         <div class="mnote" id="auth-note">로그인하면 랭크전 전적·설정이 클라우드에 백업됩니다 · 지금은 무료 운영 기간이라 모든 기능을 제한 없이 씁니다</div>
       </div>
       <div class="modal-ft">
@@ -3648,47 +3675,102 @@ button.hm-chip:hover{border-color:var(--ac22);color:var(--txt)}
 
 <script>
 /* ================= DATA ================= */
-/* 서든 랭크 밴드: 200 RP 단위 (공식 랭크 안내 기준) */
+/* 공식 랭크전 17단계 + 랭커/하이 랭커 (2024 시즌 기준)
+   브론즈~그랜드마스터 I~III · 레전드 · 랭커(불레전드) · 하이 랭커(별레전드)
+   마크 파일: 솔로 assets/solo_{100~118}.png · 파티 assets/party_{10~18}.png */
 const SOLO_BANDS = [
-  {min:0, n:'브론즈 I', img:'solo_100'},
-  {min:800, n:'브론즈 II', img:'solo_101'},
-  {min:1000, n:'브론즈 III', img:'solo_102'},
-  {min:1200, n:'실버 I', img:'solo_103'},
-  {min:1400, n:'실버 II', img:'solo_104'},
-  {min:1600, n:'실버 III', img:'solo_105'},
-  {min:1800, n:'골드 I', img:'solo_106'},
-  {min:2000, n:'골드 II', img:'solo_107'},
-  {min:2200, n:'골드 III', img:'solo_108'},
-  {min:2400, n:'마스터 I', img:'solo_109'},
-  {min:2600, n:'마스터 II', img:'solo_110'},
-  {min:2800, n:'마스터 III', img:'solo_111'},
-  {min:3000, n:'그랜드마스터 I', img:'solo_112'},
-  {min:3200, n:'그랜드마스터 II', img:'solo_113'},
-  {min:3400, n:'그랜드마스터 III', img:'solo_114'},
-  {min:3600, n:'레전드', img:'solo_115'}
+  {min:0,    n:'언랭크',          img:'solo_100'},
+  {min:1,    n:'브론즈 I',        img:'solo_101'},
+  {min:800,  n:'브론즈 II',       img:'solo_102'},
+  {min:1000, n:'브론즈 III',      img:'solo_103'},
+  {min:1200, n:'실버 I',          img:'solo_104'},
+  {min:1400, n:'실버 II',         img:'solo_105'},
+  {min:1600, n:'실버 III',        img:'solo_106'},
+  {min:1800, n:'골드 I',          img:'solo_107'},
+  {min:2000, n:'골드 II',         img:'solo_108'},
+  {min:2200, n:'골드 III',        img:'solo_109'},
+  {min:2400, n:'마스터 I',        img:'solo_110'},
+  {min:2600, n:'마스터 II',       img:'solo_111'},
+  {min:2800, n:'마스터 III',      img:'solo_112'},
+  {min:3000, n:'그랜드마스터 I',  img:'solo_113'},
+  {min:3200, n:'그랜드마스터 II', img:'solo_114'},
+  {min:3400, n:'그랜드마스터 III',img:'solo_115'},
+  {min:3600, n:'레전드',          img:'solo_116'}
 ];
 function bandOf(rp){ let b=SOLO_BANDS[0]; SOLO_BANDS.forEach(x=>{ if(rp>=x.min) b=x; }); return b; }
 
-/* 랭크전 파티 = 본섭 공식 파티 티어 마크 (party_10 ~ party_16) */
+/* 랭크전 파티 = 마스터부터 party_10~18 마크, 그 아래는 같은 티어의 솔로 마크 */
 const PARTY_BANDS = [
-  {min:0,    n:'언랭크', img:'solo_100'},
-  {min:1600, n:'실버 III', img:'party_10'},
-  {min:1800, n:'골드 I', img:'party_10'},
-  {min:2000, n:'골드 II', img:'party_10'},
-  {min:2200, n:'골드 III', img:'party_10'},
-  {min:2400, n:'마스터 I', img:'party_10'},
-  {min:2600, n:'마스터 II', img:'party_11'},
-  {min:2800, n:'마스터 III', img:'party_12'},
-  {min:3000, n:'그랜드마스터 I', img:'party_13'},
+  {min:0,    n:'언랭크',          img:'solo_100'},
+  {min:1,    n:'브론즈 I',        img:'solo_101'},
+  {min:800,  n:'브론즈 II',       img:'solo_102'},
+  {min:1000, n:'브론즈 III',      img:'solo_103'},
+  {min:1200, n:'실버 I',          img:'solo_104'},
+  {min:1400, n:'실버 II',         img:'solo_105'},
+  {min:1600, n:'실버 III',        img:'solo_106'},
+  {min:1800, n:'골드 I',          img:'solo_107'},
+  {min:2000, n:'골드 II',         img:'solo_108'},
+  {min:2200, n:'골드 III',        img:'solo_109'},
+  {min:2400, n:'마스터 I',        img:'party_10'},
+  {min:2600, n:'마스터 II',       img:'party_11'},
+  {min:2800, n:'마스터 III',      img:'party_12'},
+  {min:3000, n:'그랜드마스터 I',  img:'party_13'},
   {min:3200, n:'그랜드마스터 II', img:'party_14'},
-  {min:3400, n:'그랜드마스터 III', img:'party_15'},
-  {min:3600, n:'레전드', img:'party_16'}
+  {min:3400, n:'그랜드마스터 III',img:'party_15'},
+  {min:3600, n:'레전드',          img:'party_16'}
 ];
 function partyBandOf(rp){
   if(!rp || rp<=0) return PARTY_BANDS[0];
-  let b=PARTY_BANDS[1]||PARTY_BANDS[0];
+  let b=PARTY_BANDS[0];
   PARTY_BANDS.forEach(x=>{ if(rp>=x.min) b=x; });
   return b;
+}
+
+/* 티어 이름 → 마크 파일 (이름이 있으면 RP 구간보다 이름을 먼저 믿는다) */
+const TIER_MARKS = {
+  '언랭크':['solo_100','solo_100'], '언랭':['solo_100','solo_100'],
+  '브론즈 I':['solo_101','solo_101'], '브론즈 II':['solo_102','solo_102'], '브론즈 III':['solo_103','solo_103'],
+  '실버 I':['solo_104','solo_104'], '실버 II':['solo_105','solo_105'], '실버 III':['solo_106','solo_106'],
+  '골드 I':['solo_107','solo_107'], '골드 II':['solo_108','solo_108'], '골드 III':['solo_109','solo_109'],
+  '마스터 I':['solo_110','party_10'], '마스터 II':['solo_111','party_11'], '마스터 III':['solo_112','party_12'],
+  '그랜드마스터 I':['solo_113','party_13'], '그랜드마스터 II':['solo_114','party_14'], '그랜드마스터 III':['solo_115','party_15'],
+  '레전드':['solo_116','party_16'], '불레전드':['solo_117','party_17'], '랭커':['solo_117','party_17'],
+  '별레전드':['solo_118','party_18'], '하이 랭커':['solo_118','party_18'], '하이랭커':['solo_118','party_18']
+};
+const TIER_ALIAS = {
+  'GRANDMASTER':'그랜드마스터','GRAND MASTER':'그랜드마스터','HIGH RANKER':'별레전드','HIGH RANK':'별레전드',
+  'RANKER':'불레전드','LEGEND':'레전드','UNRANKED':'언랭크','UNRANK':'언랭크',
+  'BRONZE':'브론즈','SILVER':'실버','GOLD':'골드','MASTER':'마스터'
+};
+function tierKey(name){
+  let text=String(name==null?'':name).trim();
+  if(!text) return '';
+  if(/^[\x00-\x7F]+$/.test(text)){
+    const raw=text.toUpperCase().replace(/[_-]/g,' ').replace(/\s+/g,' ').trim();
+    const fams=Object.keys(TIER_ALIAS).sort((a,b)=>b.length-a.length);
+    for(const fam of fams){
+      if(raw===fam||raw.startsWith(fam+' ')||raw.startsWith(fam)){
+        let tail=raw.slice(fam.length).trim();
+        tail=tail.replace(/^I{1,3}$/i,m=>m.toUpperCase()).replace(/^[123]$/,m=>({'1':'I','2':'II','3':'III'}[m]));
+        return tail?`${TIER_ALIAS[fam]} ${tail}`:TIER_ALIAS[fam];
+      }
+    }
+    return raw;
+  }
+  return text.replace(/([123])$/,m=>({'1':' I','2':' II','3':' III'}[m]));
+}
+/* 이름 우선 → 없으면 RP 구간 */
+function tierMark(name, rp, party){
+  const key=tierKey(name);
+  const hit=TIER_MARKS[key];
+  if(hit) return party?hit[1]:hit[0];
+  const band=party?partyBandOf(Number(rp)||0):bandOf(Number(rp)||0);
+  return band.img;
+}
+function tierNameOf(name, rp, party){
+  const key=tierKey(name);
+  if(key && TIER_MARKS[key]) return key;
+  return (party?partyBandOf(Number(rp)||0):bandOf(Number(rp)||0)).n;
 }
 
 let MAPS = [];
@@ -3835,9 +3917,9 @@ function drawLeaderboard(){
   }else{
     $('#lb-rows').innerHTML=list.map((m,idx)=>{
       const rk=idx+1;
-      const b = (m.solo>0) ? bandOf(m.solo) : UNRANKED;
-      const img = m.solo_img || b.img;
-      const tierName = m.solo_tier || b.n;
+      const b = (m.solo>0) ? bandOf(m.solo) : bandOf(0);
+      const img = tierMark(m.solo_tier, m.solo, false);
+      const tierName = tierNameOf(m.solo_tier, m.solo, false);
       const hit = m._hit ? ' is-new' : '';
       const medal = rk===1?'top1':rk===2?'top2':rk===3?'top3':'';
       const pct = v => (v===null||v===undefined) ? '—' : `${Number(v).toFixed(1)}<i>%</i>`;
@@ -3846,22 +3928,22 @@ function drawLeaderboard(){
       const memoBtn=memo
         ? `<button class="lb-memo" data-memo="${escAttr(m.name)}" title="메모: ${escAttr(memo)}">✎</button>`
         : '';
-      return `<div class="lb-row ${m.me?'me':''}${hit}" data-cmp="${m.name}" data-lbname="${escAttr(m.name)}" title="클릭 = 1:1 비교 · 우클릭 = 메모">
+      return `<div class="lb-row ${m.me?'me':''}${hit}" data-cmp="${escAttr(m.name)}" data-lbname="${escAttr(m.name)}" title="클릭 = 1:1 비교 · 우클릭 = 메모">
         <div class="lb-rank ${medal}">${rk}</div>
         <div class="lb-name">
-          <b title="${m.name}">${m.name}</b>
+          <b title="${escAttr(m.name)}">${escAttr(m.name)}</b>
           ${m.me?'<span class="lb-me">ME</span>':''}
-          <span class="lb-clan">${m.clan||'친구'}</span>
+          <span class="lb-clan">${escAttr(m.clan||'친구')}</span>
           ${memoBtn}
         </div>
         <span class="wp ${m.weapon}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><use href="${m.weapon==='rifle'?'#i-rifle':'#i-sniper'}"/></svg>${m.weapon==='rifle'?'라플 유저':'스나 유저'}</span>
         <div class="lb-tier">
-          <div class="emb"><img src="assets/${img}.png" alt="${tierName}"></div>
-          <div class="tt"><b>${tierName}</b><span>${m.solo>0?Number(m.solo).toLocaleString()+' RP':'언랭크'}</span></div>
+          <div class="emb"><img src="assets/${escAttr(img)}.png" alt="${escAttr(tierName)}"></div>
+          <div class="tt"><b>${escAttr(tierName)}</b><span>${m.solo>0?Number(m.solo).toLocaleString()+' RP':'언랭크'}</span></div>
         </div>
         <div class="lb-tier party ${lbSort==='party'?'':'dim'}">
-          <div class="emb"><img src="assets/${(m.party>0?partyBandOf(Number(m.party)):UNRANKED).img}.png" alt="${m.party_tier||''}"></div>
-          <div class="tt"><b>${m.party>0?(m.party_tier||partyBandOf(Number(m.party)).n):'언랭크'}</b><span>${m.party>0?Number(m.party).toLocaleString()+' RP':'—'}</span></div>
+          <div class="emb"><img src="assets/${escAttr(m.party>0?tierMark(m.party_tier,m.party,true):'solo_100')}.png" alt="${escAttr(m.party_tier||'')}"></div>
+          <div class="tt"><b>${escAttr(m.party>0?tierNameOf(m.party_tier,m.party,true):'언랭크')}</b><span>${m.party>0?Number(m.party).toLocaleString()+' RP':'—'}</span></div>
         </div>
         <div class="lb-num lb-kd ${lbSort==='kd'?'':'dim'}" data-kd="${m.kd==null?'':Number(m.kd)}">${pct(m.kd)}</div>
         <div class="lb-num ${lbSort==='dmg'?'':'dim'}">${num(m.dmg)}</div>
@@ -4072,10 +4154,10 @@ function restoreAll(){
 function changeRowsHtml(rows, emptyText){
   if(!rows || !rows.length) return emptyText?`<div class="empty" style="padding:14px">${emptyText}</div>`:'';
   return rows.map(r=>`<div class="change-row ${r.key?'key':''}">
-      <div class="nm">${r.name||r.id}<small>${r.en!=null?r.en:r.id}${r.scope?' · '+r.scope:''}</small></div>
-      <div class="v">${r.label_before&&r.label_before!=='없음'?r.label_before:''} <span style="color:#6E7F95">${r.before||'—'}</span></div>
+      <div class="nm">${escAttr(r.name||r.id)}<small>${escAttr(r.en!=null?r.en:r.id)}${escAttr(r.scope?' · '+r.scope:'')}</small></div>
+      <div class="v">${escAttr(r.label_before&&r.label_before!=='없음'?r.label_before:'')} <span style="color:#6E7F95">${escAttr(r.before||'—')}</span></div>
       <div class="ar">→</div>
-      <div class="v after">${r.label_after&&r.label_after!=='없음'?r.label_after:''} <span style="color:#9AE6C9">${r.after||'—'}</span></div>
+      <div class="v after">${escAttr(r.label_after&&r.label_after!=='없음'?r.label_after:'')} <span style="color:#9AE6C9">${escAttr(r.after||'—')}</span></div>
     </div>`).join('');
 }
 function sectionHtml(title, note, body){
@@ -4106,7 +4188,7 @@ function renderChanges(data){
   if(files.length){
     html+=sectionHtml('Drs 파일','실제로 교체된 파일 증거','<div class="change-list" style="max-height:none">'
       + files.map(f=>`<div class="change-row ${f.changed?'key':''}">
-          <div class="nm">${f.name}<small>${f.changed?'교체됨':'변경 없음'}</small></div>
+          <div class="nm">${escAttr(f.name)}<small>${f.changed?'교체됨':'변경 없음'}</small></div>
           <div class="v">${Number(f.before_size||0).toLocaleString()} B</div>
           <div class="ar">→</div>
           <div class="v after">${Number(f.after_size||0).toLocaleString()} B</div>
@@ -4115,15 +4197,15 @@ function renderChanges(data){
   if(profile.length){
     html+=sectionHtml('이 프로필이 설정하는 항목','지금 Drs DB에 들어 있는 실제 값','<div class="change-list" style="max-height:210px">'
       + profile.map(r=>`<div class="change-row ${r.id==='0x00D55F7D'?'key':''}">
-          <div class="nm">${r.name}<small>${r.en||''} · ${r.id}</small></div>
-          <div class="v" style="grid-column:span 3;text-align:right"><span style="color:#EAF1FB">${r.label||''}</span> <span style="color:#6E7F95">${r.value||''}</span></div>
+          <div class="nm">${escAttr(r.name)}<small>${escAttr(r.en||'')} · ${escAttr(r.id)}</small></div>
+          <div class="v" style="grid-column:span 3;text-align:right"><span style="color:#EAF1FB">${escAttr(r.label||'')}</span> <span style="color:#6E7F95">${escAttr(r.value||'')}</span></div>
         </div>`).join('')+'</div>');
   }
   if(checklist.length){
     html+=sectionHtml('고성능 게이밍 체크리스트','프로필에 있으면 적용값 · 없으면 전역 설정 상속','<div class="change-list" style="max-height:none">'
       + checklist.map(r=>`<div class="change-row ${r.status==='ok'?'key':''}">
-          <div class="nm">${r.name}<small>권장 ${r.want}</small></div>
-          <div class="v" style="grid-column:span 3;text-align:right"><span style="color:${r.status==='global'?'#8496AE':'#9AE6C9'}">${r.label_value||'—'}</span></div>
+          <div class="nm">${escAttr(r.name)}<small>권장 ${escAttr(r.want)}</small></div>
+          <div class="v" style="grid-column:span 3;text-align:right"><span style="color:${r.status==='global'?'#8496AE':'#9AE6C9'}">${escAttr(r.label_value||'—')}</span></div>
         </div>`).join('')+'</div>');
   }
   if(!html) html='<div class="empty" style="padding:18px">아직 적용한 내역이 없습니다</div>';
@@ -4250,7 +4332,7 @@ function openDigest(){
 function openMapGuide(name){
   const row=(MAPS||[]).find(m=>m.map===name);
   const guide=MAP_GUIDES[name] || null;
-  const set=(id,v)=>{const el=$('#'+id); if(el) el.innerHTML=v;};
+  const set=(id,v)=>{const el=$('#'+id); if(el) el.textContent=v;};
   set('guide-title', `${String(name).split('-')[0]} 공략`);
   set('guide-map', name||'—');
   const st=(row||{});
@@ -4260,7 +4342,7 @@ function openMapGuide(name){
     '이 맵은 초동 교전 라인을 보수적으로 잡고, 각이 애매하면 아군과 같이 들어가세요.',
     '교전 후에는 바로 회전하지 말고 한 박자 기다려 상대 재진입을 먼저 확인하세요.'
   ];
-  const tipsEl=$('#guide-tips'); if(tipsEl) tipsEl.innerHTML=tips.map(t=>`<div class="guide-tip">${t}</div>`).join('');
+  const tipsEl=$('#guide-tips'); if(tipsEl) tipsEl.innerHTML=tips.map(t=>`<div class="guide-tip">${escAttr(t)}</div>`).join('');
   const url=(guide&&guide.youtube&&guide.youtube.url) || `https://www.youtube.com/results?search_query=${encodeURIComponent('서든어택 '+String(name).split('-')[0]+' 공략')}`;
   $('#guide-yt-open').dataset.url=url;
   const banner=$('#guide-banner');
@@ -4295,14 +4377,19 @@ function openSettings(){
 /* ---- 닫기 확인 / 점수 초기화 (미리보기 동작) ---- */
 function closeToTray(){ appToast('트레이로 숨겼습니다 · Ctrl+Shift+A 로 다시 엽니다', true); }
 /* ================= SCREEN SWITCH ================= */
-const SCREEN_NAME={home:'홈',barracks:'서든 병영수첩',maps:'맵·약점 분석',leaderboard:'친구·클랜 순위표',utils:'전술 도구'};
+const SCREEN_NAME={home:'홈',barracks:'서든 병영수첩',maps:'맵·약점 분석',leaderboard:'친구·클랜 순위표',
+  utils:'전술 도구',scout:'상대 스카우팅 · 오버레이',duo:'듀오 시너지 · 맵 밴픽',system:'시스템 최적화'};
+/* v2.0.1 — 스카우팅/듀오/최적화는 한 화면(s-utils)의 탭으로 열린다 */
+const SCREEN_SECTION={scout:'utils',duo:'utils',system:'utils'};
+const SCREEN_TAB={scout:'scout',duo:'duo',system:'system'};
 let CURRENT_SCREEN='home';
 function showScreen(name){
+  const section=SCREEN_SECTION[name]||name;
   CURRENT_SCREEN=name;
   $$('.nav-item').forEach(b=>b.classList.toggle('on',b.dataset.screen===name));
-  $$('.screen').forEach(s=>s.hidden = s.id!=='s-'+name);
+  $$('.screen').forEach(s=>s.hidden = s.id!=='s-'+section);
   const tbName=$('#tb-screen-name'); if(tbName) tbName.textContent=SCREEN_NAME[name]||'';
-  const active=$('#s-'+name);
+  const active=$('#s-'+section);
   if(active){
     /* 12. 화면 전환 0.3~0.4초 fade + slide (숨은 화면은 크기를 못 재므로 다시 그린 뒤 애니메이션) */
     active.classList.remove('enter');
@@ -4313,7 +4400,10 @@ function showScreen(name){
   if(name==='home'){ drawHome(); }
   if(name==='maps'){ drawMaps(); }
   if(name==='leaderboard'){ drawLeaderboard(); }
-  if(name==='utils'){ renderUtils(); }
+  if(section==='utils'){
+    renderUtils();
+    if(SCREEN_TAB[name]) showUtilTab(SCREEN_TAB[name]);
+  }
   if(name==='barracks'){ /* bridge 가 병영수첩을 다시 그린다 */ }
 }
 $$('.nav-item').forEach(b=>b.addEventListener('click',()=>{ showScreen(b.dataset.screen); if(window.AL&&window.AL.onScreen) window.AL.onScreen(b.dataset.screen); }));
@@ -4322,12 +4412,15 @@ $$('.nav-item').forEach(b=>b.addEventListener('click',()=>{ showScreen(b.dataset
   const tabs=$('#util-tabs'); if(!tabs) return;
   tabs.addEventListener('click',(e)=>{
     const b=e.target.closest('[data-util-tab]'); if(!b) return;
-    tabs.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
     const key=b.dataset.utilTab;
-    const t=$('#util-pane-tactics'), sy=$('#util-pane-system');
-    if(t) t.hidden = key!=='tactics';
-    if(sy) sy.hidden = key!=='system';
+    tabs.querySelectorAll('button').forEach(x=>x.classList.toggle('on',x===b));
+    ['scout','duo','system'].forEach(k=>{
+      const pane=$('#util-pane-'+k); if(pane) pane.hidden = k!==key;
+    });
+    /* 레일 메뉴의 active 표시도 탭에 맞춘다 */
+    $$('.nav-item').forEach(n=>{ if(n.dataset.util) n.classList.toggle('on', n.dataset.util===key); });
     if(key==='system' && window.AL && AL.refreshUtils) AL.refreshUtils();
+    if(key==='scout' && window.AL && AL.onScreen) AL.onScreen('utils');
   });
 })();
 window.showUtilTab=function(key){
@@ -4335,6 +4428,33 @@ window.showUtilTab=function(key){
   if(b) b.click();
 };
 /* v2.0.0 — 게임/무기 토글은 없앴다 (에임 연습 제거) */
+
+/* ---- 그래프 툴팁 (v2.0.1 — v1 에서 빠져 있던 함수 복구) ---- */
+(function(){
+  let tip=null;
+  function ensure(){
+    if(tip && document.body.contains(tip)) return tip;
+    tip=document.createElement('div');
+    tip.className='chart-tip';
+    tip.setAttribute('role','tooltip');
+    document.body.appendChild(tip);
+    return tip;
+  }
+  window.showChartTip=function(e,html){
+    const el=ensure();
+    el.innerHTML=String(html==null?'':html);
+    el.classList.add('show');
+    const pad=14, r=el.getBoundingClientRect();
+    let x=(e&&e.clientX||0)+pad, y=(e&&e.clientY||0)-r.height-10;
+    if(x+r.width>innerWidth-8) x=innerWidth-r.width-8;
+    if(y<8) y=(e&&e.clientY||0)+18;
+    el.style.left=Math.max(8,x)+'px';
+    el.style.top=Math.max(8,y)+'px';
+  };
+  window.hideChartTip=function(){
+    if(tip) tip.classList.remove('show');
+  };
+})();
 
 /* ---- 플레이 잔디 셀 툴팁 (날짜 · 판 수) ---- */
 (function(){
@@ -4408,7 +4528,7 @@ function grassCellHtml(c){
   const d=String(c.date||'');
   const today=((window.AL&&AL.state&&AL.state.meta&&AL.state.meta.today)||'');
   const label=`${d} · ${c.games}판${c.wins?` · ${c.wins}승`:''}`;
-  return `<i class="l${Number(c.level||0)}${d===today?' today':''}" data-day="${d}" data-g="${c.games}" title="${label}"></i>`;
+  return `<i class="l${Number(c.level||0)}${d===today?' today':''}" data-day="${escAttr(d)}" data-g="${Number(c.games)||0}" title="${escAttr(label)}"></i>`;
 }
 function drawHomeGrass(){
   const h=homeState();
@@ -4537,8 +4657,8 @@ function drawHome(){
   if(clanBtn){ if(clan&&clan!=='-'){ clanBtn.textContent=clan; clanBtn.hidden=false; } else clanBtn.hidden=true; }
   const rank=(h.rank)||{};
   const solo=(rank.solo||{}), party=(rank.party||{});
-  const sImg=$('#home-solo-img'); if(sImg) sImg.src=`assets/${solo.img||'solo_100'}.png`;
-  const pImg=$('#home-party-img'); if(pImg) pImg.src=`assets/${party.img||'solo_100'}.png`;
+  const sImg=$('#home-solo-img'); if(sImg) sImg.src=`assets/${solo.rp>0?tierMark(solo.name,solo.rp,false):(solo.img||'solo_100')}.png`;
+  const pImg=$('#home-party-img'); if(pImg) pImg.src=`assets/${party.rp>0?tierMark(party.name,party.rp,true):(party.img||'solo_100')}.png`;
   set('home-solo-tier',solo.rp>0?(solo.name||solo.band):'—');
   set('home-party-tier',party.rp>0?(party.name||party.band):'—');
   set('home-solo-rp',solo.rp>0?`${Number(solo.rp).toLocaleString('ko-KR')} RP`:'—');

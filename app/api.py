@@ -412,12 +412,17 @@ class Api:
         party_rp = int(((tier.get("party") or {}).get("rp") or 0))
         solo_band = insights.band_of(solo_rp)
         party_band = insights.party_band_of(party_rp)
+        # v2.0.1 — 아이콘은 RP 가 아니라 **API 티어 이름**을 먼저 따른다.
+        #   (별레전드인데 RP 가 낮다고 그마 아이콘이 뜨던 문제)
+        solo_name = (tier.get("solo") or {}).get("name") or solo_band["n"]
+        party_name = (tier.get("party") or {}).get("name") or party_band["n"]
         rank = {
-            "solo": {"rp": solo_rp, "name": (tier.get("solo") or {}).get("name") or solo_band["n"],
-                     "band": solo_band["n"], "img": solo_band["img"],
+            "solo": {"rp": solo_rp, "name": solo_name,
+                     "band": solo_band["n"], "img": insights.tier_img(solo_name, solo_rp),
                      "progress": insights.band_progress(solo_rp)},
-            "party": {"rp": party_rp, "name": (tier.get("party") or {}).get("name") or party_band["n"],
-                      "band": party_band["n"], "img": party_band["img"],
+            "party": {"rp": party_rp, "name": party_name,
+                      "band": party_band["n"],
+                      "img": insights.tier_img(party_name, party_rp, party=True),
                       "progress": insights.band_progress(party_rp, party=True)},
         }
         try:
@@ -740,7 +745,7 @@ class Api:
             elif key == "ui_scale_auto":
                 value = bool(value)
             elif key in ("overlay_hotkey_lobby", "overlay_hotkey_scout"):
-                value = overlay.clean_hotkey(value, "F8" if key.endswith("lobby") else "F9")
+                value = overlay.clean_hotkey(value, "Insert" if key.endswith("lobby") else "Home")
             elif key in ("overlay_mapban_seconds", "overlay_party_seconds"):
                 value = overlay.parse_seconds(value, 12.0 if "mapban" in key else 15.0)
             elif key in ("overlay_scan_x", "overlay_scan_y"):
@@ -2218,13 +2223,15 @@ class Api:
             url = str(gate_state.get("download") or "")
             if not url:
                 raise ValueError("새 버전 다운로드 주소가 없습니다 · 릴리스 페이지를 열어 주세요")
-            prep = updates.prepare_install(url)
+            prep = updates.prepare_install(url, digest=result.get("digest"))
             if not prep.get("ok"):
                 raise ValueError(prep.get("message") or "업데이트를 내려받지 못했습니다")
             run = updates.run_install(str(prep["script"]))
             if not run.get("ok"):
                 raise ValueError(run.get("message") or "업데이트를 실행하지 못했습니다")
-            return self._ok(path=prep.get("path"), size=prep.get("size"), message=run.get("message"))
+            return self._ok(path=prep.get("path"), size=prep.get("size"),
+                            verified=prep.get("verified"), sha256=prep.get("sha256"),
+                            message=run.get("message"))
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
 
@@ -2432,8 +2439,8 @@ class Api:
         set_ = self.store.settings
         return {
             "enabled": bool(set_.get("overlay_enabled", True)),
-            "hotkey_lobby": overlay.clean_hotkey(set_.get("overlay_hotkey_lobby"), "F8"),
-            "hotkey_scout": overlay.clean_hotkey(set_.get("overlay_hotkey_scout"), "F9"),
+            "hotkey_lobby": overlay.clean_hotkey(set_.get("overlay_hotkey_lobby"), "Insert"),
+            "hotkey_scout": overlay.clean_hotkey(set_.get("overlay_hotkey_scout"), "Home"),
             "mapban_seconds": overlay.parse_seconds(set_.get("overlay_mapban_seconds"), 12.0),
             "party_seconds": overlay.parse_seconds(set_.get("overlay_party_seconds"), 15.0),
             "toast_enabled": bool(set_.get("toast_enabled", True)),
@@ -2530,7 +2537,7 @@ class Api:
     start_overlays._serializable = False  # type: ignore[attr-defined]
 
     def apply_overlay_hotkeys(self) -> dict[str, Any]:
-        """설정에 적힌 F8/F9 를 실제 전역 단축키로 등록한다."""
+        """설정에 적힌 오버레이 단축키(기본 Insert/Home)를 실제 전역 단축키로 등록한다."""
         settings = self._overlay_settings()
         if not settings.get("enabled"):
             self._hotkeys.stop()
@@ -2744,7 +2751,7 @@ class Api:
 
     # ------------------------------------------------------------ 파티 대기실 OCR
     def overlay_lobby_toggle(self) -> dict[str, Any]:
-        """F8 — 열려 있으면 닫고, 아니면 맵 밴 → 파티 대기실 순서로 화면을 판별."""
+        """대기실·맵 밴 단축키(기본 Insert) — 열려 있으면 닫고, 아니면 맵 밴 → 파티 대기실 순서로 판별."""
         settings = self._overlay_settings()
         if not settings.get("enabled"):
             return self._ok(enabled=False, message="설정에서 오버레이를 켜 주세요")
@@ -2798,7 +2805,7 @@ class Api:
                 "layout": overlay.party_layout(rect, area)}
 
     def _party_autofill(self, rows: list[dict[str, Any]]) -> None:
-        """v1.0.1 (#11) — F8 로 읽은 5인을 전술 도구 파티랭크 맵 밴·픽에 바로 채운다."""
+        """v1.0.1 (#11) — 대기실 단축키(기본 Insert)로 읽은 5인을 파티랭크 맵 밴·픽에 채운다."""
         names = [str(r.get("name") or "").strip() for r in rows if r.get("name")]
         if not names:
             return

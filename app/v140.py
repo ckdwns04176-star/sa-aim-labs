@@ -10,7 +10,7 @@ import datetime as _dt
 import re
 from typing import Any, Iterable, Sequence
 
-from . import nexon
+from . import nexon, scouting
 
 # 서든 병영수첩 URL · ouid 는 32자리 hex, 병영수첩 프로필 ID 는 16자리 hex + SA.
 OUID_RE = re.compile(r"[0-9a-fA-F]{32}")
@@ -352,94 +352,81 @@ def counter_tips(row: dict[str, Any]) -> list[str]:
 
 
 def scout_player(client: nexon.NexonClient, nickname: str, *, me_rp: int = 0,
-                 depth: int = 10) -> dict[str, Any]:
-    """한 명 스카우팅 — 프로필/티어는 캐시 우선, 최근 경기 상세는 depth 건까지.
+                 depth: int = 0) -> dict[str, Any]:
+    """한 명 스카우팅 — v2.0.1 · match-detail 없이 솔로/파티를 나눠서.
+
+    예전에는 최근 10판의 경기 상세를 받아 맵 승률·딜량을 계산했다(1명에 최대 10콜).
+    이제는 ``/user/tier`` + ``/match (랭크전 솔로)`` + ``/match (랭크전 파티)`` +
+    ``/user/recent-info`` 만 쓴다 — 그래서 응답이 훨씬 빠르고 호출 한도도 덜 쓴다.
+    데미지·맵별 전적은 더 이상 조회하지 않는다(요청에 따라 표시 항목에서 제외).
 
     `nickname` 에 ouid 나 병영수첩 URL 을 넣어도 된다.
+    ``depth`` 는 예전 호출부 호환용이며 쓰지 않는다.
     """
     target = normalize_target(nickname)
     if not target:
         raise nexon.NexonError("닉네임을 입력해 주세요")
-    if is_ouid(target):
-        ouid = target
-        basic = client.user_basic(ouid)
-        name = str(basic.get("user_name") or "")
-        if not name:
-            raise nexon.NexonError("해당 ouid 의 계정을 찾지 못했습니다")
-    else:
-        name = target
-        ouid = client.resolve_ouid(name)
-        basic = client.user_basic(ouid)
-    real = str(basic.get("user_name") or name)
-    tier = client.user_tier(ouid)
-    recent = client.user_recent(ouid)
-    rows = client.recent_matches(ouid, nexon.RECENT_N)
-    details = nexon._detail_jobs(client, rows, None, real, depth=depth) if rows else []
-    agg = nexon.aggregate(rows, details, real)
-    # 같은 팀으로 뛴 동료(캐시 상세에서) — 스카우팅 팀 케미 계산용
-    team_mates: dict[str, dict[str, int]] = {}
-    for raw, detail in zip(rows, details):
-        if not detail:
-            continue
-        players = detail.get("match_detail") or []
-        my_team = None
-        for p in players:
-            if str(p.get("user_name") or "").strip().lower() == real.strip().lower():
-                my_team = p.get("team_id")
-        if my_team is None:
-            continue
-        won = str(raw.get("match_result")) == "1"
-        for p in players:
-            mate = str(p.get("user_name") or "").strip()
-            if not mate or mate.lower() == real.strip().lower():
-                continue
-            if p.get("team_id") != my_team:
-                continue
-            slot = team_mates.setdefault(mate, {"games": 0, "wins": 0})
-            slot["games"] += 1
-            slot["wins"] += 1 if won else 0
-    # v1.4.0 — 위협도는 '티어 70% + 최근 폼 30%'. 폼은 최근 12판(10~15판) 기준.
-    form_rows = rows[:12]
-    form_agg = nexon.aggregate(form_rows, details[:len(form_rows)], real)
-    streak = win_streak_raw(form_rows)
-    assists = sum(_num(m.get("assist")) for m in form_rows)
-    style = play_style(games=form_agg.get("games") or 0, kills=form_agg.get("kills") or 0,
-                       deaths=form_agg.get("deaths") or 0, assists=assists,
-                       dmg=form_agg.get("dmg") or 0, kd=form_agg.get("kd") or 0,
-                       win=form_agg.get("win"))
-    solo_rp = int(_num(tier.get("solo_rank_match_score")))
-    party_rp = int(_num(tier.get("party_rank_match_score")))
-    weapon = _weapon_tendency(recent, None)
-    weak = [m for m in (agg.get("weak") or []) if _num(m.get("games")) >= 3][:2]
+    got = scouting.fetch_rows(client, [target])
+    rows = got.get("rows") or []
+    if not rows:
+        raise nexon.NexonError("조회 결과가 없습니다")
+    base = rows[0]
+    if base.get("error"):
+        raise nexon.NexonError(str(base.get("error")))
+
+    solo_stats = base.get("solo_stats") or {}
+    party_stats = base.get("party_stats") or {}
+    solo_rp = int(_num(base.get("solo")))
+    party_rp = int(_num(base.get("party")))
+    # 최근 폼 — 두 모드 목록을 합쳐 최근 12판 기준(경기 목록만 사용)
+    form = {
+        "games": min(12, int(solo_stats.get("games") or 0) + int(party_stats.get("games") or 0)),
+        "kd": base.get("kd"), "dmg": None,
+        "win": base.get("win"),
+        "streak": int(solo_stats.get("streak") or 0),
+        "kills": int(solo_stats.get("kills") or 0) + int(party_stats.get("kills") or 0),
+        "deaths": int(solo_stats.get("deaths") or 0) + int(party_stats.get("deaths") or 0),
+        "assists": 0,
+    }
+    weapon = _weapon_tendency({}, None)
+    weapon["key"] = base.get("weapon") if base.get("weapon") in ("sniper", "rifle") else "sniper"
+    weapon["label"] = "스나" if weapon["key"] == "sniper" else "라플"
+    weapon["estimate"] = "추정 " + weapon["label"]
+    style = play_style(games=form["games"], kills=form["kills"], deaths=form["deaths"],
+                       assists=0, dmg=None, kd=form["kd"] or 0, win=form["win"])
     row = {
-        "name": real,
-        "ouid": ouid,
-        "clan": basic.get("clan_name") or "-",
+        "name": base.get("name"),
+        "ouid": base.get("ouid"),
+        "clan": base.get("clan") or "-",
         "solo": solo_rp,
         "party": party_rp or None,
-        "solo_tier": nexon.kr_tier(tier.get("solo_rank_match_tier")),
-        "party_tier": nexon.kr_tier(tier.get("party_rank_match_tier")),
-        "kd": agg.get("kd") if agg.get("games") else None,
-        "dmg": agg.get("dmg") if agg.get("games") else None,
-        "win": agg.get("win") if agg.get("games") else None,
-        "games": agg.get("games") or 0,
+        "solo_tier": base.get("solo_tier") or "언랭크",
+        "party_tier": base.get("party_tier") or "언랭크",
+        "solo_stats": {"tier": solo_stats.get("tier") or base.get("solo_tier") or "언랭크",
+                       "rp": solo_rp, "win": solo_stats.get("win"), "kd": solo_stats.get("kd"),
+                       "games": solo_stats.get("games") or 0,
+                       "streak": solo_stats.get("streak") or 0},
+        "party_stats": {"tier": party_stats.get("tier") or base.get("party_tier") or "언랭크",
+                        "rp": party_rp, "win": party_stats.get("win"), "kd": party_stats.get("kd"),
+                        "games": party_stats.get("games") or 0,
+                        "streak": party_stats.get("streak") or 0},
+        "kd": base.get("kd"),
+        "dmg": None,          # v2.0.1 — 데미지 제외
+        "win": base.get("win"),
+        "games": base.get("games") or 0,
         "weapon": weapon,
-        "weak_maps": [{"map": m.get("map"), "win": m.get("win"), "kd": m.get("kd"),
-                       "games": m.get("games"), "weak": m.get("weak")} for m in weak],
-        "maps": agg.get("maps") or [],
+        "weak_maps": [],
+        "maps": [],
         "rp_gap": (solo_rp - int(me_rp or 0)) if me_rp else None,
-        "form": {"games": form_agg.get("games") or 0, "kd": form_agg.get("kd"),
-                 "dmg": form_agg.get("dmg"), "win": form_agg.get("win"), "streak": streak,
-                 "kills": form_agg.get("kills"), "deaths": form_agg.get("deaths"),
-                 "assists": int(round(assists))},
+        "form": form,
         "style": style,
-        "team_mates": team_mates,
+        "team_mates": {},
         "updated_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
     }
-    row["threat"] = threat_score(solo_rp, form_agg.get("kd") or 0, form_agg.get("dmg") or 0,
-                                  party_rp=party_rp, win=form_agg.get("win"), streak=streak)
-    row["threat_parts"] = threat_parts(solo_rp, form_agg.get("kd") or 0, form_agg.get("dmg") or 0,
-                                       party_rp=party_rp, win=form_agg.get("win"), streak=streak)
+    row["threat"] = threat_score(solo_rp, form.get("kd") or 0, 0,
+                                 party_rp=party_rp, win=form.get("win"), streak=form["streak"])
+    row["threat_parts"] = threat_parts(solo_rp, form.get("kd") or 0, 0,
+                                       party_rp=party_rp, win=form.get("win"), streak=form["streak"])
     row["threat_label"] = threat_label(row["threat"])
     row["tips"] = counter_tips(row)
     return row
@@ -665,17 +652,20 @@ STYLE_LABELS = {
 }
 
 
-def play_style(*, games: int, kills: float, deaths: float, assists: float, dmg: float,
-               kd: float, win: float | None) -> dict[str, Any]:
+def play_style(*, games: int, kills: float, deaths: float, assists: float,
+               dmg: float | None, kd: float, win: float | None) -> dict[str, Any]:
     """킬·데스·딜량·어시스트·승률만으로 추정하는 플레이 스타일.
 
     API 가 이동 좌표·선킬을 주지 않으므로 '최근 경기 지표 조합'으로만 추정한다.
+    ``dmg`` 가 None 이면(스카우팅처럼 데미지를 조회하지 않는 경우) 딜량 항목을
+    빼고 킬·데스·K/D·승률만으로 판정한다.
     """
     games = max(1, int(games or 0))
     dpg = _num(kills) / games
     death_pg = _num(deaths) / games
     apg = _num(assists) / games
-    dmg = _num(dmg)
+    has_dmg = dmg is not None and str(dmg) != ""
+    dmg_val = _num(dmg) if has_dmg else 0.0
     kd = _num(kd)
     win = _num(win)
     assist_ratio = (apg / (dpg + apg)) if (dpg + apg) else 0.0
@@ -683,22 +673,30 @@ def play_style(*, games: int, kills: float, deaths: float, assists: float, dmg: 
     def n(v: float, lo: float, hi: float) -> float:
         return _clamp01((v - lo) / (hi - lo))
 
-    aggression = n(dmg, 700, 1600) * 0.55 + n(dpg, 4.0, 10.0) * 0.45
+    if has_dmg:
+        aggression = n(dmg_val, 700, 1600) * 0.55 + n(dpg, 4.0, 10.0) * 0.45
+        ace = n(dmg_val, 800, 1550) * 0.4 + n(kd, 45, 68) * 0.35 + n(win, 45, 62) * 0.25
+    else:
+        aggression = n(dpg, 4.0, 10.0)
+        ace = (n(kd, 45, 68) * 0.6 + n(win, 45, 62) * 0.4)
     survival = n(5.5 - death_pg, 0.0, 2.5) * 0.6 + n(kd, 40, 70) * 0.4
     support = (assist_ratio * 0.7 + n(win, 40, 65) * 0.3) if apg else 0.0
-    ace = n(dmg, 800, 1550) * 0.4 + n(kd, 45, 68) * 0.35 + n(win, 45, 62) * 0.25
     candidates = {"rush": aggression, "stable": survival, "support": support, "ace": ace}
     key = max(candidates, key=lambda k: candidates[k])
     best = candidates[key]
     if best < 0.42:
         key = "balanced"
     label, emoji = STYLE_LABELS.get(key, STYLE_LABELS["balanced"])
+    dmg_text = f"딜량 {int(dmg_val):,} · " if has_dmg else ""
+    rush_bits = [f"판당 킬 {dpg:.1f}", f"데스 {death_pg:.1f}"]
+    if has_dmg:
+        rush_bits.append(f"딜량 {int(dmg_val):,}")
     desc = {
-        "rush": f"판당 킬 {dpg:.1f} · 데스 {death_pg:.1f} · 딜량 {int(dmg):,} — 먼저 붙는 돌격형",
+        "rush": " · ".join(rush_bits) + " — 먼저 붙는 돌격형",
         "stable": f"판당 데스 {death_pg:.1f} · K/D {kd:.1f}% — 각을 받으며 버티는 안정형",
         "support": f"어시 {apg:.1f}/판 ({assist_ratio * 100:.0f}%) · 승률 {win:.0f}% — 팀을 살리는 지원형",
-        "ace": f"딜량 {int(dmg):,} · K/D {kd:.1f}% · 승률 {win:.0f}% — 균형 잡힌 캐리형",
-        "balanced": f"딜량 {int(dmg):,} · K/D {kd:.1f}% — 치우침 없는 균형형",
+        "ace": f"{dmg_text}K/D {kd:.1f}% · 승률 {win:.0f}% — 균형 잡힌 캐리형",
+        "balanced": f"{dmg_text}K/D {kd:.1f}% — 치우침 없는 균형형",
     }[key]
     return {"key": key, "label": label, "emoji": emoji, "desc": desc,
             "dpg": round(dpg, 1), "death_pg": round(death_pg, 1), "apg": round(apg, 2),

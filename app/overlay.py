@@ -34,7 +34,7 @@ TITLES = {
 }
 BACKEND = "win32-layered"
 
-DEFAULT_HOTKEYS = {"lobby": "F8", "scout": "F9"}
+DEFAULT_HOTKEYS = {"lobby": "Insert", "scout": "Home"}
 HOTKEY_KEYS = ("F6", "F7", "F8", "F9", "F10", "F11", "F12", "Insert", "Delete",
                "Home", "End", "PgUp", "PgDn")
 HOTKEY_CHOICES = tuple(HOTKEY_KEYS) + (
@@ -462,7 +462,7 @@ class OverlayHub:
             stop.set()
 
 
-def hotkey_label(spec: Any, default: str = "F8") -> str:
+def hotkey_label(spec: Any, default: str = "Insert") -> str:
     text = str(spec or "").strip()
     if not text:
         return default
@@ -478,7 +478,7 @@ _HOTKEY_NAME = {"INSERT": "Insert", "DELETE": "Delete", "HOME": "Home", "END": "
                 "PGUP": "PgUp", "PGDN": "PgDn"}
 
 
-def clean_hotkey(spec: Any, default: str = "F8") -> str:
+def clean_hotkey(spec: Any, default: str = "Insert") -> str:
     """허용된 단축키만 통과 (F1~F12 · Insert/Delete/Home/End/PgUp/PgDn · 수식키 조합)."""
     value = hotkey_label(spec, default)
     if value == "None":

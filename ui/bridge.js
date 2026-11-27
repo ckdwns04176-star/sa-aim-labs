@@ -3,12 +3,13 @@
    ---------------------------------------------------------------------
    index.html 의 정적 화면을 pywebview.api (app/api.py) 에 연결합니다.
 
-   · 창 제어 (최소화 / 최대화 / 닫기)
-   · 추천 5종 점수 입력 + 오늘 기록 저장 → save_training_session(...)
-   · 병영수첩 전적 불러오기 / 순위표 일괄 갱신 · 닉네임 등록·삭제
-   · 최적화 유틸 (Drs 라플·스나·계단현상, 마우스 가속, 백업/복원)
-   · 설정 (NEXON API 키 · 닉네임, Supabase 로그인/회원가입/동기화)
-   · 서버가 돌려준 state 로 대시보드·레이더·추이·순위표 실시간 갱신
+   · 창 제어 (최소화 / 닫기 확인 팝업 / 트레이로 숨기기)
+   · 병영수첩 전적 불러오기 · 순위표 일괄 갱신 · 닉네임 등록·삭제
+   · 스카우팅(솔로/파티 분리) · 듀오 시너지 · 내전 팀 · 파티 맵 밴픽
+   · 인게임 오버레이 (대기실 맵 밴 · 상대 분석 · 경기 종료 토스트)
+   · 최적화 유틸 (Drs 라플·스나, 마우스 가속, 전원/게임 모드, 백업/복원)
+   · 설정 (닉네임 · 오버레이 단축키 · 회원 로그인/클라우드 동기화)
+   · 서버가 돌려준 state 로 홈·병영수첩·맵 분석·순위표 다시 그리기
 
    브라우저로 index.html 을 열면 (pywebview 없음) AL.real = false 로 두고
    index.html 의 샘플 데이터 동작을 그대로 둡니다.
@@ -260,6 +261,7 @@
   function maybeShowNickLink(st) {
     if (!AL.real || !st) return;
     if (AL.nickLater || AL.nickAutoShown) return;
+    if (!(st.account || {}).signed_in) return;   /* 게스트는 로그인 안내가 먼저 */
     if (AL.peek) return;
     const nick = String(((st.nexon || {}).nickname) || ((st.settings || {}).nickname) || '').trim();
     const hasBarracks = !!(st.barracks && (st.barracks.nickname || (st.barracks.basic || {}).name));
@@ -268,6 +270,29 @@
     const modalOpen = $$('.mask.show').some((m) => m.id !== 'nick-mask');
     if (modalOpen) return;
     setTimeout(() => { if (!AL.nickLater) openNickLink(true); }, 500);
+  }
+
+  /* v2.0.1 — 예전에는 로그인 안내 모달이 아예 뜨지 않았다(auto 호출 누락).
+     이제는 앱 실행 후 한 번, 로그인 안 되어 있으면 로그인/회원가입 모달을 띄운다.
+     - 첫 실행 온보딩이 먼저 필요하면 건너뛴다
+     - 사용자가 한 번 닫으면 이번 실행 동안은 다시 띄우지 않는다 */
+  function maybeShowLogin(st) {
+    if (!AL.real || !st || AL.authAutoShown) return;
+    const acc = st.account || {};
+    if (acc.signed_in) return;
+    if ((st.onboarding || {}).needed) return;
+    if (digestShown) return;
+    const blocking = $$('.mask.show').some((m) => m.id !== 'auth-mask');
+    if (blocking) return;
+    AL.authAutoShown = true;
+    setTimeout(() => {
+      if (AL.authLater) return;
+      const stillOpen = $$('.mask.show').some((m) => m.id !== 'auth-mask');
+      if (stillOpen) return;
+      openAuth('login');
+      const note = $('#auth-auto-note');
+      if (note) note.hidden = false;
+    }, 650);
   }
 
   function maybeShowDigest() {
@@ -383,6 +408,7 @@
     if (AL.peek) renderPeek(); else renderBarracks(barracks, st);
     renderSettings(st);
     renderAccount(st);
+    if (AL.syncOverlayPane) AL.syncOverlayPane(st);
     renderCloudState(st);
     renderUtilRecent(st);
     if (typeof compactGrayNotes === 'function') compactGrayNotes();
@@ -392,6 +418,7 @@
     if (typeof drawHome === 'function') drawHome();
     maybeShowOnboarding(st);
     maybeShowUpdateGate(st);
+    maybeShowLogin(st);
     maybeShowNickLink(st);
     startTiltPoll();
   }
@@ -407,7 +434,7 @@
     const box = $('#nv-points');
     if (box) {
       box.innerHTML = points.length
-        ? points.map((p) => `<div class="gi"><b>${String(p.at || '').slice(11, 19) || '—'}</b>${p.label || '설정 변경'}<i>복구 가능</i></div>`).join('')
+        ? points.map((p) => `<div class="gi"><b>${esc(String(p.at || '').slice(11, 19) || '—')}</b>${esc(p.label || '설정 변경')}<i>복구 가능</i></div>`).join('')
         : '<div class="gi"><b>—</b>복구 지점이 없습니다<i>백업 없음</i></div>';
     }
     const backup = $('#nv-backup');
@@ -446,7 +473,10 @@
   function rankCard(kind, tierRow) {
     const rp = Number((tierRow || {}).rp || 0);
     const band = kind === 'party' ? partyBand(rp) : bandOf(rp);
-    const name = (tierRow || {}).name || band.n;
+    /* v2.0.1 — 이름 우선. 별레전드·불레전드는 RP 컷이 없어 이름으로만 구분된다 */
+    const name = (window.tierNameOf ? tierNameOf((tierRow || {}).name, rp, kind === 'party') : null)
+      || (tierRow || {}).name || band.n;
+    const mark = window.tierMark ? tierMark((tierRow || {}).name, rp, kind === 'party') : band.img;
     let start = 0;
     let end = 200;
     if (kind === 'party') {
@@ -460,7 +490,7 @@
     const pct = end > start ? Math.max(0, Math.min(100, ((rp - start) / (end - start)) * 100)) : 100;
     const remain = Math.max(0, end - rp);
     return `<div class="card rank">
-      <div class="rank-emb"><img src="assets/${band.img}.png" alt="${name}"></div>
+      <div class="rank-emb"><img src="assets/${escAttr(mark)}.png" alt="${escAttr(name)}"></div>
       <div class="rank-body">
         <div class="rank-mode"><span class="mode">${kind === 'party' ? '랭크전 파티' : '랭크전 솔로'}</span>${kind === 'party' ? '2인 이상' : '개인전'}</div>
         <div class="rank-title ${kind === 'party' ? 'v2' : ''}"><h3>${name}</h3><span class="rp">${n0(rp)}<i>RP</i></span></div>
@@ -727,7 +757,7 @@
     const basic = barracks.basic || {};
     const tier = barracks.tier || { solo: { rp: 0, name: '언랭크' }, party: { rp: 0, name: '언랭크' } };
     const stats = barracks.stats || {};
-    const band = bandOf(Number(tier.solo.rp || 0));
+    const soloMark = window.tierMark ? tierMark((tier.solo || {}).name, Number(tier.solo.rp || 0), false) : bandOf(Number(tier.solo.rp || 0)).img;
     /* v1.3.1 — 무기 표기는 '스나' / '라플' 만 (앞의 '주무기 ' 제거) */
     const weaponLabel = Number((barracks.recent || {}).sniper || 0) >= Number((barracks.recent || {}).assault || 0)
       ? '스나' : '라플';
@@ -767,12 +797,12 @@
       const flowBadge = (flow && flow.n >= 2)
         ? `<span class="streak-badge ${flow.kind === '승' ? 'win' : 'loss'}">${flow.n}연${flow.kind} 중</span>` : '';
       banner.innerHTML = `
-        <div class="emb-bg"><img src="assets/${band.img}.png" alt=""></div>
+        <div class="emb-bg"><img src="assets/${escAttr(soloMark)}.png" alt=""></div>
         <div class="bn-left">
           <div class="bn-ava${hasPhoto ? ' photo' : ''}">${avaInner}<i></i></div>
           <div>
             <div class="bn-name"><h2 class="bn-self" role="button" tabindex="0" data-ouid="${esc(barracks.ouid || '')}"
-                title="내 병영수첩 상세 페이지 열기">${barracks.nickname}</h2>
+                title="내 병영수첩 상세 페이지 열기">${esc(barracks.nickname || '')}</h2>
               <span class="tag ${weaponLabel === '스나' ? 'amber' : 'cyan'}" id="bn-user">${weaponLabel}</span>${flowBadge}</div>
             <div class="bn-sub">
               <a class="bn-clan" role="button" tabindex="0" data-clan="${esc(clan)}" data-ouid="${esc(barracks.ouid || '')}"
@@ -810,8 +840,8 @@
         <tr>
           <td class="l">${m.date.slice(5)} ${m.time}</td>
           <td class="l map"><span class="map-cell">${(function(){const src=(window.mapImg?window.mapImg(m.map):'');
-            return src?`<span class="mthumb"><img src="${src}" alt=""></span>`:`<span class="mthumb"><svg viewBox="0 0 24 24"><use href="#i-map"/></svg></span>`;})()}${m.map}</span></td>
-          <td>${m.type}</td>
+            return src?`<span class="mthumb"><img src="${src}" alt=""></span>`:`<span class="mthumb"><svg viewBox="0 0 24 24"><use href="#i-map"/></svg></span>`;})()}${esc(m.map)}</span></td>
+          <td>${esc(m.type)}</td>
           <td class="${m.result === '승' ? 'pos' : 'neg'}">${m.result}</td>
           <td>${m.k}</td><td>${m.d}</td>
           <td>${n0(m.kd, 1)}</td>
@@ -831,7 +861,7 @@
   function inputRow(id, label, value, opts) {
     const o = opts || {};
     return `<div class="field"><label>${label}</label>
-      <input id="${id}" class="inp" value="${value == null ? '' : String(value).replace(/"/g, '&quot;')}"
+      <input id="${id}" class="inp" value="${value == null ? '' : String(value).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;')}"
         placeholder="${o.placeholder || ''}" ${o.type ? `type="${o.type}"` : ''} ${o.maxlength ? `maxlength="${o.maxlength}"` : ''} ${o.readonly ? 'readonly' : ''}>
       ${o.hint ? `<div class="hint">${o.hint}</div>` : ''}</div>`;
   }
@@ -992,7 +1022,7 @@
       more.innerHTML = `
         <div class="card-hd" style="padding:0">
           <div><div class="card-title"><span class="bar"></span>앱 · 데이터</div>
-            <div class="card-sub">v${meta.version || '2.0.0'} · ${esc(meta.platform || '')}</div></div>
+            <div class="card-sub">v${meta.version || '2.0.1'} · ${esc(meta.platform || '')}</div></div>
         </div>
         <div class="set-note" style="margin-top:2px">데이터 폴더<br><b style="word-break:break-all">${esc(meta.data_dir || '')}</b></div>
         <div class="set-actions">
@@ -1019,7 +1049,7 @@
     }
 
     const metaLine = $('#set-meta-line');
-    if (metaLine) metaLine.textContent = `v${meta.version || '2.0.0'} · 순위표 ${n0((st.leaderboard || []).length)}명`;
+    if (metaLine) metaLine.textContent = `v${meta.version || '2.0.1'} · 순위표 ${n0((st.leaderboard || []).length)}명`;
   }
 
   function switchRow(key, title, desc, on) {
@@ -1089,7 +1119,8 @@
     if (!result || !result.ok) {
       const message = (result && result.message) || '전적을 불러오지 못했습니다';
       if (/닉네임|API 키/.test(message)) {
-        if (typeof showScreen === 'function') showScreen('settings');
+        /* v2.0.1 — 설정은 화면이 아니라 모달이다 (showScreen('settings') 는 없던 화면) */
+        if (typeof window.openSettings === 'function') window.openSettings();
       }
       fail(result, message);
       return;
@@ -1133,10 +1164,15 @@
   const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => (
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
   ));
+  /* 속성값용 — 같은 함수로 충분하다 (따옴표까지 막는다) */
+  const escAttr = esc;
 
-  function bandImg(rp) {
-    try { return (bandOf(Number(rp) || 0) || { img: 'solo_100' }).img || 'solo_100'; }
-    catch (e) { return 'solo_100'; }
+  /* v2.0.1 — 티어 이름이 있으면 이름으로, 없으면 RP 구간으로 마크를 고른다 */
+  function bandImg(rp, name, party) {
+    try {
+      if (window.tierMark) return tierMark(name, Number(rp) || 0, !!party) || 'solo_100';
+      return (bandOf(Number(rp) || 0) || { img: 'solo_100' }).img || 'solo_100';
+    } catch (e) { return 'solo_100'; }
   }
 
   function searchResultBox(html) {
@@ -1177,7 +1213,7 @@
     const u = result.user || {};
     searchResultBox(`
       <div class="sr-hit" data-peek="1" data-nick="${esc(u.name)}" data-ouid="${esc(u.ouid)}">
-        <div class="emb"><img src="assets/${bandImg(u.solo)}.png" alt="${esc(u.solo_tier || '')}"></div>
+        <div class="emb"><img src="assets/${escAttr(bandImg(u.solo, u.solo_tier, false))}.png" alt="${escAttr(u.solo_tier || '')}"></div>
         <div style="min-width:0">
           <div class="nm">${esc(u.name)}</div>
           <div class="meta">솔로 ${esc(u.solo_tier || '언랭크')} · ${n0(u.solo)} RP · ${esc(u.clan && u.clan !== '-' ? u.clan + ' 클랜' : '클랜 없음')}${u.party ? ' · 파티 ' + n0(u.party) + ' RP' : ''}</div>
@@ -1531,6 +1567,39 @@
 
   /* ------------------------------------------------------------ 1:1 전적 비교 */
 
+  /* v2.0.1 — showCompare 가 v1 삭제 때 함께 빠져 순위표 클릭이 오류로 끝났다 */
+  function showCompare(cmp) {
+    const mask = $('#compare-mask');
+    const box = $('#cmp-result');
+    if (!mask || !box) return;
+    if (!cmp) { box.innerHTML = '<div class="mnote" style="display:block">비교할 값이 없습니다</div>'; }
+    else {
+      const rows = cmp.rows || [];
+      const head = `<div class="duo-grid">
+        <div class="duo-card"><div class="nm">${esc((cmp.me || {}).name)}</div>
+          <div class="m">솔로 ${esc((cmp.me || {}).solo_tier || '—')} · 파티 ${esc((cmp.me || {}).party_tier || '—')}</div></div>
+        <div class="duo-card"><div class="nm">${esc((cmp.friend || {}).name)}</div>
+          <div class="m">솔로 ${esc((cmp.friend || {}).solo_tier || '—')} · 파티 ${esc((cmp.friend || {}).party_tier || '—')}</div></div>
+      </div>`;
+      const body = rows.map((r) => {
+        const up = r.better === 'me';
+        const tie = r.better === 'none';
+        const a = r.text ? esc(r.me) : `${esc(r.me == null ? '—' : r.me)}${esc(r.unit || '')}`;
+        const b = r.text ? esc(r.friend) : `${esc(r.friend == null ? '—' : r.friend)}${esc(r.unit || '')}`;
+        return `<div class="duo-pairs"><div class="row">
+          <span class="${up ? 'up' : ''}">${a}</span>
+          <span class="map">${esc(r.label)}</span>
+          <b class="${tie ? '' : up ? 'down' : 'up'}">${b}</b>
+        </div></div>`;
+      }).join('');
+      box.innerHTML = `${head}<div class="duo-verdict ${(cmp.score || {}).me >= (cmp.score || {}).friend ? 'good' : 'mid'}">
+          <b>${esc(cmp.verdict || '')}</b><span>${n0((cmp.score || {}).me)} : ${n0((cmp.score || {}).friend)}</span></div>
+        ${body}
+        <div class="mnote" style="display:block">${esc(cmp.note || '')}</div>`;
+    }
+    mask.classList.add('show');
+  }
+
   async function compareFriend(name) {
     if (!AL.real) return toast('앱(.exe)에서 1:1 비교를 볼 수 있습니다', false);
     const result = await call('compare_friend', name);
@@ -1824,6 +1893,35 @@
       </div>`;
   }
 
+  /* v2.0.1 — 티어 이름 약어 (그랜드마스터 II → 그마 II) */
+  const SHORT_TIER = {
+    '언랭크': '언랭', '브론즈': '브론즈', '실버': '실버', '골드': '골드', '마스터': '마스터',
+    '그랜드마스터': '그마', '레전드': '레전', '불레전드': '불레', '별레전드': '별레'
+  };
+  function shortTier(name) {
+    const text = String(name == null ? '' : name).trim();
+    if (!text) return '언랭크';
+    const parts = text.split(' ');
+    const head = SHORT_TIER[parts[0]] || parts[0];
+    return parts.length > 1 ? head + ' ' + parts.slice(1).join(' ') : head;
+  }
+
+  /* 한 모드(솔로/파티) 랭크 칸 — 티어 · RP · 승률 · K/D */
+  function scoutModeCell(stats, fallbackTier, fallbackRp) {
+    const st = stats || {};
+    const games = Number(st.games || 0);
+    const rp = Number(st.rp != null ? st.rp : (fallbackRp || 0)) || 0;
+    const tier = st.tier || fallbackTier || (rp > 0 ? '' : '언랭크');
+    const win = st.win == null ? null : Number(st.win);
+    const kd = st.kd == null ? null : Number(st.kd);
+    const line1 = `${esc(tier || '언랭크')}${rp > 0 ? ` · <span style="color:#7E8FA6">${n0(rp)} RP</span>` : ''}`;
+    const line2 = games
+      ? `${win == null ? '승률 —' : `승률 ${n0(win, 1)}%`}${kd == null ? '' : ` · K/D ${n0(kd, 1)}%`}`
+      : '최근 표본 없음';
+    const tip = games ? `최근 ${games}판 기준` : '최근 랭크전 표본이 없습니다';
+    return `<div class="v mc" title="${escAttr(tip)}"><b>${line1}</b><i>${line2}</i></div>`;
+  }
+
   function renderScout(res) {
     const raw = (res && res.rows) || [];
     AL.scout = res || AL.scout || {};
@@ -1837,38 +1935,39 @@
       if (!rows.length) {
         table.innerHTML = '<div class="empty">상대 닉네임을 입력하고 <b>조회</b>를 누르면 비교표가 나옵니다</div>';
       } else {
-        const head = `<div class="scout-row hd"><span class="l">상대</span><span>솔로</span><span>파티</span><span>K/D</span><span>딜량</span><span>무기 K/D</span><span>위협</span></div>`;
+        const head = `<div class="scout-row hd"><span class="l">상대</span><span>솔로 랭크</span><span>파티 랭크</span><span>무기</span><span>위협</span></div>`;
         const coreNames = new Set((team.snipers || []).map((s) => s.name));
         const body = rows.map((r) => {
           if (r.error) {
-            return `<div class="scout-row" style="border-color:rgba(239,68,68,.28)"><div class="nm">${r.name}<small style="color:#F7AFAE">${r.error}</small></div><div class="v">—</div><div class="v">—</div><div class="v">—</div><div class="v">—</div><div class="v">—</div><div class="v">—</div></div>`;
+            return `<div class="scout-row" style="border-color:rgba(239,68,68,.28)">
+              <div class="nm">${esc(r.name)}<small style="color:#F7AFAE">${esc(r.error)}</small></div>
+              <div class="v">—</div><div class="v">—</div><div class="v">—</div><div class="v">—</div></div>`;
           }
           const w = r.weapon || {};
           const core = coreNames.has(r.name);
+          const styleDesc = (r.style && r.style.desc) || '';
           return `<div class="scout-row"${core ? ' style="border-color:rgba(56,189,248,.34);background:rgba(56,189,248,.06)"' : ''}>
             <div class="nm">
               <div style="display:flex;align-items:center;gap:4px;min-width:0">
-                <b style="font-size:11.5px;font-weight:800;color:#EAF1FB;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.name}</b>
+                <b style="font-size:11.5px;font-weight:800;color:#EAF1FB;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(r.name)}</b>
                 ${core ? '<span style="flex:0 0 auto;font-size:7.6px;color:#A9E5F8;font-weight:800;border:1px solid rgba(56,189,248,.32);border-radius:3px;padding:0 3px">핵심 스나</span>' : ''}
-                ${r.style ? `<span style="flex:0 0 auto;font-size:7.6px;color:#FCD9A0;font-weight:800;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.24);border-radius:3px;padding:0 3px" title="${r.style.desc || ''}">${r.style.emoji || ''} ${r.style.label}</span>` : ''}
+                ${r.style ? `<span style="flex:0 0 auto;font-size:7.6px;color:#FCD9A0;font-weight:800;background:rgba(245,158,11,.12);border:1px solid rgba(245,158,11,.24);border-radius:3px;padding:0 3px" title="${escAttr(styleDesc)}">${esc(r.style.emoji || '')} ${esc(r.style.label || '')}</span>` : ''}
               </div>
-              <small style="display:block;margin-top:2px">${r.clan && r.clan !== '-' ? r.clan + ' 클랜 · ' : ''}최근 ${r.form && r.form.games ? r.form.games : (r.games || 0)}판 폼${r.form && r.form.streak >= 2 ? ' · ' + r.form.streak + '연승' : ''}</small>
+              <small style="display:block;margin-top:2px">${r.clan && r.clan !== '-' ? esc(r.clan) + ' 클랜 · ' : ''}최근 ${r.form && r.form.games ? n0(r.form.games) : n0(r.games)}판 폼${r.form && r.form.streak >= 2 ? ' · ' + n0(r.form.streak) + '연승' : ''}</small>
             </div>
-            <div class="v">${r.solo_tier || '—'}<br><span style="font-size:8.5px;color:#7E8FA6">${n0(r.solo)} RP</span></div>
-            <div class="v">${r.party ? (r.party_tier || '—') : '언랭크'}<br><span style="font-size:8.5px;color:#7E8FA6">${r.party ? n0(r.party) + ' RP' : '—'}</span></div>
-            <div class="v">${r.kd == null ? '—' : n0(r.kd, 1) + '%'}</div>
-            <div class="v">${r.dmg == null ? '—' : n0(r.dmg)}</div>
+            ${scoutModeCell(r.solo_stats, r.solo_tier, r.solo)}
+            ${scoutModeCell(r.party_stats, r.party_tier, r.party)}
             <div class="v" style="text-align:right">
-              <button class="btn-tiny" data-role="${esc(r.name)}" title="클릭해서 역할을 스나 ↔ 라플 로 바꿉니다" style="height:18px;font-size:8.5px;padding:0 5px">${w.manual ? w.label : (w.estimate || w.label || '—')}</button>
-              <br><span style="font-size:8px;color:#7E8FA6;white-space:nowrap">스나 K/D ${w.sniper_kd == null ? '—' : w.sniper_kd}% · 라플 K/D ${w.assault_kd == null ? '—' : w.assault_kd}%</span>
+              <button class="btn-tiny" data-role="${escAttr(r.name)}" title="클릭해서 역할을 스나 ↔ 라플 로 바꿉니다" style="height:18px;font-size:8.5px;padding:0 5px">${esc(w.manual ? w.label : (w.estimate || w.label || '—'))}</button>
+              <br><span style="font-size:8px;color:#7E8FA6;white-space:nowrap">스나 K/D ${w.sniper_kd == null ? '—' : n0(w.sniper_kd, 1)}% · 라플 K/D ${w.assault_kd == null ? '—' : n0(w.assault_kd, 1)}%</span>
             </div>
-            <div style="text-align:right"><span class="th ${thCls(r.threat)}">${r.threat} · ${r.threat_label}</span></div>
+            <div style="text-align:right"><span class="th ${thCls(r.threat)}">${n0(r.threat)} · ${esc(r.threat_label || '')}</span></div>
           </div>`;
         }).join('');
         table.innerHTML = head + body +
           ((team.tips || []).length
             ? `<div class="scout-tips" style="margin-top:5px;padding:8px 10px;border-radius:8px;background:rgba(245,158,11,.06);border:1px solid rgba(245,158,11,.2)">
-                 ${team.tips.map((t) => `<div class="ti">${t}</div>`).join('')}</div>`
+                 ${team.tips.map((t) => `<div class="ti">${esc(t)}</div>`).join('')}</div>`
             : '');
       }
     }
@@ -1876,10 +1975,9 @@
     if (note) {
       note.innerHTML = res && res.calls !== undefined
         ? `이번 조회 API ${n0(res.calls)}건 · 이미 받은 전적은 캐시에서 사용 · <b>역할 버튼을 누르면 팀 스나수가 바로 다시 계산됩니다</b>`
-        : '스나/라플 수치는 사용 비중이 아니라 <b>무기별 K/D</b> 입니다 (합이 100%를 넘을 수 있습니다).';
+        : '솔로/파티 랭크의 승률·K/D 는 경기 목록(최근 20판) 기준입니다 · <b>역할 버튼을 누르면 팀 스나수가 다시 계산됩니다</b>';
     }
   }
-
 
   function openDuo() {
     const mask = $('#duo-mask');
@@ -1909,7 +2007,7 @@
     if (!box) return;
     if (!d || !d.available) {
       box.innerHTML = `<div class="digest-advice" style="background:rgba(245,158,11,.07);border-color:rgba(245,158,11,.24);color:#FDE8BD">
-          <span class="ic">🤝</span><span>${(d && (d.reason || d.label)) || '함께 뛴 판을 찾지 못했습니다'}</span></div>
+          <span class="ic">🤝</span><span>${esc((d && (d.reason || d.label)) || '함께 뛴 판을 찾지 못했습니다')}</span></div>
         <div class="mnote">병영수첩의 <b>전적 불러오기</b>를 한 번 실행해 두면 최근 100판의 같은 팀 정보로 비교합니다.</div>`;
       return;
     }
@@ -1924,7 +2022,7 @@
         <div class="duo-card"><span>차이</span><b style="color:${(dl.win || 0) >= 0 ? '#6EE7C0' : '#F7AFAE'}">${dl.win == null ? '—' : (dl.win > 0 ? '+' : '') + dl.win + '%p'}</b><i>K/D ${dl.kd == null ? '—' : (dl.kd > 0 ? '+' : '') + dl.kd + '%'} · 딜 ${dl.dmg == null ? '—' : (dl.dmg > 0 ? '+' : '') + n0(dl.dmg)}</i></div>
       </div>
       <div class="digest-advice" style="background:rgba(52,211,153,.07);border-color:rgba(52,211,153,.26);color:#CFF6E6">
-        <span class="ic">${d.tone === 'warn' ? '⚠️' : '🤝'}</span><span><b>${d.verdict || ''}</b> · ${d.label || ''}</span>
+        <span class="ic">${d.tone === 'warn' ? '⚠️' : '🤝'}</span><span><b>${esc(d.verdict || '')}</b> · ${esc(d.label || '')}</span>
       </div>
       ${d.force ? `<div style="display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:8px;background:rgba(148,163,184,.05);border:1px solid rgba(148,163,184,.12);font-size:10px;font-weight:700;color:#93A4BA">
         <span>기본 전력 <b class="num" style="color:#C7D3E4">${d.force.base}</b></span>
@@ -1934,7 +2032,7 @@
         <span>실전 전력 <b class="num" style="color:#FDE8BD;font-size:12px">${d.force.power}</b></span>
         <span style="margin-left:auto;font-size:9px;color:#7E8FA6">${(d.force.notes || []).join(' · ')}</span>
       </div>` : ''}
-      <div class="mnote">${d.note || ''}</div>`;
+      <div class="mnote">${esc(d.note || '')}</div>`;
   }
 
   function renderUtilRecent(st) {
@@ -1966,7 +2064,7 @@
       meta.textContent = first ? `${first.map || '최근 매치'} · ${first.result || ''} · ${when}` : '최근 매치 없음';
     }
     opp.innerHTML = opponents.length
-      ? opponents.map((n) => `<button class="chip" data-opp="${esc(n)}" style="height:24px;font-size:9.5px;cursor:pointer" title="이 닉네임으로 스카우팅">${n}</button>`).join('')
+      ? opponents.map((n) => `<button class="chip" data-opp="${escAttr(n)}" style="height:24px;font-size:9.5px;cursor:pointer" title="이 닉네임으로 스카우팅">${esc(n)}</button>`).join('')
         + `<button class="ubtn" id="util-opp-run" style="height:24px;padding:0 10px;font-size:9.5px">이 5명 분석</button>`
       : '<span style="font-size:10px;color:#6E7F95;font-weight:600">병영수첩을 불러오면 상대 5명이 자동으로 표시됩니다</span>';
     const table = {};
@@ -2087,7 +2185,7 @@
       const on = picked.has(String(c.name).toLowerCase());
       return `<label style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:7px;background:rgba(255,255,255,.025);border:1px solid ${on ? 'var(--ac22)' : 'var(--line)'};cursor:pointer">
         <input type="checkbox" data-bal-name="${esc(c.name)}" ${on ? 'checked' : ''} style="accent-color:var(--ac)">
-        <span style="font-size:11px;font-weight:700;color:#EAF1FB;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${c.name}${c.me ? ' <small style="color:var(--txt2)">ME</small>' : ''}</span>
+        <span style="font-size:11px;font-weight:700;color:#EAF1FB;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(c.name)}${c.me ? ' <small style="color:var(--txt2)">ME</small>' : ''}</span>
         <button type="button" data-bal-role="${esc(c.name)}" title="클릭해서 스나 ↔ 라플" style="height:17px;font-size:8.5px;font-weight:800;padding:0 5px;border-radius:4px;border:1px solid var(--line2);background:${role === 'sniper' ? 'var(--ac10)' : 'rgba(255,255,255,.06)'};color:${role === 'sniper' ? 'var(--ac)' : 'var(--txt2)'}">${role === 'sniper' ? '스나' : '라플'}</button>
         <span style="margin-left:auto;font-family:var(--num);font-size:9px;color:#8FA1B8;white-space:nowrap">${c.source === 'match' ? `동반 ${c.games}판` : (c.solo ? n0(c.solo) + ' RP' : '언랭크')}</span>
         <button type="button" data-bal-remove="${esc(c.name)}" title="목록에서 빼기" style="flex:0 0 auto;width:15px;height:15px;border:0;background:none;color:#5C6577;font-size:10px;cursor:pointer;padding:0">✕</button>
@@ -2121,8 +2219,8 @@
         </div>
         ${(t.rows || []).map((r) => `<div style="display:flex;align-items:center;gap:6px;font-size:10px;color:#C7D3E4;padding:2px 0">
           <span style="color:${r.role === 'sniper' ? '#FCD9A0' : '#A9E5F8'};font-weight:800">${r.role === 'sniper' ? '스나' : '라플'}</span>
-          <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.name}</span>
-          <span style="font-size:9px;color:#7E8FA6">${r.style_emoji || ''}${r.style || ''}</span>
+          <span style="font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.name)}</span>
+          <span style="font-size:9px;color:#7E8FA6">${esc(r.style_emoji || '')}${esc(r.style || '')}</span>
           <span class="num" style="margin-left:auto;font-size:9.5px;color:#FDE8BD">${r.power}</span>
         </div>`).join('')}
       </div>`;
@@ -2131,7 +2229,7 @@
         ${team(res.b, 'B팀', 'rgba(56,189,248,.34)')}
       </div>
       <div class="digest-advice" style="background:rgba(52,211,153,.07);border-color:rgba(52,211,153,.26);color:#CFF6E6">
-        <span class="ic">⚖️</span><span><b>${res.verdict}</b> · ${res.note}</span>
+        <span class="ic">⚖️</span><span><b>${esc(res.verdict)}</b> · ${esc(res.note)}</span>
       </div>`;
     const note = $('#balance-note');
     if (note) note.textContent = `${res.size} : ${res.size} 기준 · 후보 ${res.pool}명 — 체크를 바꾸면 다시 계산합니다`;
@@ -2150,19 +2248,19 @@
     if (!box) return;
     const rows = (res && res.rows) || [];
     if (!rows.length) {
-      box.innerHTML = `<div class="mnote">${(res && (res.note || res.message)) || '함께 뛴 판이 2판 이상인 친구가 없습니다 — 병영수첩을 최신화해 주세요'}</div>`;
+      box.innerHTML = `<div class="mnote">${esc((res && (res.note || res.message)) || '함께 뛴 판이 2판 이상인 친구가 없습니다 — 병영수첩을 최신화해 주세요')}</div>`;
       return;
     }
     const medal = ['🥇', '🥈', '🥉'];
     box.innerHTML = rows.map((r, i) => `
       <div style="display:grid;grid-template-columns:26px minmax(0,1fr) 58px 72px 70px;gap:7px;align-items:center;padding:6px 8px;border-radius:7px;background:rgba(7,11,19,.5);border:1px solid ${i === 0 ? 'rgba(245,158,11,.34)' : 'rgba(148,163,184,.12)'}">
         <div style="font-size:12px;text-align:center">${medal[i] || (i + 1)}</div>
-        <div style="min-width:0"><div style="font-size:11px;font-weight:800;color:#EAF1FB;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${r.friend}</div>
+        <div style="min-width:0"><div style="font-size:11px;font-weight:800;color:#EAF1FB;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.friend)}</div>
           <div style="font-size:8.5px;color:#7E8FA6;font-weight:600">함께 ${r.games}판 · 혼자 ${r.alone_games}판</div></div>
         <div class="num" style="font-size:11px;text-align:right;color:${(r.win_delta || 0) >= 0 ? '#6EE7C0' : '#F7AFAE'}">${r.win_delta == null ? '—' : (r.win_delta > 0 ? '+' : '') + r.win_delta + '%p'}</div>
         <div class="num" style="font-size:10px;text-align:right;color:#C7D3E4">K/D ${r.kd_delta == null ? '—' : (r.kd_delta > 0 ? '+' : '') + r.kd_delta}%</div>
         <div style="text-align:right"><span class="num" style="font-size:11px;font-weight:800;color:#FDE8BD">${r.score}</span>
-          <div style="font-size:8px;color:#8FA1B8;font-weight:700">${r.verdict || ''}</div></div>
+          <div style="font-size:8px;color:#8FA1B8;font-weight:700">${esc(r.verdict || '')}</div></div>
       </div>`).join('');
   }
 
@@ -2474,6 +2572,40 @@
       if (el) el.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runDuoBetween(); } });
     });
 
+    /* ---------- v2.0.1 · 왼쪽 레일 · 설정 · 닫기 팝업 (누락된 리스너 복구) ---------- */
+    const railHome = $('#rail-home');
+    if (railHome) {
+      const goHome = () => {
+        if (typeof window.showScreen === 'function') window.showScreen('home');
+        else $$('.screen').forEach((s) => { s.hidden = s.id !== 's-home'; });
+        if (AL.onScreen) AL.onScreen('home');
+      };
+      railHome.addEventListener('click', goHome);
+      railHome.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); goHome(); }
+      });
+    }
+    const settingsBtn = $('#settings-btn');
+    if (settingsBtn) {
+      settingsBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (typeof window.openSettings === 'function') window.openSettings();
+        else AL.openSettings();
+      });
+    }
+    const closeTray = $('#close-to-tray');
+    if (closeTray) closeTray.addEventListener('click', async () => {
+      const mask = $('#close-mask');
+      if (mask) mask.classList.remove('show');
+      await AL.hideToTray();
+    });
+    const closeQuit = $('#close-quit');
+    if (closeQuit) closeQuit.addEventListener('click', async () => {
+      const mask = $('#close-mask');
+      if (mask) mask.classList.remove('show');
+      await AL.quitApp();
+    });
+
     /* ---------- 창 제어 ---------- */
     const winMin = $('#win-min');
     if (winMin) winMin.addEventListener('click', (e) => { e.stopPropagation(); if (AL.real) call('minimize_window'); });
@@ -2550,13 +2682,30 @@
     if (utilDuoPick) utilDuoPick.addEventListener('click', () => openDuo());
     const utilBalanceQuick = $('#util-balance-quick');
     if (utilBalanceQuick) utilBalanceQuick.addEventListener('click', () => openBalance());
+    /* v2.0.1 — 스카우팅 패널의 오버레이 미리보기 (설정 탭과 같은 동작) */
+    [['#pane-ov-scout', 'scout', '상대 분석 미리보기 · 12초'],
+     ['#pane-ov-party', 'party', '파티 배지 미리보기 · 15초'],
+     ['#pane-ov-toast', 'toast', '토스트 미리보기 · 5초']].forEach(([sel, kind, label]) => {
+      const btn = $(sel);
+      if (!btn) return;
+      btn.addEventListener('click', async () => {
+        if (!AL.real) return toast('앱(.exe)에서 실제 오버레이로 보여 줍니다', false);
+        const r = await call('overlay_preview', kind, ($('#set-ov-pos') || {}).value || '');
+        toast(r && r.ok ? label : ((r && r.message) || '미리보기를 띄우지 못했습니다'), !!(r && r.ok), 4200);
+      });
+    });
+    const paneOvHide = $('#pane-ov-hide');
+    if (paneOvHide) paneOvHide.addEventListener('click', async () => {
+      if (AL.real) await call('overlay_hide', '');
+      toast('오버레이를 모두 껐습니다', true);
+    });
 
     /* ---------- v1.5.0 · 파티랭크 5인 맵 밴·픽 ---------- */
     const partyRun = $('#party-run');
     if (partyRun) partyRun.addEventListener('click', () => runPartyMap());
     const partyInput = $('#party-names');
     if (partyInput) partyInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runPartyMap(); } });
-    $('#util-pane-tactics') && renderPartyMap(AL.partyMap || null);
+    $('#util-pane-duo') && renderPartyMap(AL.partyMap || null);
 
     /* ---------- v1.0.0 · 자유 1:1 비교 (양쪽 아무 닉네임) ---------- */
     const cmpLeft2 = $('#cmp-left'), cmpRight2 = $('#cmp-right');
@@ -2679,32 +2828,12 @@
       $$('#balance-members input[data-bal-name]').forEach((el) => { el.checked = names.includes(el.dataset.balName); });
       toast(`${names.length}명을 후보에 반영했습니다`, true);
     });
-    const todayList = $('#today-list');
-    if (todayList) todayList.addEventListener('click', (e) => {
-      const run = e.target.closest('[data-today-run]');
-      if (run) { e.preventDefault(); const mask = $('#today-mask'); if (mask) mask.classList.remove('show'); launch(run.dataset.todayRun); return; }
-      const sc = e.target.closest('[data-today-score]');
-      if (sc) { e.preventDefault(); openTodayScore(sc.dataset.todayScore); }
-    });
-    const todayRunAll = $('#today-runall');
-    if (todayRunAll) todayRunAll.addEventListener('click', () => { const mask = $('#today-mask'); if (mask) mask.classList.remove('show'); launchAll(); });
-    const todayScore = $('#today-score');
-    if (todayScore) todayScore.addEventListener('click', () => { const mask = $('#today-mask'); if (mask) mask.classList.remove('show'); openScoreModal(); });
     const duoRankBtn = $('#duo-rank-btn');
     if (duoRankBtn) duoRankBtn.addEventListener('click', () => runDuoRank());
     const duoRun = $('#duo-run');
     if (duoRun) duoRun.addEventListener('click', () => runDuo());
     const duoInput = $('#duo-nick');
     if (duoInput) duoInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); runDuo(); } });
-    const ploBtn2 = $('#personal-plo-btn');
-    if (ploBtn2) ploBtn2.addEventListener('click', (e) => { e.preventDefault(); openPersonalPlo(); });
-    const ploSave = $('#plo-save');
-    if (ploSave) ploSave.addEventListener('click', () => savePersonalPlo());
-    const ploHelp = $('#plo-help');
-    if (ploHelp) ploHelp.addEventListener('click', () => {
-      const guide = $('#plo-guide');
-      if (guide) guide.hidden = !guide.hidden;
-    });
     /* ---------- v1.4.0 · 온보딩 ---------- */
     const onbLogin = $('#onb-login');
     if (onbLogin) onbLogin.addEventListener('click', () => onbCloud(false));
@@ -2743,7 +2872,9 @@
     if (tiltRest) tiltRest.addEventListener('click', () => {
       const mask = $('#tilt-mask');
       if (mask) mask.classList.remove('show');
-      if (typeof openWarmup === 'function') openWarmup();
+      /* v2.0.1 — v1 훈련(warmup) 화면은 없어졌다. 홈으로 돌아가 기록을 보여 준다. */
+      if (typeof window.showScreen === 'function') window.showScreen('home');
+      toast('한 판 쉬고 최근 전적을 확인해 보세요', true, 4200);
     });
 
     /* ---------- 모달 닫기 ---------- */
@@ -2752,6 +2883,7 @@
         const mask = $('#' + btn.dataset.close);
         if (mask) mask.classList.remove('show');
         if (btn.dataset.close === 'nick-mask') AL.nickLater = true;
+        if (btn.dataset.close === 'auth-mask') AL.authLater = true;
       });
     });
     /* ---------- v1.0.1 · 닉네임 연결 팝업 ---------- */
@@ -2762,7 +2894,11 @@
     const nickInput = $('#nick-input');
     if (nickInput) nickInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); submitNickLink(); } });
     $$('.mask').forEach((mask) => {
-      mask.addEventListener('mousedown', (e) => { if (e.target === mask) mask.classList.remove('show'); });
+      mask.addEventListener('mousedown', (e) => {
+        if (e.target !== mask) return;
+        mask.classList.remove('show');
+        if (mask.id === 'auth-mask') AL.authLater = true;
+      });
     });
     $$('#cloud-tabs button').forEach((b) => b.addEventListener('click', () => setCloudMode(b.dataset.tab)));
     const cloudSubmit = $('#cloud-submit');
@@ -2933,11 +3069,6 @@
           toast(`${labels[key] || key} ${!on ? '켜짐' : '꺼짐'}`, true);
           return;
         }
-        if (e.target.closest('#set-reset-scores')) {
-          if (typeof resetFlow === 'function') resetFlow();
-          else openResetModal();
-          return;
-        }
 
         if (e.target.closest('#set-api-save') || e.target.closest('#set-api-test')) {
           if (!AL.real) return toast('앱(.exe)에서 키를 저장할 수 있습니다', false);
@@ -3067,6 +3198,8 @@
     /* ---------- index.html 쪽 훅 ---------- */
     AL.onScreen = function (name) {
       if (!AL.state) return;
+      /* v2.0.1 — 레일 메뉴는 6개(scout·duo·system 은 한 화면의 탭) */
+      if (name === 'scout' || name === 'duo' || name === 'system') name = 'utils';
       if (name === 'barracks') {
         if (AL.peek) { renderPeek(); return; }
         const b = AL.state.barracks;
@@ -3077,7 +3210,8 @@
       if (name === 'leaderboard') { refreshLeaderboardNames(); }
       if (name === 'utils') {
         perfRefresh(false);
-        loadRecentOpponents(true);
+        /* v2.0.1 — 탭을 오갈 때마다 API 를 다시 부르지 않는다 (처음 한 번만 최신화) */
+        loadRecentOpponents(!AL.recentOpp);
         const left = $('#cmp-left');
         if (left && !left.value) {
           left.value = (AL.state.settings && AL.state.settings.nickname) ||
@@ -3087,7 +3221,9 @@
     };
     AL.onSwitch = function () {
       if (!AL.state) return;
-      applySummaryOnly();
+      /* v2.0.1 — applySummaryOnly(v1 에임 요약)는 삭제됐다. 화면 값만 다시 그린다. */
+      if (typeof drawHome === 'function') drawHome();
+      if (AL.peek) renderPeek();
     };
 
     /* v1.0.1 (#9) — 순위표를 열 때 저장된 ouid 로 현재 닉네임·클랜을 다시 확인한다.
@@ -3112,7 +3248,14 @@
       }
     }
     AL.refreshLeaderboardNames = refreshLeaderboardNames;
-    AL.openSettings = function () {
+    /* v2.0.1 — 스카우팅 패널의 오버레이 단축키 안내 (설정값을 따른다) */
+  AL.syncOverlayPane = function (st) {
+    const el = $('#pane-ov-sub');
+    if (!el) return;
+    const ovs = (((st || AL.state || {}).overlay) || {}).settings || {};
+    el.textContent = `${ovs.hotkey_lobby || 'Insert'} 대기실 · 맵 밴 / ${ovs.hotkey_scout || 'Home'} 상대 분석`;
+  };
+  AL.openSettings = function () {
       renderSettings(AL.state || { settings: {}, nexon: {}, cloud: {}, meta: {} });
       renderSettingsTray(AL.tray);
       renderUpdate(AL.update);
@@ -3429,9 +3572,6 @@
     }
     return toast('미리보기 화면입니다 · .exe 로 실행하면 전적을 불러옵니다', false);
   }
-
-  window.addEventListener('focus', () => setTimeout(maybeAutoFill, 900));
-  document.addEventListener('visibilitychange', () => { if (!document.hidden) setTimeout(maybeAutoFill, 900); });
 
   document.addEventListener('DOMContentLoaded', () => {
     bind();

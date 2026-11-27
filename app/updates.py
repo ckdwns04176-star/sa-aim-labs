@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import datetime as _dt
+import hashlib
 import json
 import logging
 import os
@@ -83,6 +84,66 @@ def build_is_newer(build_at: str, margin_seconds: float = 3600) -> bool:
     return stamp > local + margin_seconds
 
 
+def sha256_file(path: str | os.PathLike[str], chunk: int = 1 << 20) -> str:
+    """파일 SHA256 (16진 문자열)."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as fh:
+        while True:
+            block = fh.read(chunk)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def clean_digest(value: Any) -> str | None:
+    """`sha256:ab12…` · `ab12…` → 소문자 16진 64자리 (형식이 아니면 None)."""
+    text = str(value or "").strip().lower()
+    if text.startswith("sha256:"):
+        text = text.split(":", 1)[1].strip()
+    if len(text) == 64 and all(ch in "0123456789abcdef" for ch in text):
+        return text
+    return None
+
+
+def _exe_asset(release: dict[str, Any]) -> dict[str, Any] | None:
+    """릴리스에서 .exe 자산 1건 (이름 우선, 없으면 첫 .exe)."""
+    assets = [a for a in (release.get("assets") or []) if isinstance(a, dict)]
+    for asset in assets:
+        if str(asset.get("name") or "").lower() == EXE_NAME.lower():
+            return asset
+    for asset in assets:
+        if str(asset.get("name") or "").lower().endswith(".exe"):
+            return asset
+    return None
+
+
+def asset_digest(release: dict[str, Any]) -> str | None:
+    """GitHub Releases `assets[].digest` (`sha256:…`) → 16진 문자열."""
+    asset = _exe_asset(release or {})
+    if not asset:
+        return None
+    return clean_digest(asset.get("digest"))
+
+
+def verify_file(path: str | os.PathLike[str], expect: str | None) -> dict[str, Any]:
+    """내려받은 파일의 SHA256 검증.
+
+    ``expect`` 가 없으면(옛 릴리스) 확인하지 못한 것으로 표시만 한다 — 설치를 막지는 않는다.
+    """
+    want = clean_digest(expect)
+    try:
+        got = sha256_file(path)
+    except OSError as exc:
+        return {"ok": False, "verified": False, "message": f"파일을 읽지 못했습니다 · {exc}"}
+    if not want:
+        return {"ok": True, "verified": False, "actual": got,
+                "message": "무결성 값(digest)이 없는 릴리스라 SHA256 확인을 건너뜁니다"}
+    return {"ok": got == want, "verified": True, "actual": got, "expected": want,
+            "message": "SHA256 일치" if got == want
+                       else f"SHA256 불일치 · 파일이 손상되었거나 변조되었습니다 (기대 {want[:12]}… · 실제 {got[:12]}…)"}
+
+
 def _download_url(release: dict[str, Any]) -> str:
     for asset in release.get("assets") or []:
         name = str(asset.get("name") or "")
@@ -127,6 +188,7 @@ def fetch_latest(timeout: float = 4.0) -> dict[str, Any]:
     if not release:
         return {"ok": False, "message": "아직 빌드 릴리스가 없습니다"}
     assets = [a for a in (release.get("assets") or []) if isinstance(a, dict)]
+    digest = asset_digest(release)
     build_at = ""
     for asset in assets:
         stamp = str(asset.get("updated_at") or "") or str(asset.get("created_at") or "")
@@ -138,6 +200,7 @@ def fetch_latest(timeout: float = 4.0) -> dict[str, Any]:
         "name": str(release.get("name") or release.get("tag_name") or ""),
         "url": str(release.get("html_url") or RELEASES_URL),
         "download": _download_url(release),
+        "digest": f"sha256:{digest}" if digest else None,
         "published_at": str(release.get("published_at") or ""),
         "build_at": build_at or str(release.get("published_at") or ""),
         "notes": str(release.get("body") or "")[:2000],
@@ -202,6 +265,7 @@ def check(current: str, *, force: bool = False, timeout: float = 4.0) -> dict[st
             "build_at": build_at,
             "url": latest.get("url"),
             "download": latest.get("download"),
+            "digest": latest.get("digest"),
             "published_at": latest.get("published_at"),
             "notes": latest.get("notes"),
             "checked_at": _dt.datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -246,8 +310,14 @@ def gate(result: dict[str, Any] | None, current: str, *, frozen: bool | None = N
     }
 
 
-def download(url: str, dest: str | os.PathLike[str], *, timeout: float = 60.0) -> dict[str, Any]:
-    """새 .exe 내려받기 (urllib · 표준 라이브러리)."""
+def download(url: str, dest: str | os.PathLike[str], *, timeout: float = 60.0,
+             expect_sha256: str | None = None) -> dict[str, Any]:
+    """새 .exe 내려받기 + SHA256 검증 (urllib · 표준 라이브러리).
+
+    ``expect_sha256`` 이 주어지면(릴리스 digest) 내려받은 파일의 SHA256 이
+    일치할 때만 ``dest`` 로 옮긴다.  불일치·손상이면 임시 파일을 지우고
+    기존 실행 파일은 그대로 둔다.
+    """
     target = str(dest)
     if not str(url or "").startswith("https://"):
         return {"ok": False, "message": "다운로드 주소가 올바르지 않습니다"}
@@ -268,8 +338,15 @@ def download(url: str, dest: str | os.PathLike[str], *, timeout: float = 60.0) -
                     raise ValueError("파일이 너무 큽니다")
         if total < 1024 * 1024:
             raise ValueError(f"받은 파일이 너무 작습니다 ({total} bytes)")
+        check = verify_file(tmp, expect_sha256)
+        if not check.get("ok"):
+            raise ValueError(check.get("message") or "SHA256 검증에 실패했습니다")
         os.replace(tmp, target)
-        return {"ok": True, "path": target, "size": total}
+        return {"ok": True, "path": target, "size": total,
+                "verified": bool(check.get("verified")),
+                "sha256": check.get("actual"),
+                "message": "내려받음 · SHA256 일치" if check.get("verified")
+                           else "내려받음 · 무결성 값 없음"}
     except Exception as exc:  # noqa: BLE001
         try:
             if os.path.exists(target + ".part"):
@@ -299,6 +376,7 @@ def swap_script(exe_path: str, new_exe: str, *, pid: int | None = None) -> str:
         "  timeout /t 2 /nobreak >nul",
         "  goto wait",
         ")",
+        f'copy /y \"{exe_path}\" \"{exe_path}.bak\" >nul',
         f'move /y \"{new_exe}\" \"{exe_path}\" >nul',
         f'start \"\" \"{exe_path}\"',
         'del \"%~f0\" >nul 2>&1',
@@ -307,13 +385,16 @@ def swap_script(exe_path: str, new_exe: str, *, pid: int | None = None) -> str:
 
 
 def prepare_install(download_url: str, *, exe_path: str | None = None,
-                    work_dir: str | None = None) -> dict[str, Any]:
-    """내려받기 + 교체 배치 준비 (실행은 run_install)."""
+                    work_dir: str | None = None, digest: str | None = None) -> dict[str, Any]:
+    """내려받기 + SHA256 검증 + 교체 배치 준비 (실행은 run_install).
+
+    검증에 실패하면 새 파일을 지우고 **기존 .exe 는 손대지 않는다.**
+    """
     import tempfile
 
     base = work_dir or tempfile.mkdtemp(prefix="sa_al_update_")
     new_exe = os.path.join(base, EXE_NAME)
-    got = download(download_url, new_exe)
+    got = download(download_url, new_exe, expect_sha256=digest)
     if not got.get("ok"):
         return got
     exe = exe_path or sys.executable
@@ -324,7 +405,10 @@ def prepare_install(download_url: str, *, exe_path: str | None = None,
     except OSError as exc:
         return {"ok": False, "message": f"업데이트 스크립트를 쓰지 못했습니다 · {exc}"}
     return {"ok": True, "path": new_exe, "script": script, "size": got.get("size"),
-            "message": "새 버전을 내려받았습니다 · 앱을 닫으면 자동으로 교체됩니다"}
+            "verified": bool(got.get("verified")), "sha256": got.get("sha256"),
+            "message": "새 버전을 내려받았습니다 · 앱을 닫으면 자동으로 교체됩니다"
+                       if got.get("verified")
+                       else "새 버전을 내려받았습니다 (무결성 값이 없어 SHA256 확인은 생략) · 앱을 닫으면 교체됩니다"}
 
 
 def run_install(script: str) -> dict[str, Any]:

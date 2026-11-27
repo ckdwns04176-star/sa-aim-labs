@@ -2,9 +2,21 @@
 
 서든어택 전술 · 병영 · 엔비디아 최적화 도우미 (Windows · PyWebView).
 NEXON Open API 병영수첩(솔로/파티 RP · 랭크 컨디션 · 플레이 잔디 · 최근 5판 · 약점 맵),
-인게임 오버레이 3종(F8 파티 대기실 맵 밴픽 · F9 적 5명 스카우팅 · 경기 종료 토스트),
+인게임 오버레이 3종(Insert 파티 대기실 맵 밴픽 · Home 적 5명 스카우팅 · 경기 종료 토스트),
 상대 스카우팅 · 타인 A+B 듀오 시너지 · 5인 맵 밴픽 · NVIDIA 계단현상/전원/게임 모드 ·
 회원 로그인(이메일 · 비밀번호 찾기)과 클라우드 백업을 한 앱에 담았습니다.
+
+**v2.0.1 — 실기 피드백 10건 + 보안 3종.** 왼쪽 레일을 6개(병영수첩 · 맵·약점 · 순위표 ·
+스카우팅 · 듀오·밴픽 · 최적화)로 나누고, 화면·모달 클릭이 먹히지 않던 누락 리스너(홈 버튼 ·
+설정 버튼 · 닫기 팝업 · 미로그인 로그인 안내)를 전부 복구했습니다. 오버레이 기본 단축키를
+**Insert(대기실·맵 밴) / Home(상대 분석)** 으로 바꾸고, 64비트 Windows 에서 핸들이 잘려
+`CreateWindowExW 실패`로 뜨던 원인(ctypes argtypes/restype 누락)을 고쳤습니다. 스카우팅은
+경기 상세(match-detail) 호출을 **완전히 없애** 상대 1명당 `/user/tier` + `/match(솔로)` +
+`/match(파티)` 만 병렬 조회하고, **솔로 랭크와 파티 랭크를 나눠** 티어·승률·K/D 를 보여 줍니다
+(데미지 항목 제외, 응답 3초 → 1초 안팎). 티어 아이콘은 RP 가 아니라 **API 티어 이름**을 먼저
+따라 별레전드가 그마 아이콘으로 뜨던 문제를 고쳤습니다. 보안은 HTML 이스케이프 전수 점검,
+자동 업데이트 **SHA256 무결성 검증**(불일치 시 설치 중단·기존 exe 보존), 백업 복원 **검증 강화**
+(크기·구조·version·자료형)를 넣었습니다.
 
 **v2.0.0 — 서든 전용 전면 개편.** 에임 연습(코박스·에임랩 점수·시나리오·18단계 티어·
 훈련 잔디)을 앱에서 완전히 걷어내고, 홈을 **내 랭크(솔로/파티 RP) · 최근 랭크 컨디션 ·
@@ -40,14 +52,14 @@ app/v150.py             테마·화면 배율·공식 맵 이미지·파티 맵 
 app/native_overlay.py   Win32 레이어드 투명 창 (GDI+ 렌더 · 클릭 통과 · 포커스 비탈취)
 app/overlay.py          인게임 오버레이 3종 스펙·기하·수명 관리
 app/party_lobby.py      대기실/10인 OCR 닉네임 파싱·보정·팀 분리·고정 파티 프리셋
-app/scouting.py         상대 5명 병렬 스카우팅 (프로필 → 이 맵 승률·KD 배지)
+app/scouting.py         상대 5명 병렬 스카우팅 (tier + 솔로/파티 매치목록 · 데미지 없음)
 app/nvapi_drs.py        NVAPI DRS (프로필에 설정 생성·저장 · 별도 프로세스)
 app/capture.py          PowerShell 화면 캡처 · Windows.Media.Ocr · 화면 지문
-app/hotkeys.py          F8/F9 전역 단축키 (RegisterHotKey)
+app/hotkeys.py          오버레이 전역 단축키 Insert/Home (RegisterHotKey)
 app/toast.py            경기 종료 감지 · 토스트 문구
 ui/index.html           화면 (정적 디자인 + 샘플 데이터 + 첫 로딩 스플래시)
 ui/bridge.js            화면 ↔ pywebview.api 연결 (실데이터 반영)
-tests/v2_test.py        v2.0.0 전체 검사 (구조체·OCR·듀오·저장소·등급·오버레이·UI 115%) 151건
+tests/v2_test.py        전체 검사 (구조체·OCR·듀오·저장소·등급·오버레이·UI·v2.0.1 클릭/보안) 273건
 tests/v2_shot.py        주요 화면 스크린샷 (tests/shots/v2-*.png)
 tests/v2_fixtures.py    테스트 공용 state fixture · 브리지 목
 supabase/schema.sql     user_profiles 테이블 + RLS (SQL Editor 에 1회 실행)
@@ -182,14 +194,14 @@ pyinstaller --noconfirm --onefile --windowed --icon assets/app.ico --name "SA_Ai
 
 | 단축키 | 동작 | 종료 |
 |---|---|---|
-| `F8` | 맵 밴 화면이면 5개 카드 위 PICK/BAN 글래스 바, 대기실이면 5인 OCR 배지 | 재입력 · 12초 · 화면 변화 1초 |
-| `F9` | 게임 시작 10초 — 상대 5명 배지(주무기 · 이 맵 승률 · KD%) | 재입력 · 14초 |
+| `Insert` | 맵 밴 화면이면 5개 카드 위 PICK/BAN 글래스 바, 대기실이면 5인 OCR 배지 | 재입력 · 12초 · 화면 변화 1초 |
+| `Home` | 게임 시작 10초 — 상대 5명 **솔로/파티 랭크**(티어 · 승률 · K/D) | 재입력 · 14초 |
 
 * 오버레이는 DLL 주입·후킹 없이 **WS_EX_TOPMOST + WS_EX_NOACTIVATE + WS_EX_TRANSPARENT**
   독립 투명 창으로만 그립니다 (클릭 통과).
 * 맵 밴 카드 이름은 화면 OCR 로 읽어 `시티캣(심플)` → `시티캣` 처럼 API 맵 이름과 맞춥니다.
 * 대기실 OCR 위치가 어긋나면 설정 → 오버레이 → **대기실 OCR 위치 보정(X/Y/배율)** 에서 맞춥니다.
-* 단축키는 설정에서 F6~F12 · Ctrl/Alt 조합으로 바꿀 수 있습니다.
+* 단축키는 설정에서 F6~F12 · Insert/Home/Delete/End/PgUp/PgDn · Ctrl/Alt/Shift 조합으로 바꿀 수 있습니다(기본 Insert/Home).
 * 한 판이 끝나면 우하단에 승패·K/D·딜량·연승 토스트가 5초 표시됩니다(위치 ON/OFF 가능).
 
 ## NEXON API 연결

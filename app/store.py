@@ -27,6 +27,16 @@ from .supabase_sync import DEFAULT_ANON_KEY, DEFAULT_URL
 
 SCHEMA_VERSION = 2
 
+# v2.0.1 — 오버레이 기본 단축키를 F8/F9 → Insert/Home 으로 바꿨다.
+#   설정에 남아 있는 '예전 기본값(F8·F9)' 만 한 번 새 기본값으로 옮긴다.
+#   사용자가 직접 고른 다른 키는 건드리지 않는다.
+HOTKEY_DEFAULTS = {"overlay_hotkey_lobby": "Insert", "overlay_hotkey_scout": "Home"}
+LEGACY_HOTKEY_DEFAULTS = {"overlay_hotkey_lobby": "F8", "overlay_hotkey_scout": "F9"}
+
+# 백업 가져오기 상한 — 손상·악성 파일이 앱 데이터를 망가뜨리지 않게
+BACKUP_MAX_BYTES = 20 * 1024 * 1024
+BACKUP_MAX_DEPTH = 12
+
 # 백업 파일에 절대 들어가면 안 되는 키 (settings 안쪽 이름 기준)
 SECRET_KEYS = ("api_key", "access_token", "refresh_token", "password", "anon_key", "service_key")
 
@@ -51,8 +61,9 @@ DEFAULTS: dict[str, Any] = {
         "ui_scale_auto": True,
         # ── 인게임 오버레이 (v2.0.0 · Win32 순정 창) ──
         "overlay_enabled": True,
-        "overlay_hotkey_lobby": "F8",
-        "overlay_hotkey_scout": "F9",
+        "overlay_hotkey_lobby": "Insert",
+        "overlay_hotkey_scout": "Home",
+        "hotkey_defaults_version": 2,
         "overlay_mapban_seconds": 12,
         "overlay_party_seconds": 15,
         "overlay_scan_x": 0,
@@ -137,6 +148,66 @@ def scrub_secrets(data: dict[str, Any]) -> dict[str, Any]:
     return clean
 
 
+def _value_depth(node: Any, depth: int = 0) -> int:
+    """중첩 깊이 — 비정상적으로 깊은 JSON 을 걸러낸다."""
+    if depth > BACKUP_MAX_DEPTH:
+        return depth
+    if isinstance(node, dict):
+        return max([depth] + [_value_depth(v, depth + 1) for v in node.values()])
+    if isinstance(node, list):
+        return max([depth] + [_value_depth(v, depth + 1) for v in node])
+    return depth
+
+
+def _validate_backup(data: dict[str, Any], raw: dict[str, Any] | None = None) -> None:
+    """가져올 백업 한 건을 검사한다 — 문제가 있으면 ``ValueError``.
+
+    data.json 을 건드리기 전에 호출해야 기존 데이터가 안전하다.
+    """
+    if not isinstance(data, dict):
+        raise ValueError("백업 데이터 형식이 올바르지 않습니다")
+    if not ("settings" in data or "leaderboard" in data):
+        raise ValueError("SA AIM LABS 백업 파일이 아닙니다 (settings/leaderboard 없음)")
+    stamp = (raw or {}).get("version", data.get("version"))
+    if stamp not in (None, ""):
+        try:
+            version = int(stamp)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"백업 version 값이 숫자가 아닙니다 ({stamp!r})") from exc
+        if version > SCHEMA_VERSION:
+            raise ValueError(
+                f"이 백업은 더 새로운 앱(v{version})에서 만든 파일입니다 · 지금 앱(v{SCHEMA_VERSION})에서는 복원할 수 없습니다")
+        if version < 1:
+            raise ValueError(f"백업 version 값이 올바르지 않습니다 ({version})")
+    if _value_depth(data) > BACKUP_MAX_DEPTH:
+        raise ValueError("백업 구조가 너무 깊어 읽을 수 없습니다")
+    if "settings" in data and not isinstance(data["settings"], dict):
+        raise ValueError("백업의 settings 가 객체가 아닙니다")
+    settings = data.get("settings") if isinstance(data.get("settings"), dict) else {}
+    for key in ("nickname", "theme", "toast_position", "overlay_hotkey_lobby", "overlay_hotkey_scout"):
+        if key in settings and not isinstance(settings[key], str):
+            raise ValueError(f"백업 settings.{key} 값이 문자형이 아닙니다")
+    for key in ("ui_scale", "tilt_interval", "overlay_mapban_seconds", "overlay_party_seconds"):
+        if key not in settings:
+            continue
+        value = settings[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f"백업 settings.{key} 값이 숫자가 아닙니다")
+    if "leaderboard" in data and not isinstance(data["leaderboard"], list):
+        raise ValueError("백업의 leaderboard 가 목록이 아닙니다")
+    for row in (data.get("leaderboard") or [])[:50]:
+        if not isinstance(row, dict) or not isinstance(row.get("name", ""), str):
+            raise ValueError("백업의 순위표 행 형식이 올바르지 않습니다")
+    for key in ("memos", "barracks", "barracks_ids", "play_days", "utils", "overlay", "cloud"):
+        if key in data and not isinstance(data[key], dict):
+            raise ValueError(f"백업의 {key} 가 객체가 아닙니다")
+    for key in ("barracks_history", "condition_history", "party_presets"):
+        if key in data and not isinstance(data[key], list):
+            raise ValueError(f"백업의 {key} 가 목록이 아닙니다")
+    if "account" in data and not isinstance(data["account"], dict):
+        raise ValueError("백업의 account 가 객체가 아닙니다")
+
+
 class Store:
     """Thread-safe local store: every mutation rewrites the whole document."""
 
@@ -165,6 +236,7 @@ class Store:
                     except OSError:
                         pass
                     data = {}
+            self._migrate_hotkeys(data)
             self.data = _deep_merge(DEFAULTS, data)
             # v1 백업/데이터에 남아 있던 에임 연습 구역은 더 이상 쓰지 않는다.
             for legacy in ("records", "rotation", "more", "attendance", "custom_scenarios"):
@@ -172,6 +244,25 @@ class Store:
             if not self.data.get("created_at"):
                 self.data["created_at"] = now_iso()
             return self.data
+
+    @staticmethod
+    def _migrate_hotkeys(raw: dict[str, Any]) -> None:
+        """v2.0.1 — 예전 기본값(F8/F9)만 새 기본값(Insert/Home)으로 한 번 옮긴다.
+
+        사용자가 직접 고른 단축키(F10, Ctrl+F8 등)는 그대로 둔다.
+        """
+        if not isinstance(raw, dict):
+            return
+        settings = raw.get("settings")
+        if not isinstance(settings, dict):
+            return
+        if settings.get("hotkey_defaults_version") == 2:
+            return
+        for key, legacy in LEGACY_HOTKEY_DEFAULTS.items():
+            current = str(settings.get(key) or "").strip()
+            if not current or current.upper() == legacy.upper():
+                settings[key] = HOTKEY_DEFAULTS[key]
+        settings["hotkey_defaults_version"] = 2
 
     def save(self) -> None:
         with self._lock:
@@ -398,11 +489,32 @@ class Store:
             return dest_path
 
     def import_backup(self, src: str | os.PathLike[str], *, snapshot: bool = True) -> dict[str, Any]:
+        """백업 JSON 을 가져온다 — 검증이 끝나기 전에는 현재 데이터를 건드리지 않는다.
+
+        v2.0.1 — 크기 상한 · JSON 구조 · version 호환성 · 주요 필드 자료형을 먼저
+        확인한다.  하나라도 걸리면 ``ValueError`` 로 멈추고 data.json 은 그대로 둔다.
+        """
         src_path = Path(src)
-        raw = json.loads(src_path.read_text(encoding="utf-8"))
-        data = raw.get("data") if isinstance(raw, dict) and isinstance(raw.get("data"), dict) else raw
-        if not isinstance(data, dict) or not ("leaderboard" in data or "settings" in data):
-            raise ValueError("SA AIM LABS 백업 파일이 아닙니다 (settings/leaderboard 없음)")
+        try:
+            size = src_path.stat().st_size
+        except OSError as exc:
+            raise ValueError(f"백업 파일을 읽을 수 없습니다 · {exc}") from exc
+        if size <= 0:
+            raise ValueError("백업 파일이 비어 있습니다")
+        if size > BACKUP_MAX_BYTES:
+            raise ValueError(f"백업 파일이 너무 큽니다 ({size / 1024 / 1024:.1f}MB · 최대 20MB)")
+        try:
+            raw = json.loads(src_path.read_text(encoding="utf-8"))
+        except UnicodeDecodeError as exc:
+            raise ValueError("백업 파일이 UTF-8 JSON 이 아닙니다") from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"백업 파일의 JSON 이 손상되었습니다 (줄 {exc.lineno}) ") from exc
+        if not isinstance(raw, dict):
+            raise ValueError("SA AIM LABS 백업 파일이 아닙니다 (JSON 최상위가 객체가 아님)")
+        data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+        if not isinstance(data, dict) or not data:
+            raise ValueError("SA AIM LABS 백업 파일이 아닙니다 (data 없음)")
+        _validate_backup(data, raw)
         with self._lock:
             if snapshot and self.path.exists():
                 shutil.copy2(self.path, paths.backup_dir() / f"before_import_{_stamp()}.json")

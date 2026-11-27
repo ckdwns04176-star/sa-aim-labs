@@ -51,13 +51,16 @@
   .head .sp{flex:1}
   .head .ms{font-family:Chakra,Consolas,monospace;font-size:9px;color:#8FA1B8}
   .rows{display:flex;flex-direction:column;gap:4px;padding:0 10px 8px}
-  .row{display:flex;align-items:center;gap:8px;height:38px;padding:0 9px;border-radius:8px;
+  .row{display:flex;align-items:center;gap:8px;height:42px;padding:0 9px;border-radius:8px;
     background:rgba(255,255,255,.035);border:1px solid rgba(255,255,255,.07)}
-  .row .nm{font-size:11.5px;font-weight:800;min-width:74px;max-width:110px;white-space:nowrap;
+  .row .nm{font-size:11.5px;font-weight:800;flex:0 0 96px;max-width:96px;white-space:nowrap;
     overflow:hidden;text-overflow:ellipsis}
-  .row .bd{flex:1;font-size:10.5px;color:#C7D3E4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .row .bd b{color:#EDF4FF;font-weight:800}
-  .row .kdbar{width:52px;height:5px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden;flex:0 0 52px}
+  .row .bd{flex:1;display:flex;flex-direction:column;gap:1px;min-width:0}
+  .row .bd .l{display:flex;align-items:center;gap:5px;font-size:10px;color:#A9BBD1;white-space:nowrap;overflow:hidden}
+  .row .bd .l b{color:#EAF2FC;font-weight:800}
+  .row .bd .l.s{color:#8FD7F2}
+  .row .bd .l.p{color:#E4C580}
+  .row .kdbar{width:44px;height:5px;border-radius:3px;background:rgba(255,255,255,.10);overflow:hidden;flex:0 0 44px}
   .row .kdbar i{display:block;height:100%;background:linear-gradient(90deg,#0EA5E9,#6EE7C0)}
   .row.hot .kdbar i{background:linear-gradient(90deg,#B45309,#FF4655)}
   .row.empty{justify-content:center;color:#7C8DA4;font-size:10px}
@@ -70,8 +73,8 @@
 </head>
 <body>
 <div class="tabs" id="tabs">
-  <span class="tab" data-tab="mapban">맵 밴 <kbd>F8</kbd></span>
-  <span class="tab" data-tab="scout">상대 분석 <kbd>F9</kbd></span>
+  <span class="tab" data-tab="mapban">맵 밴 <kbd>Insert</kbd></span>
+  <span class="tab" data-tab="scout">상대 분석 <kbd>Home</kbd></span>
 </div>
 
 <div class="cards" id="cards" hidden></div>
@@ -79,8 +82,8 @@
 
 <div class="panel" id="panel" hidden>
   <div class="tabs" id="tabs2">
-    <span class="tab" data-tab="mapban">맵 밴 <kbd>F8</kbd></span>
-    <span class="tab" data-tab="scout">상대 분석 <kbd>F9</kbd></span>
+    <span class="tab" data-tab="mapban">맵 밴 <kbd>Insert</kbd></span>
+    <span class="tab" data-tab="scout">상대 분석 <kbd>Home</kbd></span>
   </div>
   <div class="head">
     <div class="t" id="s-title">상대 5명 스카우팅</div>
@@ -145,7 +148,7 @@ function renderScout(p) {
   if (!rows.length) {
     box.innerHTML = p.loading
       ? Array.from({length:5}, () => '<div class="skeleton"></div>').join('')
-      : '<div class="row empty">상대 닉네임을 읽지 못했습니다 · F9 로 다시</div>';
+      : '<div class="row empty">상대 닉네임을 읽지 못했습니다 · Home 으로 다시</div>';
     return;
   }
   box.innerHTML = rows.map((r) => {
@@ -153,18 +156,40 @@ function renderScout(p) {
     const hot = kd >= 60 ? 'hot' : '';
     return `<div class="row ${hot}">
       <span class="nm">${esc(r.name || '—')}</span>
-      <span class="bd">${badge(r)}</span>
+      <span class="bd">
+        <span class="l s">${modeLine('솔로', r.solo_stats, r.solo_tier, r.solo)}</span>
+        <span class="l p">${modeLine('파티', r.party_stats, r.party_tier, r.party)}</span>
+      </span>
       <span class="kdbar"><i style="width:${Math.max(4, Math.min(100, kd))}%"></i></span>
     </div>`;
   }).join('');
 }
 
-function badge(r) {
-  const parts = [esc(r.weapon || '스나')];
-  if (r.map_win != null) parts.push(`이 맵 <b>${Math.round(Number(r.map_win))}%</b>`);
-  else if (r.win != null) parts.push(`전체 <b>${Math.round(Number(r.win))}%</b>`);
-  if (r.kd != null) parts.push(`KD <b>${Math.round(Number(r.kd))}%</b>`);
-  return parts.join(' · ');
+/* v2.0.1 — 티어 이름 약어 (그랜드마스터 II → 그마 II) */
+const SHORT_TIER = {'언랭크':'언랭','브론즈':'브론즈','실버':'실버','골드':'골드','마스터':'마스터',
+  '그랜드마스터':'그마','레전드':'레전','불레전드':'불레','별레전드':'별레'};
+function shortTier(name){
+  const text = String(name || '').trim();
+  if (!text) return '언랭';
+  const parts = text.split(' ');
+  const head = SHORT_TIER[parts[0]] || parts[0];
+  return parts.length > 1 ? head + ' ' + parts.slice(1).join(' ') : head;
+}
+
+/* 한 모드 — 티어 · 승률 · K/D (데미지는 표시하지 않는다) */
+function modeLine(label, stats, fallbackTier, fallbackRp) {
+  const st = stats || {};
+  const rp = Number(st.rp != null ? st.rp : (fallbackRp || 0)) || 0;
+  const tier = shortTier(st.tier || fallbackTier || (rp > 0 ? '' : '언랭크'));
+  const games = Number(st.games || 0);
+  const bits = [`<b>${esc(label)}</b>`, esc(tier)];
+  if (games) {
+    if (st.win != null) bits.push(`${Math.round(Number(st.win))}%`);
+    if (st.kd != null) bits.push(`K/D ${Math.round(Number(st.kd))}%`);
+  } else {
+    bits.push('표본 없음');
+  }
+  return bits.join(' · ');
 }
 
 function esc(v){return String(v==null?'':v).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}

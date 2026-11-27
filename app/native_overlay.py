@@ -73,6 +73,110 @@ FONT = "Malgun Gothic"
 FONT_FALLBACK = "Segoe UI"
 
 
+# ---------------------------------------------------------------- Win32 (64비트 안전)
+class _Win32:
+    """user32·gdi32·kernel32 를 **64비트 포인터 서명**으로 묶어 둔 것.
+
+    ctypes 는 argtypes/restype 를 지정하지 않으면 반환값을 32비트 ``int`` 로
+    해석한다.  Win64 에서 HWND·HDC·HMODULE 은 64비트 포인터라 그대로두면
+    핸들이 잘려 ``CreateWindowExW`` 가 실패하거나 엉뚱한 주소를 가리킨다.
+    그래서 이 앱이 쓰는 모든 함수에 서명을 못박는다.
+    """
+
+    def __init__(self) -> None:
+        from ctypes import wintypes
+
+        HANDLE = ctypes.c_void_p
+        self.user32 = ctypes.WinDLL("user32", use_last_error=True)  # type: ignore[attr-defined]
+        self.gdi32 = ctypes.WinDLL("gdi32", use_last_error=True)  # type: ignore[attr-defined]
+        self.kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        u, g, k = self.user32, self.gdi32, self.kernel32
+
+        def sig(fn: Any, restype: Any, *argtypes: Any) -> None:
+            fn.restype = restype
+            fn.argtypes = list(argtypes)
+
+        # kernel32
+        sig(k.GetModuleHandleW, HANDLE, wintypes.LPCWSTR)
+        sig(k.GetCurrentThreadId, wintypes.DWORD)
+        sig(k.GetLastError, wintypes.DWORD)
+        # user32 — 창
+        sig(u.RegisterClassExW, wintypes.ATOM, ctypes.c_void_p)
+        sig(u.CreateWindowExW, HANDLE, wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR,
+            wintypes.DWORD, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            HANDLE, HANDLE, HANDLE, ctypes.c_void_p)
+        sig(u.DefWindowProcW, ctypes.c_ssize_t, HANDLE, wintypes.UINT,
+            wintypes.WPARAM, wintypes.LPARAM)
+        sig(u.SetWindowPos, wintypes.BOOL, HANDLE, HANDLE, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, ctypes.c_int, wintypes.UINT)
+        sig(u.ShowWindow, wintypes.BOOL, HANDLE, ctypes.c_int)
+        sig(u.UpdateLayeredWindow, wintypes.BOOL, HANDLE, HANDLE, ctypes.c_void_p,
+            ctypes.c_void_p, HANDLE, ctypes.c_void_p, wintypes.DWORD, ctypes.c_void_p,
+            wintypes.DWORD)
+        sig(u.GetWindowRect, wintypes.BOOL, HANDLE, ctypes.c_void_p)
+        sig(u.PostMessageW, wintypes.BOOL, HANDLE, wintypes.UINT, wintypes.WPARAM,
+            wintypes.LPARAM)
+        sig(u.PostQuitMessage, None, ctypes.c_int)
+        sig(u.PostThreadMessageW, wintypes.BOOL, wintypes.DWORD, wintypes.UINT,
+            wintypes.WPARAM, wintypes.LPARAM)
+        sig(u.GetMessageW, wintypes.BOOL, ctypes.c_void_p, HANDLE, wintypes.UINT, wintypes.UINT)
+        sig(u.TranslateMessage, wintypes.BOOL, ctypes.c_void_p)
+        sig(u.DispatchMessageW, ctypes.c_ssize_t, ctypes.c_void_p)
+        sig(u.DrawTextW, ctypes.c_int, HANDLE, wintypes.LPCWSTR, ctypes.c_int,
+            ctypes.c_void_p, wintypes.UINT)
+        sig(u.GetSystemMetrics, ctypes.c_int, ctypes.c_int)
+        # gdi32 — DIB · 글자
+        sig(g.CreateCompatibleDC, HANDLE, HANDLE)
+        sig(g.CreateDIBSection, HANDLE, HANDLE, ctypes.c_void_p, wintypes.UINT,
+            ctypes.c_void_p, HANDLE, wintypes.DWORD)
+        sig(g.SelectObject, HANDLE, HANDLE, HANDLE)
+        sig(g.DeleteObject, wintypes.BOOL, HANDLE)
+        sig(g.DeleteDC, wintypes.BOOL, HANDLE)
+        sig(g.SetBkMode, ctypes.c_int, HANDLE, ctypes.c_int)
+        sig(g.SetTextColor, wintypes.DWORD, HANDLE, wintypes.DWORD)
+        sig(g.CreateSolidBrush, HANDLE, wintypes.DWORD)
+        sig(g.FillRect, ctypes.c_int, HANDLE, ctypes.c_void_p, HANDLE)
+        sig(g.CreateFontW, HANDLE, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.c_int, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
+            wintypes.DWORD, wintypes.LPCWSTR)
+
+    def last_error(self) -> int:
+        """직전 Win32 호출의 오류 코드 — ctypes 가 잡아 둔 값 우선."""
+        try:
+            code = int(ctypes.get_last_error() or 0)
+        except Exception:  # noqa: BLE001
+            code = 0
+        if code:
+            return code
+        try:
+            return int(self.kernel32.GetLastError() or 0)
+        except Exception:  # noqa: BLE001
+            return 0
+
+    def error_text(self, code: int) -> str:
+        """오류 코드 → 'Win32 1400 (잘못된 창 핸들)' 같은 문장."""
+        text = ""
+        try:
+            text = ctypes.FormatError(int(code or 0)).strip()
+        except Exception:  # noqa: BLE001
+            text = ""
+        return f"Win32 {int(code or 0)}" + (f" ({text})" if text else "")
+
+
+_WIN32: _Win32 | None = None
+_win32_lock = threading.Lock()
+
+
+def win32() -> _Win32:
+    """서명이 설정된 Win32 묶음 (Windows 에서만)."""
+    global _WIN32
+    with _win32_lock:
+        if _WIN32 is None:
+            _WIN32 = _Win32()
+        return _WIN32
+
+
+
 # ---------------------------------------------------------------- 그리기 명령
 def hex_rgb(value: str) -> tuple[int, int, int]:
     text = str(value or "").lstrip("#")
@@ -228,15 +332,34 @@ def _mapban_spec(payload: dict[str, Any], width: int, height: int) -> dict[str, 
     return _spec(width, height, prims)
 
 
+def _scout_mode_line(label: str, stats: dict[str, Any] | None) -> str:
+    """`솔로 그마 III · 52% · K/D 58%` — 오버레이 한 줄."""
+    stats = stats or {}
+    bits = [label]
+    tier = str(stats.get("short") or "").strip()
+    if tier:
+        bits.append("언랭크" if tier in ("언랭", "언랭크") else tier)
+    games = int(stats.get("games") or 0)
+    if not games:
+        bits.append("표본 없음")
+    else:
+        win, kd = stats.get("win"), stats.get("kd")
+        if win is not None:
+            bits.append(f"{round(float(win))}%")
+        if kd is not None:
+            bits.append(f"K/D {round(float(kd))}%")
+    return " · ".join(bits)
+
+
 def _scout_spec(payload: dict[str, Any], width: int, height: int) -> dict[str, Any]:
-    """우하단 5줄 — 이름 + 주무기 · 이 맵 승률 · K/D."""
+    """우하단 5줄 — 이름 + 솔로(티어·승률·K/D) / 파티(티어·승률·K/D)."""
     rows = list(payload.get("rows") or [])[:5]
     prims = [rect(0, 0, width, height, COLORS["panel"], alpha=0.9, radius=10,
                   stroke=COLORS["line"], stroke_alpha=0.9)]
     head_h = 34.0
     title = str(payload.get("map") or "상대 스카우팅")
     prims.append(text(14, 6, width - 28, 20, title, size=13, color="text", bold=True))
-    state = "분석 중…" if payload.get("loading") else f"상대 {len(rows)}명"
+    state = "분석 중…" if payload.get("loading") else f"상대 {len(rows)}명 · 솔로 / 파티 랭크"
     prims.append(text(14, 22, width - 28, 12, state, size=9, color="muted"))
     prims.append(line(12, head_h - 1, width - 12, head_h - 1, "line", 0.8))
     row_h = max(20.0, (height - head_h - 8) / 5.0)
@@ -249,11 +372,20 @@ def _scout_spec(payload: dict[str, Any], width: int, height: int) -> dict[str, A
             prims.append(text(16, top, width - 32, row_h, "—", size=10, color="muted"))
             continue
         name = str(row.get("name") or "")
-        badge = str(row.get("badge") or "")
         error = str(row.get("error") or "")
-        prims.append(text(16, top, width * 0.36, row_h, name, size=11, color="text", bold=True))
-        prims.append(text(width * 0.36, top, width * 0.62 - 8, row_h, error or badge, size=9.5,
-                          color="gold" if error else "muted", align="right"))
+        prims.append(text(16, top, width * 0.33, row_h, name, size=11, color="text", bold=True))
+        if error:
+            prims.append(text(width * 0.33, top, width * 0.67 - 8, row_h, error, size=9.5,
+                              color="gold", align="right"))
+            continue
+        solo_line = _scout_mode_line("솔로", row.get("solo_stats"))
+        party_line = _scout_mode_line("파티", row.get("party_stats"))
+        text_left = width * 0.33
+        text_w = width - text_left - 24
+        prims.append(text(text_left, top + row_h * 0.04, text_w, row_h * 0.46, solo_line,
+                          size=9.5, color="ice", align="right"))
+        prims.append(text(text_left, top + row_h * 0.50, text_w, row_h * 0.46, party_line,
+                          size=9.5, color="gold", align="right"))
     return _spec(width, height, prims)
 
 
@@ -381,8 +513,9 @@ class _Bitmap:
         from ctypes import wintypes
 
         self.width, self.height = max(1, int(width)), max(1, int(height))
-        self.user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-        self.gdi32 = ctypes.windll.gdi32  # type: ignore[attr-defined]
+        libs = win32()
+        self.user32 = libs.user32
+        self.gdi32 = libs.gdi32
 
         class BITMAPINFOHEADER(ctypes.Structure):
             _fields_ = [("biSize", wintypes.DWORD), ("biWidth", wintypes.LONG),
@@ -404,15 +537,17 @@ class _Bitmap:
         header.biBitCount = 32
         header.biCompression = 0             # BI_RGB
         self.hdc = self.gdi32.CreateCompatibleDC(None)
+        self._bits = ctypes.c_void_p()
         self.hbitmap = self.gdi32.CreateDIBSection(
-            self.hdc, ctypes.byref(self._info), 0, ctypes.byref(ctypes.c_void_p()), None, 0)
+            self.hdc, ctypes.byref(self._info), 0, ctypes.byref(self._bits), None, 0)
         self.old = self.gdi32.SelectObject(self.hdc, self.hbitmap)
         self.premultiplied = True
 
     def clear(self) -> None:
-        # DIB 는 처음부터 0 (완전 투명) — 다시 그릴 때는 비트를 0 으로 되돌린다
+        # DIB 비트(픽셀 메모리)를 0 으로 — HBITMAP 핸들이 아니라 비트 주소를 써야 한다
         try:
-            ctypes.memset(self.hbitmap, 0, self.width * self.height * 4)
+            if self._bits:
+                ctypes.memset(self._bits, 0, self.width * self.height * 4)
         except Exception:  # noqa: BLE001
             pass
 
@@ -622,7 +757,7 @@ class NativeOverlayWindow:
         if os.name != "nt" or not self.hwnd:
             return False
         try:
-            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+            user32 = win32().user32
             if rect:
                 user32.SetWindowPos(ctypes.c_void_p(self.hwnd), ctypes.c_void_p(HWND_TOPMOST),
                                     int(rect["x"]), int(rect["y"]), int(rect["w"]), int(rect["h"]),
@@ -638,7 +773,7 @@ class NativeOverlayWindow:
         if os.name != "nt" or not self.hwnd:
             return False
         try:
-            ctypes.windll.user32.ShowWindow(ctypes.c_void_p(self.hwnd), 0)  # SW_HIDE
+            win32().user32.ShowWindow(ctypes.c_void_p(self.hwnd), 0)  # SW_HIDE
             return True
         except Exception:  # noqa: BLE001
             return False
@@ -648,7 +783,7 @@ class NativeOverlayWindow:
             return
         try:
             if self.hwnd:
-                ctypes.windll.user32.PostMessageW(ctypes.c_void_p(self.hwnd), WM_DESTROY, 0, 0)
+                win32().user32.PostMessageW(ctypes.c_void_p(self.hwnd), WM_DESTROY, 0, 0)
         except Exception:  # noqa: BLE001
             pass
         if self.bitmap is not None:
@@ -670,7 +805,8 @@ class NativeOverlayWindow:
         class POINT(ctypes.Structure):
             _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
-        user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+        libs = win32()
+        user32 = libs.user32
         blend = BLENDFUNCTION(AC_SRC_OVER, 0, 255, AC_SRC_ALPHA)
         size = SIZE(self._size[0], self._size[1])
         src = POINT(0, 0)
@@ -680,13 +816,23 @@ class NativeOverlayWindow:
         ok = user32.UpdateLayeredWindow(
             ctypes.c_void_p(self.hwnd), self.bitmap.hdc, ctypes.byref(dst), ctypes.byref(size),
             self.bitmap.hdc, ctypes.byref(src), 0, ctypes.byref(blend), ULW_ALPHA)
+        if not ok:
+            code = libs.last_error()
+            log.debug("UpdateLayeredWindow 실패 · %s", libs.error_text(code))
         return bool(ok)
 
     def _run(self) -> None:
         try:
-            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
-            kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
+            libs = win32()
+            user32 = libs.user32
+            kernel32 = libs.kernel32
             hinstance = kernel32.GetModuleHandleW(None)
+            if not hinstance:
+                code = libs.last_error()
+                self.error = f"GetModuleHandleW 실패 · {libs.error_text(code)}"
+                log.error(self.error)
+                self._ready.set()
+                return
             class_name = f"SAAimOverlay_{self.kind}"
 
             @WNDPROC
@@ -718,7 +864,9 @@ class NativeOverlayWindow:
                 wc.hInstance = hinstance
                 wc.lpszClassName = class_name
                 if not user32.RegisterClassExW(ctypes.byref(wc)):
-                    self.error = "RegisterClassExW 실패"
+                    code = libs.last_error()
+                    self.error = f"RegisterClassExW 실패 · {libs.error_text(code)}"
+                    log.error(self.error)
                     self._ready.set()
                     return
                 NativeOverlayWindow._class_registered.add(class_name)
@@ -729,7 +877,9 @@ class NativeOverlayWindow:
                 ex_style, class_name, self.title, WS_POPUP,
                 0, 0, self._size[0], self._size[1], None, None, hinstance, None)
             if not hwnd:
-                self.error = "CreateWindowExW 실패"
+                code = libs.last_error()
+                self.error = f"CreateWindowExW 실패 · {libs.error_text(code)}"
+                log.error(self.error)
                 self._ready.set()
                 return
             self.hwnd = int(hwnd)
@@ -745,7 +895,7 @@ class NativeOverlayWindow:
                 user32.TranslateMessage(ctypes.byref(msg))
                 user32.DispatchMessageW(ctypes.byref(msg))
         except Exception as exc:  # noqa: BLE001
-            self.error = str(exc)
+            self.error = f"오버레이 창 생성 오류 · {exc}"
             log.debug("native overlay thread failed", exc_info=True)
             self._ready.set()
         finally:
