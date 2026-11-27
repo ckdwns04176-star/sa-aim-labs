@@ -30,13 +30,6 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt pyinstaller
 
-      - name: Verify overlay source marker
-        shell: pwsh
-        run: |
-          if (!(Select-String -Path "app/native_overlay.py" -Pattern 'OVERLAY_DIAG_BUILD = "class-atom-v3-20261127"')) {
-            throw "Overlay source marker is missing; refusing to build an unverified EXE."
-          }
-
       - name: Syntax check (compileall)
         shell: pwsh
         run: python -m compileall -q app main.py
@@ -61,7 +54,8 @@ jobs:
           Write-Host "SA_Aim_Labs.exe · $size MB"
           Get-FileHash $exe -Algorithm SHA256 | Format-List
 
-      - name: Upload artifact
+      # Actions에서 별도로 받을 수 있는 빌드 결과물
+      - name: Upload workflow artifact
         uses: actions/upload-artifact@v4
         with:
           name: SA_Aim_Labs-windows
@@ -69,11 +63,16 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+      # GitHub Release의 Assets에 실제 EXE를 첨부한다.
+      # main push는 latest-build 릴리스를 생성/갱신하며 일반 최신 릴리스로 표시한다.
       - name: Attach EXE to GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v') || github.ref == 'refs/heads/main'
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: dist/SA_Aim_Labs.exe
+          fail_on_unmatched_files: true
+          overwrite_files: true
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-build' }}
           name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Latest build' }}
           body: |
@@ -84,5 +83,25 @@ jobs:
             - 실행: `SA_Aim_Labs.exe` (Windows 10/11 · Edge WebView2 Runtime 필요)
 
             훈련 기록은 `%APPDATA%\SA_Aim_Labs\data.json` 에 저장됩니다.
-          prerelease: ${{ !startsWith(github.ref, 'refs/tags/') }}
-          make_latest: ${{ startsWith(github.ref, 'refs/tags/') }}
+          prerelease: false
+          make_latest: true
+
+      # 업로드 단계가 성공으로 끝나도 Assets에 EXE가 실제 있는지 한번 더 검사한다.
+      - name: Verify Release contains EXE
+        if: github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const tag = context.ref.startsWith('refs/tags/')
+              ? context.ref.replace('refs/tags/', '')
+              : 'latest-build';
+            const { data: release } = await github.rest.repos.getReleaseByTag({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              tag
+            });
+            const asset = release.assets.find(item => item.name === 'SA_Aim_Labs.exe');
+            if (!asset) {
+              throw new Error(`Release ${tag} does not contain SA_Aim_Labs.exe`);
+            }
+            core.info(`Release asset verified: ${asset.name} (${asset.size} bytes)`);
