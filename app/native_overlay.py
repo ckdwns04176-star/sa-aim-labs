@@ -592,7 +592,7 @@ def render_prims(bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
 
 def _render_gdiplus(gp: _GdiPlus, bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
     graphics = ctypes.c_void_p()
-    if gp.create_from_hdc(ctypes.byref(graphics), bitmap.hdc) != 0:
+     if gp.create_from_hdc(bitmap.hdc, ctypes.byref(graphics)) != 0:
         return _render_gdi(bitmap, prims)
     try:
         gp.set_smoothing(graphics, 4)       # SmoothingModeAntiAlias
