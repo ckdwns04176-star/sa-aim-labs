@@ -475,7 +475,7 @@ class _GdiPlus:
         self.add_line = self._fn("GdipAddPathLine", ctypes.c_int, p,
                                  ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float)
         self.close_figure = self._fn("GdipClosePathFigure", ctypes.c_int, p)
-        self.fill_path = self._fn("GdipFillPath", ctypes.c_int, p, p)
+        self.fill_path = self._fn("GdipFillPath", ctypes.c_int, p, p, p)
         self.draw_path = self._fn("GdipDrawPath", ctypes.c_int, p, p, p)
         self.create_family = self._fn("GdipCreateFontFamilyFromName", ctypes.c_int,
                                       ctypes.c_wchar_p, p, ctypes.POINTER(p))
