@@ -90,7 +90,7 @@ class Api:
         self._cache_cleanup: dict[str, Any] | None = None
         # v1.0.1 — 내 전적 65초 자동 최신화 상태
         self._match_refresh: dict[str, Any] = {"checked": False, "at": None, "newest": None,
-                                               "updated": None, "error": None}
+                                               "updated": None, "error": None, "paused": None}
         self._match_interval = MATCH_REFRESH_SECONDS
         self._match_stop = __import__("threading").Event()
         self._match_thread: Any = None
@@ -563,6 +563,7 @@ class Api:
             "hotkey_lobby": overlay_settings["hotkey_lobby"],
             "hotkey_scout": overlay_settings["hotkey_scout"],
             "toast_enabled": overlay_settings["toast_enabled"],
+            "toast_auto": overlay_settings["toast_auto"],
             "toast_position": overlay_settings["toast_position"],
         }}
 
@@ -855,7 +856,7 @@ class Api:
                 log.debug("overlay hotkeys could not apply", exc_info=True)
             try:
                 set_ = self.store.settings
-                if set_.get("toast_enabled", True) and set_.get("toast_auto", True):
+                if set_.get("toast_enabled", False) and set_.get("toast_auto", True):
                     self._watcher().start()
                 else:
                     self._watcher().stop()
@@ -2537,12 +2538,21 @@ class Api:
     def tray_show(self) -> dict[str, Any]:
         if not self._win:
             return self._ok(hidden=False)
+        was_hidden = bool(getattr(self._win, "_sa_hidden", False))
         try:
             self._win.show()
             try:
                 self._win._sa_hidden = False
             except Exception:  # noqa: BLE001
                 pass
+            if was_hidden:
+                # v2.0.6 — 숨어 있는 동안 건너뛴 자동 최신화를 다시 보이면 바로 한 번 맞춘다
+                self._match_refresh["paused"] = None
+                try:
+                    __import__("threading").Thread(target=self.refresh_my_matches, daemon=True,
+                                                   name="sa-match-resume").start()
+                except Exception:  # noqa: BLE001 - 갱신 실패가 창 표시를 막지 않는다
+                    log.debug("resume refresh could not start", exc_info=True)
             return self._ok(hidden=False)
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
@@ -2559,7 +2569,7 @@ class Api:
             "hotkey_scout": overlay.clean_hotkey(set_.get("overlay_hotkey_scout"), "Home"),
             "mapban_seconds": overlay.parse_seconds(set_.get("overlay_mapban_seconds"), 12.0),
             "party_seconds": overlay.parse_seconds(set_.get("overlay_party_seconds"), 15.0),
-            "toast_enabled": bool(set_.get("toast_enabled", True)),
+            "toast_enabled": bool(set_.get("toast_enabled", False)),
             "toast_position": (set_.get("toast_position") if set_.get("toast_position") in overlay.TOAST_POSITIONS else "br"),
             "toast_auto": bool(set_.get("toast_auto", True)),
             "scan_calib": {"offset_x": set_.get("overlay_scan_x") or 0,
@@ -2628,27 +2638,32 @@ class Api:
     _map_entries_fast._serializable = False  # type: ignore[attr-defined]
 
     def start_overlays(self) -> dict[str, Any]:
-        """앱 시작 시 오버레이 단축키·경기 토스트 감시를 켠다 (main.py 가 부른다)."""
+        """앱 시작 시 오버레이 단축키를 켠다 — 토스트 감시는 설정에서 켰을 때만 (main.py 가 부른다).
+
+        v2.0.6 — 경기 종료 토스트 감시는 기본 꺼짐이다.  18초마다 전적을 읽는 폴링이
+        하루 API 호출의 절반을 차지해, 설정 화면에서 직접 켠 사람만 시작한다.
+        """
         result = self.apply_overlay_hotkeys()
         settings = self._overlay_settings()
-        if settings.get("toast_enabled") and settings.get("toast_auto"):
-            try:
-                watcher = self._watcher()
-                watcher.start()
+        if not (settings.get("toast_enabled") and settings.get("toast_auto")):
+            return {**result, "toast": self._watcher().state()}
+        try:
+            watcher = self._watcher()
+            watcher.start()
 
-                def _prime() -> None:
-                    try:
-                        match = toast.last_match(self._client(),
-                                                (self.store.settings.get("nickname") or ""))
-                        if match:
-                            watcher.prime(match.get("match_id"))
-                    except Exception:  # noqa: BLE001 - 첫 확인 실패는 무시
-                        log.debug("toast prime failed", exc_info=True)
+            def _prime() -> None:
+                try:
+                    match = toast.last_match(self._client(),
+                                            (self.store.settings.get("nickname") or ""))
+                    if match:
+                        watcher.prime(match.get("match_id"))
+                except Exception:  # noqa: BLE001 - 첫 확인 실패는 무시
+                    log.debug("toast prime failed", exc_info=True)
 
-                __import__("threading").Thread(target=_prime, daemon=True).start()
-            except Exception:  # noqa: BLE001
-                log.debug("match watcher could not start", exc_info=True)
-        return result
+            __import__("threading").Thread(target=_prime, daemon=True).start()
+        except Exception:  # noqa: BLE001
+            log.debug("match watcher could not start", exc_info=True)
+        return {**result, "toast": self._watcher().state()}
 
     start_overlays._serializable = False  # type: ignore[attr-defined]
 
@@ -2771,8 +2786,48 @@ class Api:
 
     _push_state._serializable = False  # type: ignore[attr-defined]
 
-    def start_match_auto_refresh(self) -> None:
-        """앱 시작 시 1회 + **65초(1분 5초)** 주기 내 전적 최신화 스레드 (#12)."""
+    def _window_hidden(self) -> bool:
+        """앱 창이 트레이로 숨겨졌거나 최소화돼 **화면에 보이지 않는지** (v2.0.6).
+
+        보이지 않는 동안은 65초 자동 최신화를 건너뛰어 API 호출을 아낀다.
+        창이 없는 테스트 · 헤드리스 환경은 False(막지 않는다).
+        """
+        window = self._win
+        if window is None:
+            return False
+        if bool(getattr(window, "_sa_hidden", False)):
+            return True
+        for attr in ("_sa_minimized", "minimized"):
+            try:
+                if bool(getattr(window, attr, False)):
+                    return True
+            except Exception:  # noqa: BLE001 - 속성 조회 실패는 무시
+                pass
+        if os.name != "nt":
+            return False
+        handle = self._hwnd()
+        if not handle:
+            return False
+        try:
+            import ctypes
+
+            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+            if user32.IsIconic(ctypes.c_void_p(handle)):
+                return True
+            if not user32.IsWindowVisible(ctypes.c_void_p(handle)):
+                return True
+        except Exception:  # noqa: BLE001 - 조회 실패는 '보이는 중'으로 본다
+            log.debug("window visibility check failed", exc_info=True)
+        return False
+
+    _window_hidden._serializable = False  # type: ignore[attr-defined]
+
+    def start_match_auto_refresh(self, interval: float | None = None) -> None:
+        """앱 시작 시 1회 + **65초(1분 5초)** 주기 내 전적 최신화 스레드 (#12).
+
+        v2.0.6 — 창이 트레이·최소화로 가려져 있으면 이 주기의 API 호출을 건너뛰고,
+        다시 보일 때부터 정상 주기로 돈다 (`.`match_refresh_state` 의 ``paused``).
+        """
         import threading
 
         if self._match_thread and self._match_thread.is_alive():
@@ -2781,15 +2836,20 @@ class Api:
             return
         key = (self.store.settings.get("api_key") or "").strip()
         # 사용자 test_ 키(하루 1,000건)면 5분으로 늘려 한도를 지킨다
-        self._match_interval = 300 if key.startswith("test_") else MATCH_REFRESH_SECONDS
+        base = MATCH_REFRESH_SECONDS if not key.startswith("test_") else 300
+        self._match_interval = float(interval) if interval else float(base)
         self._match_stop.clear()
 
         def loop() -> None:
             while not self._match_stop.is_set():
-                try:
-                    self.refresh_my_matches()
-                except Exception:  # noqa: BLE001
-                    log.debug("match auto refresh failed", exc_info=True)
+                if self._window_hidden():
+                    self._match_refresh["paused"] = "창 숨김 · 전적 최신화 대기"
+                else:
+                    self._match_refresh["paused"] = None
+                    try:
+                        self.refresh_my_matches()
+                    except Exception:  # noqa: BLE001
+                        log.debug("match auto refresh failed", exc_info=True)
                 if self._match_stop.wait(self._match_interval):
                     return
 
@@ -2799,8 +2859,10 @@ class Api:
     start_match_auto_refresh._serializable = False  # type: ignore[attr-defined]
 
     def match_refresh_state(self) -> dict[str, Any]:
+        paused = self._window_hidden()
         return {"ok": True, "interval": getattr(self, "_match_interval", MATCH_REFRESH_SECONDS),
-                **self._match_refresh}
+                **self._match_refresh, "paused": paused,
+                "pause_reason": "창 숨김 · 전적 최신화 대기" if paused else None}
 
     def _show_toast(self, match: dict[str, Any]) -> dict[str, Any]:
         settings = self._overlay_settings()
@@ -2818,9 +2880,11 @@ class Api:
         return {"ok": True, "overlay": {**self._overlay.state(), **{
                     "enabled": settings["enabled"], "hotkey_lobby": settings["hotkey_lobby"],
                     "hotkey_scout": settings["hotkey_scout"], "toast_position": settings["toast_position"],
+                    "toast_enabled": settings["toast_enabled"], "toast_auto": settings["toast_auto"],
                     "mapban_seconds": settings["mapban_seconds"], "scan_calib": settings["scan_calib"]}},
                 "hotkeys": self._hotkeys.state(), "toast": self._watcher().state(),
                 "cache_cleanup": self._cache_cleanup or {"ok": True, "skipped": True},
+                "api_cache": nexon.memory_cache_stats(),
                 "attribution": "Data based on NEXON Open API"}
 
     def overlay_payload(self, kind: str = "match") -> dict[str, Any]:

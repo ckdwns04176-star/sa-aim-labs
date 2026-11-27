@@ -73,7 +73,8 @@ DEFAULTS: dict[str, Any] = {
         "overlay_scan_x": 0,
         "overlay_scan_y": 0,
         "overlay_scan_scale": 1.0,
-        "toast_enabled": True,
+        "toast_enabled": False,
+        "toast_defaults_version": 1,
         "toast_position": "br",
         "toast_auto": True,
         "auto_cloud": True,
@@ -241,6 +242,7 @@ class Store:
                         pass
                     data = {}
             self._migrate_hotkeys(data)
+            self._migrate_toast(data)
             self.data = _deep_merge(DEFAULTS, data)
             # v1 백업/데이터에 남아 있던 에임 연습 구역은 더 이상 쓰지 않는다.
             for legacy in ("records", "rotation", "more", "attendance", "custom_scenarios"):
@@ -267,6 +269,26 @@ class Store:
             if not current or current.upper() == legacy.upper():
                 settings[key] = HOTKEY_DEFAULTS[key]
         settings["hotkey_defaults_version"] = 2
+
+    @staticmethod
+    def _migrate_toast(raw: dict[str, Any]) -> None:
+        """v2.0.6 — 경기 종료 토스트 감시를 기본 껴짐으로 내린다 (데이터당 한 번).
+
+        예전에는 ``toast_enabled`` 기본값이 True 여서, 저장 파일에는 사용자가 켜지
+        않아도 True 가 적혔다.  그래서 이 버전으로 처음 올라올 때 한 번만 껴 두고
+        (``toast_defaults_version`` 표식을 남긴다) 원하는 사람은 설정 화면의
+        토글로 바로 켤 수 있게 한다.  표식이 있는 뒤에는 사용자가 고른 값이 그대로
+        유지된다.
+        """
+        if not isinstance(raw, dict):
+            return
+        settings = raw.get("settings")
+        if not isinstance(settings, dict):
+            return
+        if settings.get("toast_defaults_version"):
+            return
+        settings["toast_enabled"] = False
+        settings["toast_defaults_version"] = 1
 
     def save(self) -> None:
         with self._lock:

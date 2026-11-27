@@ -16,6 +16,7 @@ details never change, so they are cached on disk for a week.
 """
 from __future__ import annotations
 
+import copy
 import datetime as _dt
 import hashlib
 import json
@@ -42,6 +43,9 @@ MATCH_ROWS = 100   # 맵별 매치 히스토리 팝업까지 쓰려면 최근 10
 # v1.0.1 — 경기 목록 캐시는 2분.  예전 10분은 "방금 판"·토스트가 다음 판에야
 # 뜨는 원인이었다.  즉시 최신이 필요한 호출은 fresh=True 로 캐시를 건너뛴다.
 MATCH_LIST_TTL = 120
+# v2.0.6 — 같은 조회를 60초 안에 다시 하면 프록시 왕복 없이 메모리에서 바로 준다
+# (10인 스카우팅 · 대기실 5인 조회 · 화면 전환 · Workers 일일 호출 한도 절감).
+MEM_TTL = 60.0
 MAP_MIN = 5
 DETAIL_DEPTH = 0   # 순위표는 API 상세 호출 0건 (디스크 캐시에 있는 상세만 사용)
 
@@ -111,21 +115,90 @@ def kr_tier(name: str | None) -> str:
     return str(name)
 
 
+# --------------------------------------------------------------------- memory cache
+_MEM_LOCK = threading.Lock()
+_MEM_STORE: dict[str, tuple[float, Any]] = {}
+_MEM_STATS = {"hits": 0, "misses": 0, "puts": 0}
+_MEM_MAX = 1200
+
+
+def _mem_get(key: str, ttl: float = MEM_TTL) -> Any | None:
+    """프로세스 공용 60초 TTL 캐시 조회 — 만료면 None.  값은 복사본으로 준다."""
+    if ttl <= 0:
+        return None
+    row = _MEM_STORE.get(key)
+    if not row:
+        _MEM_STATS["misses"] += 1
+        return None
+    at, data = row
+    if time.time() - at > ttl:
+        with _MEM_LOCK:
+            _MEM_STORE.pop(key, None)
+        _MEM_STATS["misses"] += 1
+        return None
+    _MEM_STATS["hits"] += 1
+    return copy.deepcopy(data)
+
+
+def _mem_put(key: str, data: Any) -> None:
+    if not isinstance(data, (dict, list)):
+        return
+    with _MEM_LOCK:
+        _MEM_STORE[key] = (time.time(), copy.deepcopy(data))
+        _MEM_STATS["puts"] += 1
+        if len(_MEM_STORE) > _MEM_MAX:
+            for stale in sorted(_MEM_STORE.items(), key=lambda kv: kv[1][0])[: len(_MEM_STORE) // 4]:
+                _MEM_STORE.pop(stale[0], None)
+
+
+def clear_memory_cache() -> dict[str, Any]:
+    """메모리 캐시를 비운다 — '전적 새로고침' · 테스트에서 쓴다."""
+    with _MEM_LOCK:
+        count = len(_MEM_STORE)
+        _MEM_STORE.clear()
+    return {"cleared": count}
+
+
+def memory_cache_stats() -> dict[str, Any]:
+    with _MEM_LOCK:
+        return {**_MEM_STATS, "size": len(_MEM_STORE), "ttl": MEM_TTL}
+
+
 # --------------------------------------------------------------------- disk cache
 class _DiskCache:
+    """JSON 파일 하나를 쓰는 디스크 캐시 — 파일은 처음 쓸 때 한 번만 읽는다.
+
+    v2.0.6 — 예전에는 ``NexonClient`` 를 만들 때마다 캐시 파일 전체(경기 상세는
+    5,000건)를 파싱했다.  지금은 메모리 캐시(60초)가 먼저 응답하는 경우가 많아
+    파일을 아예 읽지 않도록 처음 접근할 때만 읽는다.
+    """
+
     def __init__(self, path: os.PathLike[str], max_entries: int = 4000):
         self.path = path
         self.max_entries = max_entries
         self._lock = threading.Lock()
-        self.data: dict[str, dict[str, Any]] = {}
-        try:
-            if os.path.exists(path):
-                self.data = json.loads(open(path, encoding="utf-8").read())
-        except (OSError, ValueError):
-            self.data = {}
+        self._data: dict[str, dict[str, Any]] | None = None
+
+    def _loaded(self) -> dict[str, dict[str, Any]]:
+        if self._data is not None:
+            return self._data
+        with self._lock:
+            if self._data is None:
+                rows: Any = {}
+                try:
+                    if os.path.exists(self.path):
+                        rows = json.loads(open(self.path, encoding="utf-8").read())
+                except (OSError, ValueError):
+                    rows = {}
+                self._data = rows if isinstance(rows, dict) else {}
+        return self._data
+
+    @property
+    def data(self) -> dict[str, dict[str, Any]]:
+        return self._loaded()
 
     def get(self, key: str) -> Any | None:
-        row = self.data.get(key)
+        row = self._loaded().get(key)
         if not row:
             return None
         if row.get("ttl") and time.time() - row.get("at", 0) > row["ttl"]:
@@ -133,18 +206,20 @@ class _DiskCache:
         return row.get("data")
 
     def put(self, key: str, data: Any, ttl: int | None) -> None:
+        self._loaded()
         with self._lock:
-            self.data[key] = {"at": time.time(), "ttl": ttl, "data": data}
-            if len(self.data) > self.max_entries:
+            assert self._data is not None
+            self._data[key] = {"at": time.time(), "ttl": ttl, "data": data}
+            if len(self._data) > self.max_entries:
                 # drop the oldest quarter
-                rows = sorted(self.data.items(), key=lambda kv: kv[1].get("at", 0))
+                rows = sorted(self._data.items(), key=lambda kv: kv[1].get("at", 0))
                 for k, _ in rows[: len(rows) // 4]:
-                    self.data.pop(k, None)
+                    self._data.pop(k, None)
             try:
                 os.makedirs(os.path.dirname(self.path), exist_ok=True)
                 tmp = str(self.path) + ".tmp"
                 with open(tmp, "w", encoding="utf-8") as fh:
-                    json.dump(self.data, fh, ensure_ascii=False)
+                    json.dump(self._data, fh, ensure_ascii=False)
                 os.replace(tmp, self.path)
             except OSError:
                 pass
@@ -164,6 +239,7 @@ class NexonClient:
         min_interval: float | None = None,
         progress: Progress | None = None,
         force: bool = False,
+        mem_ttl: float = MEM_TTL,
     ):
         self.api_key = (api_key or "").strip()
         self.proxy = (PROXY_URL if proxy is None else str(proxy)).strip().rstrip("/")
@@ -174,6 +250,7 @@ class NexonClient:
         self.min_interval = min_interval
         self.progress = progress
         self.force = force          # 전적 새로고침: 목록/프로필 캐시 TTL 무시
+        self.mem_ttl = float(mem_ttl if mem_ttl is not None else MEM_TTL)
         self._lock = threading.Lock()
         self._last = 0.0
         self.calls = 0
@@ -185,6 +262,11 @@ class NexonClient:
     @property
     def endpoint(self) -> str:
         return "proxy" if self.using_proxy else "direct"
+
+    def _mem_key(self, path: str, params: dict[str, Any]) -> str:
+        """같은 요청 판별 키 — 엔드포인트(프록시/직접 키)까지 포함한다."""
+        query = "&".join(f"{k}={params[k]}" for k in sorted(params) if params[k] is not None)
+        return f"{self.endpoint}|{path}|{query}"
 
     # ------------------------------------------------------------ http
     def _pace(self) -> None:
@@ -258,17 +340,25 @@ class NexonClient:
         raise last_error or NexonError("NEXON API 요청 실패")
 
     def _cached(self, cache: _DiskCache, key: str, path: str, params: dict[str, Any], ttl: int | None) -> dict[str, Any]:
+        mem_key = self._mem_key(path, params)
         if self.force and cache is self._cache_api:
             # "전적 불러오기" 를 직접 눌렀을 때는 목록/프로필을 서버에서 다시 받아온다.
             # (경기 상세는 변하지 않으므로 항상 캐시를 쓴다 — 호출 한도 절약)
             data = self._request(path, params)
             cache.put(key, data, ttl)
+            _mem_put(mem_key, data)
             return data
+        # v2.0.6 — 60초 메모리 캐시: 같은 조회가 짧은 시간에 반복되면 프록시를 거치지 않는다.
+        hit = _mem_get(mem_key, self.mem_ttl)
+        if hit is not None:
+            return hit
         hit = cache.get(key)
         if hit is not None:
+            _mem_put(mem_key, hit)
             return hit
         data = self._request(path, params)
         cache.put(key, data, ttl)
+        _mem_put(mem_key, data)
         return data
 
     # ------------------------------------------------------------ endpoints
@@ -326,6 +416,7 @@ class NexonClient:
                 body = self._cache_api.get(key) or {}
             else:
                 self._cache_api.put(key, body, ttl)
+                _mem_put(self._mem_key("/suddenattack/v1/match", params), body)
         else:
             body = self._cached(self._cache_api, key, "/suddenattack/v1/match", params, ttl=ttl)
         rows = (body or {}).get("match") or []
@@ -357,8 +448,11 @@ class NexonClient:
             return None
         return self._cache_detail.get(f"d:{match_id}")
 
-    def cache_stats(self) -> dict[str, int]:
-        return {"api": len(self._cache_api.data), "detail": len(self._cache_detail.data), "calls": self.calls}
+    def cache_stats(self) -> dict[str, Any]:
+        stats = memory_cache_stats()
+        return {"api": len(self._cache_api.data), "detail": len(self._cache_detail.data), "calls": self.calls,
+                "mem_hits": int(stats.get("hits") or 0), "mem_misses": int(stats.get("misses") or 0),
+                "mem_size": int(stats.get("size") or 0)}
 
 
 # --------------------------------------------------------------------- aggregation

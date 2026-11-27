@@ -1661,6 +1661,175 @@ def test_v203_overlay_scout_api() -> None:
           sum(1 for t in texts if t.startswith("상단") or t.startswith("하단")) >= 12, str(len(texts)))
 
 
+def test_v206_api_savings() -> None:
+    """v2.0.6 — API 호출 절감: 토스트 기본 꺼짐 · 60초 메모리 캐시 · 창 숨김 시 자동 최신화 스킵.
+
+    유저 1명당 하루 1,200~1,500건이던 넥슨 API 호출을 줄이는 세 가지 변경을 실제
+    코드 경로(저장소 마이그레이션 · NexonClient · 자동 최신화 스레드)로 확인한다.
+    """
+    from app import api as api_mod, nexon as nexon_mod
+    from app.store import Store
+
+    # ── ① 토스트 감시 기본 꺼짐 ──────────────────────────────────
+    tmp = Path(tempfile.mkdtemp(prefix="sa_v206_"))
+    fresh = Store(tmp / "data.json")
+    check("v2.0.6: 새 저장소 토스트 기본 꺼짐", fresh.settings.get("toast_enabled") is False,
+          str(fresh.settings.get("toast_enabled")))
+
+    legacy_path = Path(tempfile.mkdtemp(prefix="sa_v206_legacy_")) / "data.json"
+    legacy_path.write_text(json.dumps({"version": 1, "settings": {
+        "nickname": "휴가중.", "toast_enabled": True, "toast_auto": True}}, ensure_ascii=False),
+        encoding="utf-8")
+    legacy = Store(legacy_path)
+    check("v2.0.6: 예전 파일(기본값 True)은 한 번 꺼짐으로 정리", legacy.settings.get("toast_enabled") is False,
+          str(legacy.settings.get("toast_enabled")))
+    check("v2.0.6: 토스트 기본값 표식 저장", legacy.settings.get("toast_defaults_version") == 1)
+    legacy.update_settings({"toast_enabled": True})
+    reopened = Store(legacy_path)
+    check("v2.0.6: 사용자가 직접 켠 값은 이후 유지", reopened.settings.get("toast_enabled") is True,
+          str(reopened.settings.get("toast_enabled")))
+
+    api = api_mod.Api(Store(tmp / "api" / "data.json"))
+    ov_set = api._overlay_settings()
+    check("v2.0.6: API 오버레이 설정도 기본 꺼짐", ov_set.get("toast_enabled") is False, str(ov_set.get("toast_enabled")))
+    started = api.start_overlays()
+    toast_state = started.get("toast") or {}
+    check("v2.0.6: 앱 시작 시 토스트 감시를 켜지 않음",
+          toast_state.get("enabled") is False and toast_state.get("running") is False, str(toast_state))
+
+    class FakeWatcher:
+        def __init__(self) -> None:
+            self.started = 0
+            self.stopped = 0
+            self.enabled = False
+
+        def start(self) -> None:
+            self.started += 1
+            self.enabled = True
+
+        def stop(self) -> None:
+            self.stopped += 1
+            self.enabled = False
+
+        def state(self) -> dict:
+            return {"enabled": self.enabled, "running": self.enabled, "interval": 18.0, "error": None}
+
+    watcher = FakeWatcher()
+    api._match_watch = watcher  # type: ignore[assignment]
+    api.save_settings({"toast_enabled": True, "toast_auto": True})
+    check("v2.0.6: 설정에서 토스트를 켜면 감시 시작", watcher.started >= 1 and watcher.enabled,
+          f"start={watcher.started} enabled={watcher.enabled}")
+    api.save_settings({"toast_enabled": False})
+    check("v2.0.6: 다시 끄면 감시 정지", watcher.stopped >= 1 and not watcher.enabled,
+          f"stop={watcher.stopped} enabled={watcher.enabled}")
+
+    bridge = (ROOT / "ui" / "bridge.js").read_text(encoding="utf-8")
+    html = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    check("v2.0.6: 토스트 스위치는 기본 꺼짐으로 그린다", "ovSet.toast_enabled === true" in bridge)
+    check("v2.0.6: 토스트 설명에 기본 꺼짐 안내", "필요할 때만 켜기 (기본 꺼짐)" in bridge)
+    check("v2.0.6: 오버레이 패널에도 토스트 꺼짐 표시", "결과 토스트" in html and "꺼짐(설정에서 켜기)" in html)
+
+    # ── ② 60초 메모리 캐시 히트 / 우회 ─────────────────────────────
+    nexon_mod.clear_memory_cache()
+
+    class CountingClient(nexon_mod.NexonClient):
+        """네트워크 대신 호출 수만 세는 클라이언트 — 인스턴스마다 자기 디스크 캐시를 쓴다."""
+
+        def __init__(self, **kwargs) -> None:
+            self.sent: list[str] = []
+            super().__init__("", cache_dir=Path(tempfile.mkdtemp(prefix="sa_v206_c_")), **kwargs)
+
+        def _request(self, path: str, params: dict) -> dict:
+            self.sent.append(path)
+            if path == "/suddenattack/v1/user/basic":
+                return {"user_name": "휴가중.", "clan_name": "리드"}
+            return {}
+
+    ouid = "711c04a69769cc4b6b782ea2aa3eb614"
+    client = CountingClient()
+    first = client.user_basic(ouid)
+    second = client.user_basic(ouid)
+    check("v2.0.6: 같은 조회 2번 → 프록시 1번", len(client.sent) == 1, str(client.sent))
+    check("v2.0.6: 캐시 히트도 같은 값", first == second and second.get("user_name") == "휴가중.", str(second))
+    other = CountingClient()
+    other.user_basic(ouid)
+    check("v2.0.6: 새 클라이언트도 메모리 캐시 공유", other.sent == [], str(other.sent))
+    stats = nexon_mod.memory_cache_stats()
+    check("v2.0.6: 메모리 캐시 히트 집계", stats.get("hits", 0) >= 2 and stats.get("size", 0) >= 1, str(stats))
+
+    forced = CountingClient(force=True)
+    forced.user_basic(ouid)
+    check("v2.0.6: force=True(전적 새로고침)는 캐시 우회", forced.sent == ["/suddenattack/v1/user/basic"],
+          str(forced.sent))
+
+    short = CountingClient(mem_ttl=0.05)
+    nexon_mod.clear_memory_cache()
+    short.user_basic(ouid)
+    nexon_mod._mem_put("v206:ttl", {"v": 1})
+    check("v2.0.6: TTL 안에서는 메모리에서 응답", nexon_mod._mem_get("v206:ttl", 0.05) == {"v": 1})
+    time.sleep(0.12)
+    check("v2.0.6: TTL이 지나면 메모리 항목 폐기", nexon_mod._mem_get("v206:ttl", 0.05) is None)
+    short.user_basic(ouid)
+    check("v2.0.6: TTL 만료 뒤에는 디스크 캐시로 응답(추가 호출 없음)", len(short.sent) == 1, str(short.sent))
+
+    fresh_client = CountingClient()
+    nexon_mod.clear_memory_cache()
+    fresh_client.matches(ouid, nexon_mod.MATCH_TYPES[0], fresh=True)
+    fresh_client.matches(ouid, nexon_mod.MATCH_TYPES[0], fresh=True)
+    check("v2.0.6: fresh=True(즉시 최신)는 캐시 우회", len(fresh_client.sent) == 2, str(fresh_client.sent))
+    fresh_client.matches(ouid, nexon_mod.MATCH_TYPES[0])
+    check("v2.0.6: 그 뒤 일반 조회는 캐시로 응답", len(fresh_client.sent) == 2, str(fresh_client.sent))
+    nexon_mod.clear_memory_cache()
+
+    src = (ROOT / "app" / "nexon.py").read_text(encoding="utf-8")
+    check("v2.0.6: 메모리 캐시 TTL 60초", "MEM_TTL = 60.0" in src)
+    check("v2.0.6: 디스크 캐시는 처음 필요할 때만 읽기", "def _loaded" in src and "_MEM_STORE" in src)
+
+    # ── ③ 창이 숨겨져 있으면 65초 자동 최신화 스킵 ─────────────────
+    class FakeWindow:
+        def __init__(self, hidden: bool = False) -> None:
+            self._sa_hidden = hidden
+
+        def evaluate_js(self, *_args, **_kwargs) -> None:
+            return None
+
+    api3 = api_mod.Api(Store(tmp / "auto" / "data.json"))
+    api3.store.update_settings({"nickname": "휴가중."})
+    calls: list[str] = []
+    api3.refresh_my_matches = lambda force=False: calls.append("run") or {"ok": True}  # type: ignore[assignment]
+    window = FakeWindow(hidden=True)
+    api3.attach(window)
+    check("v2.0.6: 숨김 창 감지", api3._window_hidden() is True)
+    api3.start_match_auto_refresh(interval=0.05)
+    time.sleep(0.25)
+    check("v2.0.6: 창이 숨겨진 동안 자동 최신화 0회", calls == [], str(len(calls)))
+    check("v2.0.6: 상태에 일시정지 표시", api3.match_refresh_state().get("paused") is True,
+          str(api3.match_refresh_state().get("pause_reason")))
+    window._sa_hidden = False
+    time.sleep(0.25)
+    check("v2.0.6: 창이 보이면 자동 최신화 재개", len(calls) >= 2, str(len(calls)))
+    api3._match_stop.set()
+    time.sleep(0.12)
+
+    api4 = api_mod.Api(Store(tmp / "show" / "data.json"))
+    api4.store.update_settings({"nickname": "휴가중."})
+    shown: list[str] = []
+    api4.refresh_my_matches = lambda force=False: shown.append("run") or {"ok": True}  # type: ignore[assignment]
+    api4.attach(FakeWindow(hidden=False))
+    api4.start_match_auto_refresh(interval=0.05)
+    time.sleep(0.2)
+    api4._match_stop.set()
+    check("v2.0.6: 창이 보이면 기존 65초 주기 그대로",
+          len(shown) >= 2 and api4.match_refresh_state().get("paused") is False, str(len(shown)))
+
+    api_src = (ROOT / "app" / "api.py").read_text(encoding="utf-8")
+    check("v2.0.6: 숨김 판단은 IsIconic·IsWindowVisible 까지",
+          "IsIconic" in api_src and "IsWindowVisible" in api_src and "_window_hidden" in api_src)
+    check("v2.0.6: 다시 보이면 바로 한 번 맞춤", "sa-match-resume" in api_src)
+    store_src = (ROOT / "app" / "store.py").read_text(encoding="utf-8")
+    check("v2.0.6: 저장소 기본값 False", '"toast_enabled": False' in store_src)
+
+
 def main() -> int:
     for fn in (test_nvapi, test_store, test_auth, test_insights, test_duo, test_ocr,
                test_scouting, test_overlay, test_api,
@@ -1668,7 +1837,8 @@ def main() -> int:
                test_v201_updates, test_v201_backup, test_code_clean,
                test_v203_gdiplus, test_v203_capture, test_v203_countdown_split,
                test_v203_scan_teams, test_v203_scout_overlay, test_v203_scout_speed,
-               test_v203_shutdown, test_v203_overlay_scout_api, test_v205_nvidia_single):
+               test_v203_shutdown, test_v203_overlay_scout_api, test_v205_nvidia_single,
+               test_v206_api_savings):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001

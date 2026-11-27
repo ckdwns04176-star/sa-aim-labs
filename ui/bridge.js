@@ -882,7 +882,9 @@
     const goals = set.goals || {};
     const account = (st && st.account) || {};
     const plan = account.plan || {};
-    const ovSet = ((st && st.overlay) || {}).settings || {};
+    /* v2.0.6 — 오버레이 설정은 state.overlay.settings 로도, 평평한 키로도 온다(둘 다 받는다) */
+    const ovAll = (st && st.overlay) || {};
+    const ovSet = ovAll.settings || ovAll;
     const hot = ((st && st.overlay) || {}).hotkeys || {};
     const presets = (st && st.party_presets) || [];
     const reg = (hot.registered || []);
@@ -943,8 +945,8 @@
           <div class="field"><label>파티 배지 유지 (초)</label>
             <input id="set-ov-psec" class="inp" type="number" min="3" max="40" value="${Number(ovSet.party_seconds || 15)}"></div>
         </div>
-        ${switchRow('toast_enabled', '경기 종료 결과 토스트', '한 판이 끝나면 승패·K/D·딜량·연승을 5초 표시', ovSet.toast_enabled !== false)}
-        ${switchRow('toast_auto', '새 경기 자동 감지', '최근 전적을 확인해 새 판만 띄웁니다 (1분 5초마다 전적 최신화)', ovSet.toast_auto !== false)}
+        ${switchRow('toast_enabled', '경기 종료 결과 토스트', '한 판이 끝나면 승패·K/D·딜량·연승을 5초 표시 · 필요할 때만 켜기 (기본 꺼짐)', ovSet.toast_enabled === true)}
+        ${switchRow('toast_auto', '새 경기 자동 감지', '위 토스트를 켰을 때만 동작 · 최근 전적을 18초마다 확인해 새 판을 잡습니다 (조회 호출 늘어남)', ovSet.toast_auto !== false)}
         <div class="field"><label>토스트 위치</label>
           <select id="set-ov-pos" class="inp">
             <option value="br" ${ovSet.toast_position !== 'tr' ? 'selected' : ''}>우하단 (기본)</option>
@@ -983,7 +985,7 @@
             <div class="card-sub">65초 자동 최신화 · 연패 브레이크 · 목표</div></div>
         </div>
         <div class="set-note" style="margin-top:2px">
-          최근 전적을 <b>${n0((st.match_refresh || {}).interval || 65)}초</b>마다 새로 읽습니다 · 마지막 확인 ${((st.match_refresh || {}).at ? String(st.match_refresh.at).replace('T', ' ').slice(5, 16) : '—')}
+          최근 전적을 <b>${n0((st.match_refresh || {}).interval || 65)}초</b>마다 새로 읽습니다 · 마지막 확인 ${((st.match_refresh || {}).at ? String(st.match_refresh.at).replace('T', ' ').slice(5, 16) : '—')}${(st.match_refresh || {}).paused ? '<br>창이 트레이로 숨겨져 있는 동안은 호출을 멈춥니다' : ''}
         </div>
         <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-top:7px">
           ${inputRow('set-goal-win', '승률 %', goals.win != null ? goals.win : 55, { type: 'number' })}
@@ -3408,8 +3410,10 @@
   AL.syncOverlayPane = function (st) {
     const el = $('#pane-ov-sub');
     if (!el) return;
-    const ovs = (((st || AL.state || {}).overlay) || {}).settings || {};
-    el.textContent = `${ovs.hotkey_lobby || 'Insert'} 대기실 · 맵 밴 / ${ovs.hotkey_scout || 'Home'} 상대 분석`;
+    const ov = ((st || AL.state || {}).overlay) || {};
+    const ovs = ov.settings || ov;
+    const toastOn = ovs.toast_enabled === true;
+    el.textContent = `${ovs.hotkey_lobby || 'Insert'} 대기실 · 맵 밴 / ${ovs.hotkey_scout || 'Home'} 상대 분석 · 결과 토스트 ${toastOn ? '켜짐' : '꺼짐(설정에서 켜기)'}`;
   };
   AL.openSettings = function () {
       renderSettings(AL.state || { settings: {}, nexon: {}, cloud: {}, meta: {} });
