@@ -1871,7 +1871,10 @@
   function renderScoutMaps(rows) {
     const box = $('#scout-maps');
     if (!box) return;
-    if (!rows.length) { box.hidden = true; box.innerHTML = ''; return; }
+    /* v2.0.1 — 스카우팅은 경기 상세를 받지 않으므로 맵별 표본이 없다.
+       (빈 카드 두 개를 남기지 않는다. 맵 분석은 병영수첩 '맵·약점' 화면에서 본다) */
+    const hasMaps = rows.some((r) => (r.maps || []).length);
+    if (!rows.length || !hasMaps) { box.hidden = true; box.innerHTML = ''; return; }
     const { weak, strong } = scoutMapSummary(rows);
     const line = (m) => {
       const src = window.mapImg ? window.mapImg(m.map) : '';
@@ -1975,7 +1978,7 @@
     if (note) {
       note.innerHTML = res && res.calls !== undefined
         ? `이번 조회 API ${n0(res.calls)}건 · 이미 받은 전적은 캐시에서 사용 · <b>역할 버튼을 누르면 팀 스나수가 바로 다시 계산됩니다</b>`
-        : '솔로/파티 랭크의 승률·K/D 는 경기 목록(최근 20판) 기준입니다 · <b>역할 버튼을 누르면 팀 스나수가 다시 계산됩니다</b>';
+        : '솔로/파티 승률·K/D 는 경기 목록(최근 20판) 기준 · 경기 상세를 받지 않아 <b>맵별 표본은 표시하지 않습니다</b> · 역할 버튼을 누르면 팀 스나수가 다시 계산됩니다';
     }
   }
 
