@@ -260,7 +260,10 @@ def scan_party(client: nexon.NexonClient, game: tuple[int, int, int, int],
 
     known_list = [str(n).strip() for n in known if str(n or "").strip()]
     rects = overlay.party_card_rects(game, calib)
-    shot = capture.ocr_regions([(r["x"], r["y"], r["w"], r["h"]) for r in rects])
+    shot = capture.ocr_regions(
+        [(r["x"], r["y"], r["w"], r["h"]) for r in rects],
+        cyan_only=True,
+    )
     if not shot.get("ok"):
         return {"ok": False, "supported": bool(shot.get("supported")), "rows": [],
                 "message": shot.get("message") or "대기실 화면을 읽지 못했습니다"}
