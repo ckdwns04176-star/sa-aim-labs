@@ -18,7 +18,7 @@ import subprocess
 from typing import Any, Iterable, Sequence
 
 CREATE_NO_WINDOW = 0x08000000
-PS_TIMEOUT = 12.0
+PS_TIMEOUT = 20.0
 
 # ---------------------------------------------------------------- PowerShell
 _AWAIT = r"""
@@ -51,46 +51,77 @@ foreach ($tag in @('ko-KR', 'ko')) {
 }
 if (-not $engine) { $engine = [Windows.Media.Ocr.OcrEngine]::TryCreateFromUserProfileLanguages() }
 if (-not $engine) { Write-Output '{"ok":false,"message":"Windows OCR 언어팩(한국어)을 찾지 못했습니다"}'; exit 0 }
+
+# OCR 엔진에 비트맵을 전달하고 인식된 한 줄을 대상 배열에 추가한다.
+function Add-OcrLines($bitmap, $ocrEngine, [ref]$target) {
+  $ms = New-Object System.IO.MemoryStream
+  try {
+    $bitmap.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+    $ms.Position = 0
+    $ras = [System.WindowsRuntimeStreamExtensions]::AsRandomAccessStream($ms)
+    $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($ras)) ([Windows.Graphics.Imaging.BitmapDecoder])
+    $software = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
+    $result = Await ($ocrEngine.RecognizeAsync($software)) ([Windows.Media.Ocr.OcrResult])
+    foreach ($line in $result.Lines) {
+      if ($line.Text) { $target.Value += [string]$line.Text }
+    }
+  } finally {
+    $ms.Dispose()
+  }
+}
+
 $out = @()
 foreach ($r in $rects) {
   $x = [int]$r.x; $y = [int]$r.y; $w = [int]$r.w; $h = [int]$r.h
   $lines = @()
+  $resources = @()
   try {
     $bmp = New-Object System.Drawing.Bitmap($w, $h)
+    $resources += $bmp
     $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $resources += $g
     $g.CopyFromScreen($x, $y, 0, 0, (New-Object System.Drawing.Size($w, $h)))
-    $big = New-Object System.Drawing.Bitmap(($w * 4), ($h * 4))
+
+    # 1) 원본 픽셀: 이전 4~5배 Bicubic 확대/강한 반전은 작은 한글 획을 뭉개므로
+    #    원본 크기 그대로 먼저 읽는다.
+    Add-OcrLines $bmp $engine ([ref]$lines)
+
+    # 2) 2배 NearestNeighbor: 1픽셀 획을 흐리지 않고 키워 작은 닉네임에 맞춘다.
+    $scale = 2
+    $big = New-Object System.Drawing.Bitmap(($w * $scale), ($h * $scale))
+    $resources += $big
     $g2 = [System.Drawing.Graphics]::FromImage($big)
-    $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-    $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $resources += $g2
+    $g2.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+    $g2.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+    $dst = New-Object System.Drawing.Rectangle(0, 0, ($w * $scale), ($h * $scale))
+    $g2.DrawImage($bmp, $dst, 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel)
+    Add-OcrLines $big $engine ([ref]$lines)
+
+    # 3) 2배 회색조: 청록 글자와 짙은 배경의 색상 차이를 밝기 차이로 보조한다.
+    #    기존 스크립트는 정상 회색조 행렬을 음수 행렬로 다시 덮어써 명암을 망가뜨렸다.
+    $gray = New-Object System.Drawing.Bitmap(($w * $scale), ($h * $scale))
+    $resources += $gray
+    $g3 = [System.Drawing.Graphics]::FromImage($gray)
+    $resources += $g3
+    $g3.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+    $g3.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
     $attr = New-Object System.Drawing.Imaging.ImageAttributes
+    $resources += $attr
     $cm = New-Object System.Drawing.Imaging.ColorMatrix
     $cm.Matrix00 = 0.30; $cm.Matrix01 = 0.30; $cm.Matrix02 = 0.30
     $cm.Matrix10 = 0.59; $cm.Matrix11 = 0.59; $cm.Matrix12 = 0.59
     $cm.Matrix20 = 0.11; $cm.Matrix21 = 0.11; $cm.Matrix22 = 0.11
     $cm.Matrix33 = 1.0; $cm.Matrix44 = 1.0
-    $cm.Matrix40 = -0.55; $cm.Matrix41 = -0.55; $cm.Matrix42 = -0.55
-    $cm.Matrix00 = -0.30; $cm.Matrix01 = -0.30; $cm.Matrix02 = -0.30
-    $cm.Matrix10 = -0.59; $cm.Matrix11 = -0.59; $cm.Matrix12 = -0.59
-    $cm.Matrix20 = -0.11; $cm.Matrix21 = -0.11; $cm.Matrix22 = -0.11
-    $cm.Matrix40 = 1.55; $cm.Matrix41 = 1.55; $cm.Matrix42 = 1.55
-    $cm.Matrix33 = 1.0; $cm.Matrix44 = 1.0
     $attr.SetColorMatrix($cm)
-    $dst = New-Object System.Drawing.Rectangle(0, 0, ($w * 4), ($h * 4))
-    $g2.DrawImage($bmp, $dst, 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel, $attr)
-    $ms = New-Object System.IO.MemoryStream
-    $big.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
-    $ms.Position = 0
-    $ras = [System.IO.WindowsRuntimeStreamExtensions]::AsRandomAccessStream($ms)
-    $decoder = Await ([Windows.Graphics.Imaging.BitmapDecoder]::CreateAsync($ras)) ([Windows.Graphics.Imaging.BitmapDecoder])
-    $software = Await ($decoder.GetSoftwareBitmapAsync()) ([Windows.Graphics.Imaging.SoftwareBitmap])
-    $result = Await ($engine.RecognizeAsync($software)) ([Windows.Media.Ocr.OcrResult])
-    foreach ($line in $result.Lines) {
-      if ($line.Text) { $lines += $line.Text }
-    }
-    $g.Dispose(); $g2.Dispose(); $bmp.Dispose(); $big.Dispose(); $ms.Dispose()
+    $g3.DrawImage($bmp, $dst, 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel, $attr)
+    Add-OcrLines $gray $engine ([ref]$lines)
   } catch {
     $lines += ('__ERR__' + $_.Exception.Message)
+  } finally {
+    for ($i = $resources.Count - 1; $i -ge 0; $i--) {
+      try { $resources[$i].Dispose() } catch {}
+    }
   }
   $out += @{ lines = @($lines) }
 }

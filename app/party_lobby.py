@@ -94,8 +94,13 @@ def best_candidate(raw: str, known: Iterable[str], *, minimum: float = 0.78) -> 
     return best, score
 
 
-def pick_line(lines: Sequence[str]) -> tuple[str, list[str]]:
-    """OCR 줄들 중 닉네임으로 가장 그럴듯한 하나 + 전체 후보."""
+def pick_line(lines: Sequence[str], known: Iterable[str] = ()) -> tuple[str, list[str]]:
+    """여러 OCR 전처리 결과에서 닉네임 후보를 투표로 선택한다.
+
+    원본/2배 픽셀 확대/회색조 OCR 결과가 여러 개 들어온다.
+    같은 문자열이 반복되면 우선하고, 표가 같으면 저장된 이름과의 유사도로
+    타이브레이크한다. 후보 원문은 API 검증 단계에서 다시 확인한다.
+    """
     candidates: list[str] = []
     for line in lines:
         cleaned = clean_ocr_text(line)
@@ -103,11 +108,28 @@ def pick_line(lines: Sequence[str]) -> tuple[str, list[str]]:
             candidates.append(cleaned)
     if not candidates:
         return "", []
-    def score(text: str) -> tuple[int, int]:
-        has_korean = bool(re.search(r"[가-힣]", text))
-        return (1 if has_korean else 0, len(text))
-    candidates.sort(key=score, reverse=True)
-    return candidates[0], candidates
+
+    known_list = [str(n).strip() for n in known if str(n or "").strip()]
+    counts: dict[str, int] = {}
+    first_seen: dict[str, int] = {}
+    display: dict[str, str] = {}
+    for index, text in enumerate(candidates):
+        key = nick_key(text)
+        counts[key] = counts.get(key, 0) + 1
+        first_seen.setdefault(key, index)
+        display.setdefault(key, text)
+
+    def score(key: str) -> tuple[int, float, int, int, int]:
+        text = display[key]
+        known_score = max((similarity(text, item) for item in known_list), default=0.0)
+        has_korean = int(bool(re.search(r"[가-힣]", text)))
+        korean_count = len(re.findall(r"[가-힣]", text))
+        # 같은 OCR 결과의 반복을 가장 중요하게 보고, 저장 이름 유사도는 동률일 때만 사용한다.
+        return (counts[key], known_score, has_korean, korean_count, -first_seen[key])
+
+    winner = max(counts, key=score)
+    ordered = sorted(counts, key=score, reverse=True)
+    return display[winner], [display[key] for key in ordered]
 
 
 def team_of(rows: Sequence[dict[str, Any]], me: str) -> dict[str, Any]:
@@ -134,67 +156,87 @@ def team_of(rows: Sequence[dict[str, Any]], me: str) -> dict[str, Any]:
             "found_me": bool(my_team)}
 
 
+def _rank_known_candidates(raw: str, known: Iterable[str]) -> list[tuple[str, float]]:
+    """OCR 원문과 저장된 닉네임의 유사도 순위. 점수 동률은 입력 순서를 유지한다."""
+    left = nick_key(raw)
+    if len(left) < 2:
+        return []
+    ranked: list[tuple[str, float]] = []
+    seen: set[str] = set()
+    for item in known:
+        candidate = str(item or "").strip()
+        right = nick_key(candidate)
+        if not candidate or not right or right in seen:
+            continue
+        seen.add(right)
+        if left[:2] != right[:2] and abs(len(left) - len(right)) > 1:
+            continue
+        ranked.append((candidate, similarity(raw, candidate)))
+    ranked.sort(key=lambda row: row[1], reverse=True)
+    return ranked
+
+
 def validate_names(client: nexon.NexonClient, names: Sequence[str], known: Iterable[str],
                    *, workers: int = 5) -> list[dict[str, Any]]:
-    """OCR 이름 5개를 API 로 검증한다 — **확실한 것만** 조회한다.
+    """OCR 이름을 먼저 원문 그대로 조회하고, 실패하면 유일한 유사 후보만 API로 검증한다.
 
-    v2.0.0 — 억지 유사 매칭 금지
-     · OCR 원문이 저장된 이름과 유사도 ``CONFIDENT_MIN``(0.92) 미만이면
-       보정 후보로 바꾸지 않는다.  애매한 이름은 API 조회를 **건너뛰고**
-       ``status="needs_check"`` (화면에 '확인 필요')로 남긴다.
-     · 원문 그대로 API 에 있는 이름만 ``ok``, 0.92 이상으로 아주 가까운
-       보정만 ``corrected`` 로 인정한다.
-     · API 가 돌려준 이름이 OCR 원문과 너무 다르면(오타 수준 아님) 그 행도
-       ``unknown`` 으로 두고 이름을 지어내지 않는다.
+    원문 조회 전에 '애매하다'며 API 호출을 건너뛰던 기존 순서를 수정했다.
+    오인식을 보정할 때는 0.72 이상 + 차순위와 0.08 이상 차이가 있어야 후보를
+    조회하고, NEXON API가 반환한 user_name이 후보와 정확히 일치해야 확정한다.
     """
     known_list = [str(n).strip() for n in known if str(n or "").strip()]
-    CONFIDENT_MIN = 0.92
-    AMBIGUOUS_MIN = 0.62
+    CORRECTION_MIN = 0.72
+    CORRECTION_MARGIN = 0.08
 
     def _unknown(slot: int, raw: str, score: float, reason: str) -> dict[str, Any]:
         return {"slot": slot, "raw": raw, "name": raw, "ouid": None,
                 "status": "needs_check", "score": round(score, 2), "skip_reason": reason}
+
+    def _resolve_exact(name: str):
+        try:
+            ouid = client.resolve_ouid(name)
+            basic = client.user_basic(ouid)
+            actual = str(basic.get("user_name") or name)
+            return ouid, basic, actual
+        except nexon.NexonError:
+            return None, None, ""
 
     def _one(entry: tuple[int, str]) -> dict[str, Any]:
         slot, raw = entry
         if not raw:
             return {"slot": slot, "raw": "", "name": "", "ouid": None,
                     "status": "empty", "score": 0.0}
-        corrected, score = best_candidate(raw, known_list, minimum=CONFIDENT_MIN)
-        confident = score >= CONFIDENT_MIN and corrected and corrected != raw
-        # 애매 구간(0.78~0.92)은 어느 쪽인지 확신할 수 없다 → API 조회도 하지 않고 확인 필요
-        if known_list and AMBIGUOUS_MIN <= score < CONFIDENT_MIN:
-            return _unknown(slot, raw, score, "닉네임이 애매해 조회를 건너뜀")
 
-        # 1) OCR 원문 그대로 먼저 확인 — 이게 가장 안전한 경로
-        try:
-            ouid = client.resolve_ouid(raw)
-            basic = client.user_basic(ouid)
-            name = str(basic.get("user_name") or raw)
-        except nexon.NexonError:
-            ouid, basic, name = None, None, ""
+        ranked = _rank_known_candidates(raw, known_list)
+        corrected, score = ranked[0] if ranked else (raw, 0.0)
+        runner_up = ranked[1][1] if len(ranked) > 1 else 0.0
+        margin = score - runner_up
+
+        # 1) OCR 원문을 항상 먼저 조회한다. 유사 후보가 있어도 정확한 원문 조회를 막지 않는다.
+        ouid, basic, name = _resolve_exact(raw)
         if ouid:
             if similarity(name, raw) < 0.55:
-                # 원문과 전혀 다른 사람이 나왔다 → 조회 결과를 쓰지 않는다
                 return _unknown(slot, raw, score, "OCR 원문과 API 이름이 너무 다름")
             return {"slot": slot, "raw": raw, "name": name, "ouid": ouid,
                     "status": "ok", "score": round(score, 2),
                     "clan": (basic or {}).get("clan_name") or ""}
 
-        # 2) 원문이 API 에 없다 — 0.92 이상으로 확실할 때만 보정 조회
+        # 2) 원문 조회가 실패하면, 한 후보가 충분히 앞설 때만 후보를 API로 확인한다.
+        confident = (corrected and corrected != raw and score >= CORRECTION_MIN
+                     and margin >= CORRECTION_MARGIN)
         if not confident:
-            return _unknown(slot, raw, score, "유사도가 낮아 조회를 건너뜀")
-        try:
-            ouid = client.resolve_ouid(corrected)
-            basic = client.user_basic(ouid)
-            name = str(basic.get("user_name") or corrected)
-        except nexon.NexonError:
-            return _unknown(slot, raw, score, "보정 후보도 조회되지 않음")
-        if similarity(name, raw) < 0.70:
-            return _unknown(slot, raw, score, "보정 후보가 원문과 너무 다음")
+            reason = "저장된 닉네임 후보가 없거나 후보 간 유사도가 비슷함"
+            return _unknown(slot, raw, score, reason)
+
+        ouid, basic, name = _resolve_exact(corrected)
+        if not ouid:
+            return _unknown(slot, raw, score, "유사 후보를 NEXON API에서 찾지 못함")
+        # 후보로 조회한 경우 API의 실제 user_name이 후보 문자열과 같아야 자동 보정한다.
+        if nick_key(name) != nick_key(corrected):
+            return _unknown(slot, raw, score, "API 닉네임이 보정 후보와 일치하지 않음")
         return {"slot": slot, "raw": raw, "name": name, "ouid": ouid,
                 "status": "corrected", "score": round(score, 2),
-                "clan": basic.get("clan_name") or ""}
+                "clan": (basic or {}).get("clan_name") or ""}
 
     rows: list[dict[str, Any]] = []
     pool = ThreadPoolExecutor(max_workers=max(1, min(workers, len(names) or 1)))
@@ -212,6 +254,7 @@ def scan_party(client: nexon.NexonClient, game: tuple[int, int, int, int],
     """대기실 5칸을 읽고 → 보정 → API 검증까지 한 번에."""
     from . import overlay
 
+    known_list = [str(n).strip() for n in known if str(n or "").strip()]
     rects = overlay.party_card_rects(game, calib)
     shot = capture.ocr_regions([(r["x"], r["y"], r["w"], r["h"]) for r in rects])
     if not shot.get("ok"):
@@ -220,10 +263,10 @@ def scan_party(client: nexon.NexonClient, game: tuple[int, int, int, int],
     names: list[str] = []
     raws: list[str] = []
     for lines in shot.get("lines") or []:
-        name, candidates = pick_line(lines)
+        name, candidates = pick_line(lines, known_list)
         names.append(name)
         raws.append(" / ".join(candidates[:3]))
-    rows = validate_names(client, names, known)
+    rows = validate_names(client, names, known_list)
     for row, raw in zip(rows, raws):
         row["lines"] = raw
     found = len([r for r in rows if r.get("ouid")])
@@ -263,16 +306,17 @@ def team_name_rects(game: tuple[int, int, int, int]) -> list[dict[str, Any]]:
 
 def scan_teams(game: tuple[int, int, int, int], known: Iterable[str],
                client: nexon.NexonClient) -> dict[str, Any]:
+    known_list = [str(n).strip() for n in known if str(n or "").strip()]
     rects = team_name_rects(game)
     shot = capture.ocr_regions([(r["x"], r["y"], r["w"], r["h"]) for r in rects])
     if not shot.get("ok"):
         return {"ok": False, "rows": [], "message": shot.get("message") or "10인 화면을 읽지 못했습니다"}
     rows: list[dict[str, Any]] = []
     for meta, lines in zip(rects, shot.get("lines") or []):
-        name, candidates = pick_line(lines)
+        name, candidates = pick_line(lines, known_list)
         if not name:
             continue
-        corrected, score = best_candidate(name, known)
+        corrected, score = best_candidate(name, known_list)
         rows.append({"team": meta["team"], "slot": meta["slot"], "raw": name,
                      "name": corrected, "score": round(score, 2),
                      "lines": " / ".join(candidates[:3])})
