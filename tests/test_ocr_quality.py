@@ -56,6 +56,20 @@ class OcrCandidateTests(unittest.TestCase):
         self.assertEqual(rows[0]["status"], "needs_check")
         self.assertEqual(client.calls, ["퓨가중."])
 
+    def test_internal_power_shell_error_is_not_a_nickname(self):
+        picked, candidates = party_lobby.pick_line(
+            ["__ERR__System.Management.Automation.RuntimeException", "휴가중."]
+        )
+        self.assertEqual(picked, "휴가중.")
+        self.assertEqual(candidates, ["휴가중."])
+
+    def test_error_marker_alone_is_not_a_nickname(self):
+        picked, candidates = party_lobby.pick_line(
+            ["__ERR__System.Management.Automation.RuntimeException"]
+        )
+        self.assertEqual(picked, "")
+        self.assertEqual(candidates, [])
+
 
 if __name__ == "__main__":
     unittest.main()
