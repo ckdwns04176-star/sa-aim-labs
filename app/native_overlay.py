@@ -135,7 +135,8 @@ class _Win32:
         sig(g.SetBkMode, ctypes.c_int, HANDLE, ctypes.c_int)
         sig(g.SetTextColor, wintypes.DWORD, HANDLE, wintypes.DWORD)
         sig(g.CreateSolidBrush, HANDLE, wintypes.DWORD)
-        sig(g.FillRect, ctypes.c_int, HANDLE, ctypes.c_void_p, HANDLE)
+        # FillRect 는 GDI 함수가 아니라 User32 함수다.
+        sig(u.FillRect, ctypes.c_int, HANDLE, ctypes.c_void_p, HANDLE)
         sig(g.CreateFontW, HANDLE, ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
             ctypes.c_int, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD,
             wintypes.DWORD, wintypes.LPCWSTR)
@@ -671,7 +672,7 @@ def _render_gdi(bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
             if kind == "rect":
                 r, g, b = hex_rgb(COLORS.get(prim.get("fill") or "panel", prim.get("fill")))
                 brush = gdi32.CreateSolidBrush((int(round(b)) << 16) | (int(round(g)) << 8) | int(round(r)))
-                gdi32.FillRect(bitmap.hdc, ctypes.byref((ctypes.c_int * 4)(
+                user32.FillRect(bitmap.hdc, ctypes.byref((ctypes.c_int * 4)(
                     int(prim["x"]), int(prim["y"]), int(prim["x"] + prim["w"]), int(prim["y"] + prim["h"]))), brush)
                 gdi32.DeleteObject(brush)
             elif kind == "text":
