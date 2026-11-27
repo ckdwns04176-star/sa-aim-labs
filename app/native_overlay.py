@@ -699,8 +699,13 @@ def _render_gdi(bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
 
 # ---------------------------------------------------------------- 창
 _WINFUNCTYPE = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)   # 리눅스 테스트용 폴백
-WNDPROC = _WINFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p, ctypes.c_uint32,
-                       ctypes.c_void_p, ctypes.c_void_p)
+WNDPROC = _WINFUNCTYPE(
+    ctypes.c_ssize_t,   # LRESULT
+    ctypes.c_void_p,    # HWND
+    ctypes.c_uint32,    # UINT
+    ctypes.c_size_t,    # WPARAM
+    ctypes.c_ssize_t,   # LPARAM
+)
 
 
 class NativeOverlayWindow:
@@ -848,8 +853,12 @@ class NativeOverlayWindow:
                 if msg == WM_DESTROY:
                     user32.PostQuitMessage(0)
                     return 0
-                return user32.DefWindowProcW(ctypes.c_void_p(hwnd), msg, ctypes.c_void_p(wparam),
-                                             ctypes.c_void_p(lparam))
+                return user32.DefWindowProcW(
+                    ctypes.c_void_p(hwnd),
+                    msg,
+                    wparam,
+                    lparam,
+                )
 
             self._wndproc = wndproc
             if class_name not in NativeOverlayWindow._class_registered:
