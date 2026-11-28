@@ -2064,6 +2064,15 @@ def test_v207_banners() -> None:
     csvc.record("clicks", ["house-rail-1"])
     check("v2.0.7: 클릭 카운터 누적", csvc.stats_summary()["clicks"] == 2, str(csvc.stats_summary()))
     check("v2.0.7: 배너 id 없으면 실패", csvc.record("clicks", []).get("ok") is False)
+    # 원격 카운터 모드 — 보낼 주소가 없으면 조용히 로컬만
+    store_remote = Store(d / "count2.json")
+    store_remote.update_settings({"banner_stats": "remote", "banner_stats_url": "https://example.com/stats"})
+    rcount = banners.BannerService(store_remote, data_dir=d / "banners5")
+    check("v2.0.7: 원격 카운터 설정 인식",
+          rcount.settings()["banner_stats"] == "remote"
+          and rcount.settings()["banner_stats_url"] == "https://example.com/stats")
+    check("v2.0.7: 원격 카운터여도 로컬 합계는 남음",
+          rcount.record("impressions", ["x1"])["ok"] and rcount.stats_summary()["impressions"] == 1)
 
 
 def test_v207_netopt() -> None:

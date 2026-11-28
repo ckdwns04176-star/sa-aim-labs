@@ -437,8 +437,8 @@ class BannerService:
                 bucket[bid] = int(bucket.get(bid, 0)) + 1
                 days[kind] = int(days.get(kind, 0)) + 1
             self._write_stats(data)
-        if kind == "clicks":
-            self._push_remote(clean, kind)
+        # 로컬/원격 카운터 선택 — remote 면 노출·클릭 모두 광고주 주소로도 보낸다 (실패는 무시)
+        self._push_remote(clean, kind)
         return {"ok": True, "kind": kind, "ids": clean, "stats": self.stats_summary()}
 
     def _push_remote(self, ids: list[str], kind: str) -> None:
