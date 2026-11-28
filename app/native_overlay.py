@@ -838,6 +838,9 @@ class NativeOverlayWindow:
             self.error = "Windows 전용"
             return False
         try:
+            if int(rect.get("w") or 0) <= 0 or int(rect.get("h") or 0) <= 0:
+                self.error = f"오버레이 영역이 올바르지 않습니다 · {rect}"
+                return False
             self._size = (int(rect["w"]), int(rect["h"]))
             self._thread = threading.Thread(target=self._run, daemon=True,
                                             name=f"overlay-native-{self.kind}")
@@ -998,6 +1001,12 @@ class NativeOverlayWindow:
         src = POINT(0, 0)
         rect = wintypes.RECT()
         user32.GetWindowRect(ctypes.c_void_p(self.hwnd), ctypes.byref(rect))
+        if (rect.right - rect.left) <= 0 or (rect.bottom - rect.top) <= 0:
+            # 창 크기가 0 이면 첫 UpdateLayeredWindow 가 실패한다 — 비트맵 크기로 맞춘 뒤 다시 읽는다.
+            user32.SetWindowPos(ctypes.c_void_p(self.hwnd), ctypes.c_void_p(HWND_TOPMOST),
+                                rect.left, rect.top, size.cx, size.cy,
+                                SWP_NOACTIVATE | SWP_NOZORDER)
+            user32.GetWindowRect(ctypes.c_void_p(self.hwnd), ctypes.byref(rect))
         dst = POINT(rect.left, rect.top)
         ok = user32.UpdateLayeredWindow(
             ctypes.c_void_p(self.hwnd), None, ctypes.byref(dst), ctypes.byref(size),

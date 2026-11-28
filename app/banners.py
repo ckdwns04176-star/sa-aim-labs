@@ -191,6 +191,8 @@ class BannerService:
         self._remote_error: str | None = None
         self._refreshing = False
         self._last_origin = "local"
+        self._stats_cache: dict[str, Any] | None = None
+        self._stats_at = 0.0
 
     # ---------------------------------------------------------- 파일 경로
     @property
@@ -398,14 +400,19 @@ class BannerService:
         except OSError:
             pass
 
-    def stats_summary(self) -> dict[str, Any]:
+    def stats_summary(self, *, fresh: bool = False) -> dict[str, Any]:
+        """노출·클릭 합계 — 화면 상태를 만들 때마다 파일을 읽지 않도록 30초 캐시."""
+        if not fresh and self._stats_cache is not None and (time.time() - self._stats_at) < 30:
+            return dict(self._stats_cache)
         data = self._read_stats()
-        return {
+        summary = {
             "impressions": sum(int(v or 0) for v in (data.get("impressions") or {}).values()),
             "clicks": sum(int(v or 0) for v in (data.get("clicks") or {}).values()),
             "by_id": {"impressions": dict(data.get("impressions") or {}),
                       "clicks": dict(data.get("clicks") or {})},
         }
+        self._stats_cache, self._stats_at = summary, time.time()
+        return dict(summary)
 
     def record(self, kind: str, ids: list[str]) -> dict[str, Any]:
         """노출(impression)·클릭(click) 카운터 — 같은 날 같은 배너는 한 번만 노출로 센다."""
@@ -419,6 +426,7 @@ class BannerService:
             data = self._read_stats()
             bucket = data.setdefault(kind, {})
             days = data.setdefault("days", {}).setdefault(today, {"impressions": 0, "clicks": 0})
+            self._stats_cache = None
             for bid in clean:
                 if kind == "impressions":
                     seen = data.setdefault("seen", {}).setdefault(today, [])
