@@ -38,7 +38,7 @@ KEEP_BACKUPS = 3
 # v2.0.5 — 버튼은 하나('서든어택 그래픽 최적화'). 두 팩의 서든 프로필 값이 같아서
 # 이름만 나뉘어 있었고, 예전 화면/호출과의 호환을 위해 rifle / sniper 키는 그대로 둔다.
 MODES = {"rifle": "서든어택 그래픽 최적화", "sniper": "서든어택 그래픽 최적화",
-         "stairfix": "계단현상 끄기"}
+         "stairfix": "그래픽 호환 설정"}
 PACK_MODES = ("rifle", "sniper")
 RESULT_FILE = "elevated_result.json"
 
@@ -94,7 +94,7 @@ def _readiness(blob: bytes | None, changes: list[dict[str, Any]], base_changes: 
 
 
 def _same_except_stairfix(a: bytes, b: bytes) -> bool:
-    """두 Drs DB 가 계단현상 끄기(AA compatibility) 값만 다른지.
+    """두 Drs DB 가 그래픽 호환 설정(AA compatibility) 값만 다른지.
 
     팩을 덮어쓴 뒤 AA 값을 0x00401241 로 패치하므로, 라이브 DB 는 팩과
     4바이트만 달라진다.  '이미 그 팩이 적용되어 있다'를 그렇게 판별한다.
@@ -190,7 +190,7 @@ class DrsManager:
             return None
 
     def stairfix_ready(self) -> bool:
-        """True when 계단현상 끄기 can be applied with the built-in patch logic."""
+        """True when 그래픽 호환 설정 can be applied with the built-in patch logic."""
         if not self.supported or not self.drs_dir.is_dir():
             return False
         blob = self.live_blob()
@@ -206,7 +206,7 @@ class DrsManager:
 
     def available_modes(self) -> dict[str, bool]:
         modes = {m: bool(self.profile_files(m)) for m in PACK_MODES}
-        # 계단현상 끄기 is a built-in patch of the live Drs DB (no pack needed) —
+        # 그래픽 호환 설정 is a built-in patch of the live Drs DB (no pack needed) —
         # a shipped assets/profiles/stairfix pack still wins when present.
         modes["stairfix"] = bool(self.profile_files("stairfix")) or self.stairfix_ready()
         return modes
@@ -276,7 +276,7 @@ class DrsManager:
             if not pack_game:
                 continue
             # **서든 프로필 값만** 비교한다 — 전역/다른 게임은 보존하므로 파일은 다를 수 있다.
-            # 계단현상 세트는 팩 기본값과 달라도 정상이므로 비교에서 뺀다.
+            # 그래픽 호환 세트는 팩 기본값과 달라도 정상이므로 비교에서 뺀다.
             matches = sum(1 for sid, value in pack_game.items() if live_values.get(sid) == value)
             if matches == len(pack_game):
                 candidates.append((matches, mode))
@@ -483,7 +483,7 @@ class DrsManager:
                     "changes": merged.get("changes", []), "base_changes": [], "files": [],
                     "profile_items": drs.profile_items(after_blob),
                     "checklist": drs.checklist_state(after_blob),
-                    "message": f"{MODES[mode]} 유지 · 계단현상 끄기를 함께 적용했습니다",
+                    "message": f"{MODES[mode]} 유지 · 그래픽 호환 설정을 함께 적용했습니다",
                     "applied_at": _now(),
                 }
             return {"ok": True, "mode": mode, "unchanged": True, "merged": bool(merged.get("ok")),
@@ -546,7 +546,7 @@ class DrsManager:
         if remaining:
             message += f" · ⚠ {len(remaining)}개 항목은 적용하지 못했습니다"
         if merged.get("ok"):
-            message += " · 계단현상 끄기 포함"
+            message += " · 그래픽 호환 설정 포함"
             changes.extend(merged.get("changes") or [])
         return {
             "ok": True,
@@ -570,10 +570,10 @@ class DrsManager:
         }
 
     def _merge_stairfix(self) -> dict[str, Any]:
-        """지금 Drs DB 의 서든 프로필에 계단현상 끄기 세트를 병합한다.
+        """지금 Drs DB 의 서든 프로필에 그래픽 호환 세트를 병합한다.
 
         프로필 팩 DB 의 AA compatibility 는 기본값(``0x00020041``)이라 팩만
-        덮어쓰면 계단현상이 다시 켜진다.  또 예전에는 호환성 값만 바꿔서
+        덮어쓰면 예전 값이 다시 덮인다.  또 예전에는 호환성 값만 바꿔서
         AA Mode/Setting 이 꺼져 있으면 드라이버가 무시했다.  이제는
         호환성 + AA 모드(Override) + AA 설정(2x)을 함께 패치하고 검증한다.
         """
@@ -613,10 +613,10 @@ class DrsManager:
         current = self.live_blob()
         after_values = drs.stairfix_values(current) if current is not None else {}
         if after_values.get(drs.SETTING_AA_COMPAT) != drs.STAIRFIX_VALUE:
-            return {"ok": False, "changed": False, "message": "계단현상 끄기 값 검증에 실패했습니다"}
+            return {"ok": False, "changed": False, "message": "그래픽 호환 값 검증에 실패했습니다"}
         changes = [
             self._stairfix_row(drs.SETTING_AA_COMPAT, before_values, after_values,
-                               "계단현상 끄기", "Antialiasing compatibility (DX9)"),
+                               "그래픽 호환 설정", "Antialiasing compatibility (DX9)"),
             self._stairfix_row(drs.SETTING_AA_MODE, before_values, after_values,
                                "안티앨리어싱 모드", "Antialiasing - Mode"),
             self._stairfix_row(drs.SETTING_AA_SETTING, before_values, after_values,
@@ -731,13 +731,13 @@ class DrsManager:
                     "changes": [], "base_changes": [], "files": [],
                     "profile_items": drs.profile_items(blob),
                     "checklist": drs.checklist_state(blob),
-                    "unchanged_reason": "계단현상 끄기 세트(호환성 0x00401241 · AA 모드 · AA 설정)가 이미 적용되어 있습니다",
-                    "message": "계단현상 끄기가 이미 적용되어 있습니다",
+                    "unchanged_reason": "그래픽 호환 세트(호환성 0x00401241 · AA 모드 · AA 설정)가 이미 적용되어 있습니다",
+                    "message": "그래픽 호환 설정이 이미 적용되어 있습니다",
                     "value": f"0x{drs.STAIRFIX_VALUE:08X}"}
         if not force and self.game_running():
             raise DrsError("서든어택이 실행 중입니다 · 게임을 완전히 종료한 뒤 다시 시도해 주세요")
 
-        backup = self._make_backup("계단현상 끄기 적용 전", self.current_mode())
+        backup = self._make_backup("그래픽 호환 설정 적용 전", self.current_mode())
 
         # ① NVAPI DRS — 레코드가 없어도 새로 만들어 저장한다 (우선 경로)
         nvapi = self._nvapi_stairfix()
@@ -770,11 +770,11 @@ class DrsManager:
         after_values = drs.stairfix_values(current) if current is not None else {}
         if after_values.get(drs.SETTING_AA_COMPAT) != drs.STAIRFIX_VALUE:
             reason = binary_error or nvapi.get("message") or "적용 후 값을 확인하지 못했습니다"
-            raise DrsError(f"계단현상 끄기 검증에 실패했습니다 · {reason}")
+            raise DrsError(f"그래픽 호환 설정 검증에 실패했습니다 · {reason}")
 
         changes = [
             self._stairfix_row(drs.SETTING_AA_COMPAT, before_values, after_values,
-                               "계단현상 끄기", "Antialiasing compatibility (DX9)"),
+                               "그래픽 호환 설정", "Antialiasing compatibility (DX9)"),
             self._stairfix_row(drs.SETTING_AA_MODE, before_values, after_values,
                                "안티앨리어싱 모드", "Antialiasing - Mode"),
             self._stairfix_row(drs.SETTING_AA_SETTING, before_values, after_values,
@@ -804,12 +804,12 @@ class DrsManager:
             "nvapi": nvapi,
             "profile_items": drs.profile_items(current),
             "checklist": drs.checklist_state(current),
-            "message": "계단현상 끄기 적용 완료 · " + " · ".join(notes),
+            "message": "그래픽 호환 설정 적용 완료 · " + " · ".join(notes),
             "applied_at": _now(),
         }
 
     def apply_alias(self, enable: bool) -> dict[str, Any]:
-        """'계단현상 끄기' 토글."""
+        """'그래픽 호환 설정' 토글."""
         if enable:
             return self.apply_stairfix()
         return self.restore_latest()

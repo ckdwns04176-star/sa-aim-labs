@@ -24,8 +24,8 @@ SPIF_SENDCHANGE = 0x02
 ALLOWED_SCHEMES = {"steam", "https", "http"}
 
 # 창 고정 크기 (논리 px · 96 DPI 기준)
-WINDOW_WIDTH = 1200
-WINDOW_HEIGHT = 750
+WINDOW_WIDTH = 1440   # v2.0.7 — 우측 세로 배너(160)를 넣어도 본문이 찌그러지지 않는 폭
+WINDOW_HEIGHT = 880  # v2.0.7 — 하단 가로 배너(90) 포함
 
 
 # ------------------------------------------------------------------ mouse accel
@@ -39,7 +39,7 @@ def mouse_values(enabled: bool) -> dict[str, str]:
 def mouse_params(enabled: bool) -> tuple[int, int, int]:
     """SPI_SETMOUSE 의 int[3] *(threshold1, threshold2, acceleration)*.
 
-    계단현상(가속) 끄기 = (0,0,0), 켜기 = (6,10,1) — 윈도우 기본값.
+    안티앨리어싱 호환(가속) = (0,0,0), 켜기 = (6,10,1) — 윈도우 기본값.
     """
     return (6, 10, 1) if enabled else (0, 0, 0)
 

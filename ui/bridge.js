@@ -281,7 +281,8 @@
     const acc = st.account || {};
     if (acc.signed_in) return;
     if ((st.onboarding || {}).needed) return;
-    if (digestShown) return;
+    /* v2.0.7 — 요약 팝업을 한 번 봤다는 이유로 로그인 안내를 영영 건너뛰지 않는다.
+       팝업이 떠 있으면 아래 blocking 검사가 막고, 닫히면 afterMaskClosed 가 다시 부른다. */
     const blocking = $$('.mask.show').some((m) => m.id !== 'auth-mask');
     if (blocking) return;
     AL.authAutoShown = true;
@@ -294,6 +295,301 @@
       if (note) note.hidden = false;
     }, 650);
   }
+
+  /* ==================================================================
+     v2.0.7 — 창 안 자체 배너 (우측 160×600 · 하단 728×90)
+     ================================================================== */
+  const AD_TAGS = { rail: '세로', bottom: '가로' };
+
+  function adSoft(hex) {
+    const text = String(hex || '#FF4655').replace('#', '');
+    const full = text.length === 3 ? text.split('').map((c) => c + c).join('') : text;
+    const num = parseInt(full || 'FF4655', 16);
+    const r = (num >> 16) & 255, g = (num >> 8) & 255, b = num & 255;
+    return { soft: `rgba(${r},${g},${b},.22)`, line: `rgba(${r},${g},${b},.42)` };
+  }
+
+  function adVars(item) {
+    const tone = adSoft(item && item.accent);
+    return `--ad-accent:${escAttr(item && item.accent || '#FF4655')};`
+      + `--ad-soft:${tone.soft};--ad-line:${tone.line};`;
+  }
+
+  function adRailHTML(item) {
+    if (!item) return '<div class="ad-empty"></div>';
+    const img = item.image
+      ? `<img class="ad-img" src="${escAttr(item.image)}" alt="" loading="lazy">` : '';
+    const tag = item.house ? '' : '<span class="ad-tag">AD</span>';
+    const points = (item.points || []).map(
+      (p) => `<span class="ad-pt"><i></i>${esc(p)}</span>`).join('');
+    const stats = (item.stats || []).map(
+      (row) => `<span class="ad-stat"><b>${esc(row.v)}</b><i>${esc(row.l)}</i></span>`).join('');
+    return `<button class="ad-card" type="button" style="${adVars(item)}"
+        data-ad-id="${escAttr(item.id)}" data-ad-url="${escAttr(item.url)}" data-ad-house="${item.house ? '1' : ''}"
+        title="${escAttr(item.title)}">
+      ${img}${tag}
+      <span class="ad-in">
+        <span class="ad-head">
+          <span class="ad-mark">${esc(item.kicker || (item.house ? 'SA AIM LABS' : 'SPONSORED'))}</span>
+          <span class="ad-title">${esc(item.title)}</span>
+          ${item.sub ? `<span class="ad-sub">${esc(item.sub)}</span>` : ''}
+        </span>
+        ${points ? `<span class="ad-points">${points}</span>` : ''}
+        ${stats ? `<span class="ad-stats">${stats}</span>` : ''}
+        <span class="ad-art" aria-hidden="true">
+          <svg viewBox="0 0 32 32" fill="none" stroke="currentColor" stroke-width="0.9">
+            <path d="M16 2.6l11.6 6.7v13.4L16 29.4 4.4 22.7V9.3z"/>
+            <circle cx="16" cy="16" r="5.2" opacity=".75"/>
+            <circle cx="16" cy="16" r="1.7" fill="currentColor" stroke="none"/>
+            <path d="M16 5.6v4.4M16 22v4.4M5.6 16H10M22 16h4.4" stroke-linecap="round" opacity=".7"/>
+          </svg>
+        </span>
+        <span class="ad-mid">
+          ${item.body ? `<span class="ad-body">${esc(item.body)}</span>` : ''}
+          <span class="ad-note">${esc(item.note || (item.house ? '서든어택 유저 전용 도구' : ''))}</span>
+        </span>
+        <span class="ad-cta">${esc(item.cta || '자세히 보기')}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h13M13 6l6 6-6 6"/></svg></span>
+        ${item.email ? `<span class="ad-foot">${esc(item.email)}</span>` : ''}
+      </span>
+    </button>`;
+  }
+
+  function adBottomHTML(item) {
+    if (!item) return '<div class="ad-empty"></div>';
+    const img = item.image
+      ? `<img class="ad-img" src="${escAttr(item.image)}" alt="" loading="lazy">` : '';
+    const tag = item.house ? '' : '<span class="ad-tag">AD</span>';
+    return `<button class="ad-card" type="button" style="${adVars(item)}"
+        data-ad-id="${escAttr(item.id)}" data-ad-url="${escAttr(item.url)}" data-ad-house="${item.house ? '1' : ''}"
+        title="${escAttr(item.title)}">
+      ${img}${tag}
+      <span class="ad-in">
+        <span style="min-width:0">
+          <span class="ad-title" style="display:block">${esc(item.title)}</span>
+          ${item.sub ? `<span class="ad-sub" style="display:block">${esc(item.sub)}</span>` : ''}
+        </span>
+        <span class="ad-right">
+          ${item.email ? `<span class="ad-mail">${esc(item.email)}</span>` : ''}
+          <span class="ad-cta">${esc(item.cta || '문의하기')}<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h13M13 6l6 6-6 6"/></svg></span>
+        </span>
+      </span>
+    </button>`;
+  }
+
+  function renderBanners(st) {
+    const ad = (st && st.banners) || {};
+    const rail = $('#ad-rail-slot');
+    const bottom = $('#ad-bottom-slot');
+    if (!rail && !bottom) return;
+    const visible = ad.visible !== false && (ad.rail || []).length + (ad.bottom || []).length > 0;
+    document.body.classList.toggle('ad-off', !visible);
+    if (!visible) { if (rail) rail.innerHTML = ''; if (bottom) bottom.innerHTML = ''; return; }
+    AL.ads = { rail: ad.rail || [], bottom: ad.bottom || [], railIndex: 0 };
+    if (rail) rail.innerHTML = adRailHTML(AL.ads.rail[0]);
+    if (bottom) bottom.innerHTML = adBottomHTML((ad.bottom || [])[0]);
+    countImpressions();
+    if (AL.ads.rail.length > 1 && !AL.adTimer) {
+      AL.adTimer = setInterval(() => {
+        if (!AL.ads || !AL.ads.rail.length) return;
+        AL.ads.railIndex = (AL.ads.railIndex + 1) % AL.ads.rail.length;
+        const box = $('#ad-rail-slot');
+        if (box) { box.innerHTML = adRailHTML(AL.ads.rail[AL.ads.railIndex]); countImpressions(); }
+      }, 18000);
+    }
+  }
+  AL.renderBanners = renderBanners;
+
+  function countImpressions() {
+    if (!AL.real || !AL.ads) return;
+    const ids = [];
+    const first = AL.ads.rail[AL.ads.railIndex || 0];
+    if (first && first.id) ids.push(first.id);
+    if (AL.ads.bottom[0] && AL.ads.bottom[0].id) ids.push(AL.ads.bottom[0].id);
+    AL.adSeen = AL.adSeen || {};
+    const fresh = ids.filter((id) => id && !AL.adSeen[id]);
+    if (!fresh.length) return;
+    fresh.forEach((id) => { AL.adSeen[id] = 1; });
+    try { call('banner_impression', fresh); } catch (err) { /* 카운터 실패는 무해 */ }
+  }
+
+  async function adClick(card) {
+    if (!card) return;
+    const id = card.dataset.adId || '';
+    const url = card.dataset.adUrl || '';
+    const house = card.dataset.adHouse === '1';
+    if (AL.real) {
+      try {
+        const res = await call('banner_click', id, house ? '' : url);
+        if (res && res.house) return openPartner();
+        if (res && res.url) {
+          if (!res.opened) call('open_external', res.url);
+          return;
+        }
+        /* 브리지 응답이 없으면 아래 폴백으로 (자사 배너는 문의 창구) */
+      } catch (err) { /* 아래 폴백 */ }
+    }
+    if (house) return openPartner();
+    if (url) call('open_external', url);
+  }
+
+  /* ==================================================================
+     v2.0.7 — 시스템 최적화: 네트워크 핑 · 사플 EQ
+     ================================================================== */
+  const NET_LABELS = { tcp: 'TCP ACK · Nagle 끄기', throttle: '네트워크 스로틀링 해제',
+    priority: '서든 CPU 우선순위 높음', nic: '랜카드 절전 끄기' };
+
+  function tweakRow(label, done, right) {
+    return '<span class="tw-row' + (done ? ' on' : '') + '"><i class="dot"></i>'
+      + esc(label) + '<b>' + esc(right) + '</b></span>';
+  }
+
+  function renderTweaks(st) {
+    const net = (st && st.netopt) || {};
+    const nvState = ((st && st.home) || {}).nvidia || {};
+    const rows = $('#net-rows');
+    const counts = net.counts || {};
+    if (rows && !net.pending) {
+      rows.innerHTML = Object.keys(NET_LABELS).map((key) => {
+        const c = counts[key] || [0, 0];
+        const done = c[1] > 0 && c[0] === c[1];
+        return tweakRow(NET_LABELS[key], done, c[1] ? `${c[0]}/${c[1]}` : '—');
+      }).join('');
+    }
+    const chip = $('#net-chip');
+    if (chip) {
+      chip.textContent = !net.supported ? '윈도우 전용'
+        : net.pending ? '확인 중' : (net.applied ? '적용됨' : '적용 전');
+      chip.className = 'ustate' + (net.applied ? ' on' : (net.supported ? ' warn' : ''));
+    }
+    const note = $('#net-note');
+    if (note) {
+      note.textContent = net.applied
+        ? '적용됨 · 재부팅하면 확실히 반영됩니다 · 원상 복구는 백업으로'
+        : '적용 전 값은 자동 백업 · 재부팅 후 확실히 반영';
+    }
+
+    const au = (st && st.audioeq) || {};
+    const apo = au.apo || {};
+    const loud = au.loudness || {};
+    const eqRows = $('#eq-rows');
+    if (eqRows && !au.pending) {
+      const devices = (loud.devices || []).length;
+      eqRows.innerHTML = tweakRow('Equalizer APO',
+        !!apo.installed, apo.installed ? (apo.preset ? '프리셋 적용' : '설치됨') : '없음')
+        + tweakRow('윈도우 음량 균등화', !!loud.applied,
+          loud.applied ? '적용됨' : (devices ? `출력 ${devices}개` : '장치 없음'));
+    }
+    const eqChip = $('#eq-chip');
+    if (eqChip) {
+      eqChip.textContent = !au.supported ? '윈도우 전용'
+        : au.pending ? '확인 중' : (au.active ? '적용됨' : (apo.installed ? 'APO 감지' : '적용 전'));
+      eqChip.className = 'ustate' + (au.active ? ' on' : (au.supported ? ' warn' : ''));
+    }
+    const nvLast = $('#nv-last');
+    if (nvLast) {
+      const changes = (((st && st.utils) || {}).last_changes || {});
+      const rows = (changes.rows || []).slice(0, 4);
+      if (rows.length) {
+        nvLast.innerHTML = '<div class="nl-hd">마지막 적용에서 바뀐 값</div>' + rows.map((r) => {
+          const before = r.label_before || r.before || '—';
+          const after = r.label_after || r.after || '—';
+          return '<div class="nl-row"><b>' + esc(r.name || r.id || '') + '</b><i>' + esc(before) + '</i>'
+            + '<em>' + esc(after) + '</em></div>';
+        }).join('');
+      } else {
+        nvLast.innerHTML = '<div class="nl-row"><b>변경 내역 없음</b><i>적용하면 바뀐 값이 여기에 남습니다</i></div>';
+      }
+    }
+
+    const sumNv = $('#sum-nv');
+    if (sumNv) sumNv.textContent = nvState.applied ? (nvState.label || '적용됨') : '적용 전';
+    const sumNet = $('#sum-net');
+    if (sumNet) {
+      const done = Number(net.done || 0), total = Number(net.total || 0);
+      sumNet.textContent = total ? (done === total ? `적용됨 ${done}/${total}` : `${done}/${total}`) : '—';
+    }
+    const sumEq = $('#sum-eq');
+    if (sumEq) sumEq.textContent = au.active ? '적용됨' : (apo.installed ? 'APO 감지' : '적용 전');
+
+    const eqNote = $('#eq-note');
+    if (eqNote) {
+      eqNote.textContent = apo.preset
+        ? 'Equalizer APO 프리셋 적용됨 · 해제하면 원본 config 로 되돌립니다'
+        : apo.installed
+          ? 'Equalizer APO 감지됨 · 사플 EQ 적용을 누르면 2~6kHz 프리셋을 넣습니다'
+          : 'Equalizer APO 가 없으면 윈도우 음량 균등화 값으로 적용합니다 (원본 자동 백업)';
+    }
+  }
+  AL.renderTweaks = renderTweaks;
+
+  async function netAction(kind) {
+    if (!AL.real) return toast('앱(.exe)에서 적용할 수 있습니다', false);
+    busy(true, kind === 'apply' ? '네트워크 최적화 적용 중…' : '네트워크 설정 복구 중…');
+    const fn = kind === 'apply' ? 'apply_net_opt' : 'restore_net_opt';
+    let res = await call(fn, false);
+    if (res && (res.can_elevate || res.needs_admin)) {
+      busy(true, '관리자 권한을 요청합니다 · UAC 창을 승인해 주세요');
+      const up = await call(fn, true);
+      if (up && up.elevated) res = await call('wait_netopt_result', 45);
+      else res = up || res;
+    }
+    busy(false);
+    if (res && res.state) applyState(res.state);
+    toast((res && res.message) || (res && res.ok ? '완료했습니다' : '적용하지 못했습니다'),
+      !!(res && res.ok), 6200);
+  }
+
+  async function eqAction(kind) {
+    if (kind === 'sound') {
+      const r = AL.real ? await call('open_sound_panel') : null;
+      return toast((r && r.message) || '사운드 속성 창을 열었습니다', !!(r && r.ok));
+    }
+    if (!AL.real) return toast('앱(.exe)에서 적용할 수 있습니다', false);
+    busy(true, kind === 'apply' ? '사플 EQ 적용 중…' : '사플 EQ 되돌리는 중…');
+    const fn = kind === 'apply' ? 'apply_audio_eq' : 'remove_audio_eq';
+    let res = await call(fn, false);
+    if (res && (res.can_elevate || res.needs_admin)) {
+      busy(true, '관리자 권한을 요청합니다 · UAC 창을 승인해 주세요');
+      const up = await call(fn, true);
+      if (up && up.elevated) res = await call('wait_audioeq_result', 45);
+      else res = up || res;
+    }
+    busy(false);
+    if (res && res.state) applyState(res.state);
+    toast((res && res.message) || (res && res.ok ? '완료했습니다' : '적용하지 못했습니다'),
+      !!(res && res.ok), 6800);
+  }
+
+  function bindTweaks() {
+    document.addEventListener('click', (e) => {
+      const t = e.target.closest ? e.target.closest('#net-apply, #net-restore, #eq-apply, #eq-remove, #eq-sound') : null;
+      if (!t) return;
+      e.preventDefault();
+      if (t.id === 'net-apply') netAction('apply');
+      else if (t.id === 'net-restore') netAction('restore');
+      else if (t.id === 'eq-apply') eqAction('apply');
+      else if (t.id === 'eq-remove') eqAction('remove');
+      else if (t.id === 'eq-sound') eqAction('sound');
+    });
+  }
+
+  function openPartner() {
+    const mask = $('#partner-mask');
+    if (mask) mask.classList.add('show');
+  }
+  AL.openPartner = openPartner;
+
+  /* v2.0.7 — 다른 팝업(요약·온보딩·업데이트·설정)이 닫힌 직후 로그인 안내를 이어 띄운다. */
+  const LOGIN_AFTER_MASKS = ['digest-mask', 'onb-mask', 'update-mask', 'settings-mask',
+    'compare-mask', 'guide-mask', 'nick-mask', 'balance-mask', 'changes-mask'];
+  function afterMaskClosed(id) {
+    if (!id || LOGIN_AFTER_MASKS.indexOf(id) < 0) return;
+    setTimeout(() => {
+      if ($$('.mask.show').some((m) => m.id !== 'auth-mask')) return;
+      maybeShowLogin(AL.state || {});
+    }, 420);
+  }
+  AL.afterMaskClosed = afterMaskClosed;
 
   function maybeShowDigest() {
     const d = AL.state && AL.state.digest;
@@ -314,9 +610,9 @@
   }
 
   function applyUiScale(px) {
-    const value = Math.max(90, Math.min(125, Math.round(Number(px) || 100))) / 100;
-    document.documentElement.style.setProperty('--ui', String(value));
-    AL.uiScale = Math.round(value * 100);
+    /* v2.0.7 — 100% 고정 (사용자 요청 · 설정 UI 숨김).  예전 저장값이 남아 있어도 무시한다. */
+    document.documentElement.style.setProperty('--ui', '1');
+    AL.uiScale = 100;
   }
 
   function applyState(st) {
@@ -329,6 +625,10 @@
     const home = st.home || {};
     AL.meta = meta;
     renderAccounts(st);
+    renderBanners(st);
+    renderTweaks(st);
+    /* 설정창 닉네임 칸을 현재 계정과 맞춘다 (입력 중이면 건드리지 않는다). */
+    syncNickInputs(String(home.nickname || (st.nexon || {}).nickname || set.nickname || '').trim());
 
     /* ---------- 상단 · 사이드바 ---------- */
     const nick = String(home.nickname || (st.nexon || {}).nickname || set.nickname || '').trim();
@@ -613,8 +913,30 @@
       : mode === 'signup' ? await call('auth_signup', email, pw)
       : await call('auth_recover', email);
     busy(false);
-    if (!res || !res.ok) { toast((res && res.message) || '요청을 처리하지 못했습니다', false, 5200); return; }
+    if (!res || !res.ok) {
+      /* v2.0.7 — 비밀번호 찾기는 발송 한도·잘못된 주소·네트워크를 구분해 안내한다.
+         (예전에는 무엇이 실패해도 "네트워크 오류"만 보였다) */
+      const msg = (res && res.message) || '요청을 처리하지 못했습니다';
+      if (mode === 'recover') {
+        const note = $('#auth-note');
+        if (note) {
+          note.innerHTML = res && res.status === 429
+            ? `<b style="color:#FBD48F">${esc(msg)}</b>`
+            : `<b style="color:#F7AFAE">${esc(msg)}</b>`
+            + '<br>같은 주소로 다시 보내려면 잠시 기다린 뒤 눌러 주세요.';
+        }
+      }
+      toast(msg, false, 6400);
+      return;
+    }
     if (res.state) applyState(res.state);
+    if (mode === 'recover') {
+      const note = $('#auth-note');
+      if (note) {
+        note.innerHTML = `✅ <b>${esc(email)}</b> 로 재설정 메일을 보냈습니다.<br>`
+          + '메일이 안 보이면 스팸함도 확인해 주세요 · 링크는 1시간 동안 쓸 수 있습니다.';
+      }
+    }
     toast(res.message || '완료했습니다', true, 4200);
     if (mode !== 'recover') {
       const mask = $('#auth-mask');
@@ -905,10 +1227,7 @@
             <span class="pill-thumb"></span>
           </div>
         </div>
-        <div class="field" style="margin-top:8px"><label>화면 배율</label><select id="set-scale" class="inp">
-          ${(st.ui_scales || [90, 100, 115, 125]).map((v) => `<option value="${v}" ${Number(st.ui_scale_setting) === Number(v) ? 'selected' : ''}>${v}%</option>`).join('')}
-        </select></div>
-        ${switchRow('ui_scale_auto', '화면 배율 자동', 'QHD(2560×1440) 이상이면 115%로 자동', !!st.ui_scale_auto)}
+        <div class="set-note" style="margin-top:4px">화면 배율은 <b>100% 고정</b>입니다 · 글씨가 작다는 건의가 있으면 다음 버전에서 조절할 수 있게 합니다</div>
         <div class="set-note" style="margin-top:8px">
           마지막 병영수첩 최신화 <b>${nexon.last_barracks_at ? String(nexon.last_barracks_at).replace('T', ' ').slice(0, 16) : '—'}</b> · 출처 Data based on NEXON Open API
         </div>
@@ -1088,7 +1407,7 @@
     const nick = read('set-nick'); if (nick) patch.nickname = nick;
     const themeBtn = document.querySelector('#set-theme button.on');
     if (themeBtn) patch.theme = themeBtn.dataset.themeKey;
-    const scale = read('set-scale'); if (scale) patch.ui_scale = Number(scale);
+    /* v2.0.7 — 화면 배율은 100% 고정 (설정 UI 숨김) */
     const hot1 = $('#set-ov-hot1'), hot2 = $('#set-ov-hot2'), pos = $('#set-ov-pos');
     if (hot1) patch.overlay_hotkey_lobby = hot1.value;
     if (hot2) patch.overlay_hotkey_scout = hot2.value;
@@ -1114,11 +1433,15 @@
      병영수첩 · 순위표
      ================================================================== */
 
-  async function fetchBarracks(andTest) {
+  async function fetchBarracks(andTest, nickOverride) {
     if (!AL.real) return notReady();
     const nickEl = $('#set-nick');
     const keyEl = $('#set-key');
-    const nick = nickEl ? String(nickEl.value || '').trim() : '';
+    /* v2.0.7 — 계정 전환 직후에는 화면 state 의 닉네임을 그대로 쓴다.
+       설정창 칸(#set-nick)에 남은 이전 계정 닉네임을 읽어 되돌아가던 문제. */
+    const nick = nickOverride != null
+      ? String(nickOverride || '').trim()
+      : (nickEl ? String(nickEl.value || '').trim() : '');
     const key = keyEl ? String(keyEl.value || '').trim() : '';
     if (key) {
       const saved = await call('save_settings', { api_key: key });
@@ -1342,14 +1665,14 @@
 
   async function toggleAlias() {
     const on = !UTIL.alias;
-    busy(true, on ? '계단현상 설정 적용 중…' : '계단현상 설정 복구 중…');
+    busy(true, on ? '그래픽 설정 적용 중…' : '그래픽 설정 복구 중…');
     const result = on
       ? await call('apply_nvidia_profile', 'stairfix', false)
       : await call('toggle_nvidia_alias', false);
     busy(false);
-    if (!result || !result.ok) return fail(result, '계단현상 설정을 바꾸지 못했습니다');
+    if (!result || !result.ok) return fail(result, '그래픽 설정을 바꾸지 못했습니다');
     if (result.state) applyState(result.state);
-    toast(result.message || (on ? '✨ 계단현상 끄기 적용' : '✨ 계단현상 설정 복구'), true);
+    toast(result.message || (on ? '✨ 그래픽 호환 설정 적용' : '✨ 그래픽 설정 복구'), true);
   }
 
   async function restoreNvidia() {
@@ -2530,16 +2853,23 @@
     { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
   function acctState(st) {
+    /* v2.0.7 — 칸 번호를 위치로 고정한다.  빈 칸을 걸러 내면 3번 칸이 1번으로
+       당겨져 등록·전환이 어긋나므로, 항상 3칸을 같은 순서로 유지한다. */
     const acc = (st && st.accounts) || {};
     const items = Array.isArray(acc.items) ? acc.items.slice(0, ACCT_MAX).map((row) => ({
-      nickname: String((row || {}).nickname || ''),
+      nickname: String((row || {}).nickname || '').trim(),
       label: String((row || {}).label || ''),
-    })).filter((row) => row.nickname) : [];
+    })) : [];
+    while (items.length < ACCT_MAX) items.push({ nickname: '', label: '' });
     const nick = String(((st || {}).settings || {}).nickname || ((st || {}).nexon || {}).nickname || '').trim();
-    if (!items.length && nick) items.push({ nickname: nick, label: '' });
+    if (!items.some((row) => row.nickname) && nick) items[0] = { nickname: nick, label: '' };
     let active = Number(acc.active);
-    if (!Number.isFinite(active) || active < 0 || active >= items.length) {
+    if (!Number.isFinite(active) || active < 0 || active >= ACCT_MAX) {
       active = Math.max(0, items.findIndex((row) => row.nickname.toLowerCase() === nick.toLowerCase()));
+    }
+    if (!items[active] || !items[active].nickname) {
+      const filled = items.findIndex((row) => row.nickname);
+      active = filled < 0 ? 0 : filled;
     }
     return { items, active, max: Number(acc.max) || ACCT_MAX };
   }
@@ -2549,7 +2879,7 @@
     const slots = [];
     for (let i = 0; i < ACCT_MAX; i += 1) {
       const row = items[i];
-      if (row) {
+      if (row && row.nickname) {
         const on = i === active ? ' on' : '';
         slots.push('<button class="acct-slot' + on + '" data-acct="' + i + '" type="button"'
           + ' title="' + acctEsc(row.nickname) + ' 계정으로 전환">'
@@ -2565,23 +2895,33 @@
       + '<span class="acct-hint">클릭하면 바로 전환</span>';
   }
 
-  function renderAccounts(st) {
+  function renderAccounts(st, force) {
     const state = st || AL.state || {};
-    ['#home-accounts', '#br-accounts'].forEach((sel) => {
+    [['#home-accounts', false], ['#br-accounts', true], ['#set-accounts', false]].forEach(([sel, big]) => {
       const box = $(sel);
       if (!box) return;
       const focused = document.activeElement;
-      if (focused && focused.closest && focused.closest(sel)) return;   // 입력 중 보호
-      const html = acctBarHTML(state, sel === '#br-accounts');
+      // 입력 중 보호 — 단, 방금 확정한 칸(finish)이나 강제 갱신은 예외.
+      if (!force && focused && focused.closest && focused.closest(sel)) return;
+      const html = acctBarHTML(state, big);
       if (box.innerHTML !== html) box.innerHTML = html;
     });
+  }
+
+  /* v2.0.7 — 계정이 바뀌면 설정창 닉네임 칸도 같이 맞춘다.
+     (전환 후 fetchBarracks 가 설정창의 옛 닉네임을 읽어 1번 계정으로 되돌리던 문제) */
+  function syncNickInputs(nick) {
+    const value = String(nick || '').trim();
+    const el = $('#set-nick');
+    if (el && document.activeElement !== el && el.value !== value) el.value = value;
+    return value;
   }
 
   async function switchAccount(index) {
     if (!AL.real) return toast('앱(.exe)에서 계정을 전환할 수 있습니다', false);
     const st = AL.state || {};
     const { items } = acctState(st);
-    if (!items[index]) return toast('빈 칸입니다 · ✎ 로 닉네임을 등록해 주세요', false);
+    if (!items[index] || !items[index].nickname) return toast('빈 칸입니다 · ✎ 로 닉네임을 등록해 주세요', false);
     busy(true, '계정을 전환하는 중…');
     AL.suppressDigest = true;
     AL.suppressDigestUntil = Date.now() + 6000;   // 전적 새로 불러오는 동안 요약 팝업 금지
@@ -2589,9 +2929,12 @@
     busy(false);
     if (!res || !res.ok) { AL.suppressDigest = false; return toast((res && res.message) || '계정을 전환하지 못했습니다', false); }
     if (res.state) applyState(res.state);
+    const nextNick = syncNickInputs(
+      (res.nickname || ((res.state || {}).settings || {}).nickname || items[index].nickname || ''));
+    renderAccounts(res.state || AL.state || {}, true);
     toast('🪪 ' + (res.message || '계정을 전환했습니다'), true);
     setTimeout(() => { AL.suppressDigest = false; }, 1200);
-    try { fetchBarracks(); } catch (err) { /* 전적 자동 갱신은 보조 */ }
+    try { fetchBarracks(false, nextNick); } catch (err) { /* 전적 자동 갱신은 보조 */ }
     return true;
   }
 
@@ -2614,13 +2957,18 @@
       if (done) return;
       done = true;
       const value = String(input.value || '').trim();
-      if (!save || value === current) { renderAccounts(AL.state || {}); return; }
-      if (!AL.real) { renderAccounts(AL.state || {}); return toast('앱(.exe)에서 저장할 수 있습니다', false); }
+      /* v2.0.7 — 포커스를 먼저 떼어 낸다.  입력칸이 포커스를 쥔 채로 두면
+         renderAccounts 의 '입력 중 보호'에 걸려 칸이 갱신되지 않고, 입력칸만
+         사라져 등록이 안 된 것처럼 보였다. */
+      try { input.blur(); } catch (err) { /* blur 실패는 무시 */ }
+      if (!save || value === current) { renderAccounts(AL.state || {}, true); return; }
+      if (!AL.real) { renderAccounts(AL.state || {}, true); return toast('앱(.exe)에서 저장할 수 있습니다', false); }
       busy(true, '계정을 저장하는 중…');
       const res = await call('save_account', { index, nickname: value });
       busy(false);
-      if (!res || !res.ok) { renderAccounts(AL.state || {}); return toast((res && res.message) || '저장하지 못했습니다', false); }
+      if (!res || !res.ok) { renderAccounts(AL.state || {}, true); return toast((res && res.message) || '저장하지 못했습니다', false); }
       if (res.state) applyState(res.state);
+      renderAccounts(res.state || AL.state || {}, true);
       return toast('💾 ' + (res.message || '계정을 저장했습니다'), true);
     };
     input.addEventListener('keydown', (ev) => {
@@ -2644,6 +2992,27 @@
   }
   AL.syncPill = syncPill;
 
+  function bindBanners() {
+    document.addEventListener('click', (e) => {
+      const card = e.target.closest && e.target.closest('.ad-card');
+      if (card) { e.preventDefault(); adClick(card); return; }
+      if (e.target.closest && e.target.closest('#partner-copy')) {
+        const input = $('#partner-email');
+        const email = (input && input.value) || 'ckdwns04176@gmail.com';
+        if (AL.real) call('copy_text', email);
+        else if (navigator.clipboard) navigator.clipboard.writeText(email).catch(() => {});
+        toast('📋 문의 이메일을 복사했습니다 · ' + email, true, 4200);
+        return;
+      }
+      if (e.target.closest && e.target.closest('#partner-open')) {
+        const url = 'https://sa-aim-labs.pages.dev/#partner';
+        if (AL.real) call('open_external', url);
+        toast('홈페이지 문의 페이지를 엽니다', true);
+        return;
+      }
+    });
+  }
+
   function bindAccounts() {
     document.addEventListener('click', (e) => {
       const edit = e.target.closest('[data-acct-edit]');
@@ -2666,6 +3035,9 @@
     if (bound) return;
     bound = true;
     bindAccounts();
+    bindBanners();
+    bindTweaks();
+    bindShare();
 
     /* ---------- 창 이동 (v1.3.1 · Win32 커서 추적 + JS 폴백) ----------
        frameless 창에서 pywebview JS API 는 백그라운드 스레드에서 돌기 때문에
@@ -2946,7 +3318,89 @@
       $$('#balance-members input[data-bal-name]').forEach((el) => { el.checked = keep.has(String(el.dataset.balName).toLowerCase()); });
       toast(res.message || '전원 최근 기록을 최신화했습니다', true, 4200);
     });
-    const balCopy = $('#balance-copy');
+    /* ==================================================================
+     v2.0.7 — 카톡·디코 원클릭 공유 복사 (내전 팀 결과 · 내 전적 요약)
+     ================================================================== */
+  async function copyShare(text) {
+    const body = String(text || '').trim();
+    if (!body) return false;
+    window.__LAST_COPY = body;
+    let okCopy = false;
+    try { await navigator.clipboard.writeText(body); okCopy = true; } catch (err) { okCopy = false; }
+    if (!okCopy && AL.real) {
+      try { const r = await call('copy_text', body); okCopy = !!(r && r.ok); } catch (err) { okCopy = false; }
+    }
+    if (okCopy) toast('📋 복사했습니다 · 카톡·디코에 붙여넣으세요', true, 4600);
+    else toast(body, true, 9000);
+    return okCopy;
+  }
+  AL.copyShare = copyShare;
+
+  function balanceShareText() {
+    const res = AL.balanceResult || {};
+    const teams = res.teams || {};
+    const roleName = { sniper: '스나', rifle: '라플' };
+    const block = (team, label) => {
+      const rows = (team && team.rows) || (teams[team && team.key] || []);
+      if (!rows.length) return `${label} —`;
+      const head = team && team.power != null
+        ? `${label} · 평균 ${team.power}${team.snipers != null ? ` · 스나 ${team.snipers}명` : ''}`
+        : label;
+      const people = rows.map((r) => {
+        if (typeof r === 'string') return `· ${r}`;
+        const role = roleName[r.role] || '';
+        const power = r.power != null ? ` ${r.power}` : '';
+        return `· ${r.name}${role ? ` (${role})` : ''}${power}`;
+      }).join('\n');
+      return `${head}\n${people}`;
+    };
+    const lines = ['⚖️ 내전 팀 밸런스'];
+    if (res.a) lines.push(block(res.a, 'A팀'));
+    else if (teams.a) lines.push(block({ rows: teams.a }, 'A팀'));
+    if (res.b) lines.push(block(res.b, 'B팀'));
+    else if (teams.b) lines.push(block({ rows: teams.b }, 'B팀'));
+    if (res.verdict || res.note) lines.push(`→ ${[res.verdict, res.note].filter(Boolean).join(' · ')}`);
+    lines.push('SA Aim Labs');
+    return lines.join('\n\n');
+  }
+
+  function barracksShareText() {
+    const b = AL.peek || ((AL.state || {}).barracks) || {};
+    if (!b || (!b.nickname && !b.stats)) return '';
+    const st = b.stats || {};
+    const tier = b.tier || {};
+    const solo = tier.solo || {};
+    const party = tier.party || {};
+    const n = (v, d) => (v == null || v === '' || Number.isNaN(Number(v))
+      ? '—' : Number(v).toFixed(d || 0));
+    const lines = [`🪖 ${b.nickname || '내 전적'} 병영수첩`];
+    lines.push(`최근 ${n(st.games)}판 · 승률 ${n(st.win, 1)}% · K/D ${n(st.kd, 1)}% · 평균 딜량 ${n(st.dmg)}`);
+    const tiers = [];
+    if (solo.name) tiers.push(`솔로 ${solo.name}${solo.rp ? ` (${n(solo.rp)} RP)` : ''}`);
+    if (party.name) tiers.push(`파티 ${party.name}${party.rp ? ` (${n(party.rp)} RP)` : ''}`);
+    if (tiers.length) lines.push(tiers.join(' · '));
+    const weak = ((AL.state || {}).weak_maps || []).slice(0, 3).map((m) => m.map || m.name).filter(Boolean);
+    if (weak.length) lines.push(`약점 맵: ${weak.join(', ')}`);
+    lines.push('SA Aim Labs');
+    return lines.join('\n');
+  }
+
+  function bindShare() {
+    const brShare = $('#br-share');
+    if (brShare) brShare.addEventListener('click', async () => {
+      const text = barracksShareText();
+      if (!text) { toast('먼저 전적을 불러와 주세요', false); return; }
+      await copyShare(text);
+    });
+    const balShare = $('#balance-share');
+    if (balShare) balShare.addEventListener('click', async () => {
+      const res = AL.balanceResult;
+      if (!res || !(res.a || res.b || res.teams)) { toast('먼저 팀을 짜 주세요', false); return; }
+      await copyShare(balanceShareText());
+    });
+  }
+
+  const balCopy = $('#balance-copy');
     if (balCopy) balCopy.addEventListener('click', async () => {
       const res = AL.balanceResult;
       if (!res || !(res.teams || res.a || res.b)) { toast('먼저 팀을 짜 주세요', false); return; }
@@ -3041,6 +3495,7 @@
         if (mask) mask.classList.remove('show');
         if (btn.dataset.close === 'nick-mask') AL.nickLater = true;
         if (btn.dataset.close === 'auth-mask') AL.authLater = true;
+        afterMaskClosed(btn.dataset.close);
       });
     });
     /* ---------- v1.0.1 · 닉네임 연결 팝업 ---------- */
@@ -3055,6 +3510,7 @@
         if (e.target !== mask) return;
         mask.classList.remove('show');
         if (mask.id === 'auth-mask') AL.authLater = true;
+        afterMaskClosed(mask.id);
       });
     });
     $$('#cloud-tabs button').forEach((b) => b.addEventListener('click', () => setCloudMode(b.dataset.tab)));
@@ -3221,7 +3677,7 @@
           if (result && result.state) applyState(result.state);
           const labels = {
             auto_launch: '자동 실행', autosave: '점수 자동 저장', auto_sync: '자동 동기화', notify: '알림',
-            hotkey_enabled: 'Ctrl+Shift+A 단축키', tilt_watch: '연패 브레이크', auto_cloud: '자동 백업', overlay_enabled: '오버레이', toast_enabled: '결과 토스트', toast_auto: '새 경기 자동 감지', ui_scale_auto: '화면 배율 자동'
+            hotkey_enabled: 'Ctrl+Shift+A 단축키', tilt_watch: '연패 브레이크', auto_cloud: '자동 백업', overlay_enabled: '오버레이', toast_enabled: '결과 토스트', toast_auto: '새 경기 자동 감지'
           };
           toast(`${labels[key] || key} ${!on ? '켜짐' : '꺼짐'}`, true);
           return;
@@ -3326,17 +3782,6 @@
           }
           return toast(`테마 · ${themeBtn.textContent.trim()}`, true);
         }
-        const scaleBtn = e.target.closest('[data-scale]');
-        if (scaleBtn) {
-          const px = Number(scaleBtn.dataset.scale) || 100;
-          applyUiScale(px);
-          $$('#set-scale .scale-btn').forEach((b) => b.classList.toggle('on', b === scaleBtn));
-          if (AL.real) {
-            const r = await call('save_settings', { ui_scale: px });
-            if (r && r.state) AL.state = r.state;
-          }
-          return toast(`화면 배율 ${px}% · 창을 다시 열면 크기도 맞춰집니다`, true, 4200);
-        }
         if (e.target.closest('#set-update-check')) { checkUpdate(true); return; }
         if (e.target.closest('#set-tray-hide')) { trayHide(); return; }
         if (e.target.closest('#set-cloud-login')) { openCloudModal('signin'); return; }
@@ -3427,6 +3872,7 @@
       if (!AL.real) return;
       const result = await call('ack_digest');
       if (result && result.state) applyState(result.state);
+      afterMaskClosed('digest-mask');
     };
     AL.hideToTray = async function () {
       if (!AL.real) return toast('앱(.exe)에서 트레이로 숨길 수 있습니다', false);

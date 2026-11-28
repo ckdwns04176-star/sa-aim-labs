@@ -13,7 +13,7 @@ from pathlib import Path
 
 APP_NAME = "SA_Aim_Labs"
 APP_TITLE = "SA AIM LABS"
-APP_VERSION = "2.0.6"
+APP_VERSION = "2.0.7"
 
 
 def is_frozen() -> bool:

@@ -1,4 +1,4 @@
-"""SA AIM LABS — desktop entry point (PyWebView, frameless 1200x750).
+"""SA AIM LABS — desktop entry point (PyWebView, frameless 1440x880).
 
 Run from source:
     python main.py                # normal app
@@ -209,11 +209,23 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--drs-apply", metavar="MODE", help="internal: apply a Drs profile elevated")
     parser.add_argument("--drs-restore", action="store_true", help="internal: restore the latest Drs backup elevated")
     parser.add_argument("--nvapi-stairfix", action="store_true", help="internal: apply stair-fix through NVAPI DRS")
+    parser.add_argument("--netopt-apply", action="store_true", help="internal: apply network tweaks elevated")
+    parser.add_argument("--netopt-restore", action="store_true", help="internal: restore network tweaks elevated")
+    parser.add_argument("--audioeq-apply", action="store_true", help="internal: apply the sound EQ preset elevated")
+    parser.add_argument("--audioeq-restore", action="store_true", help="internal: restore the sound EQ preset elevated")
     parser.add_argument("--nvapi-settings", metavar="FILE", help="internal: apply a JSON list of DRS settings through NVAPI")
     parser.add_argument("--result", metavar="FILE", help="internal: write the elevated result JSON here")
     parser.add_argument("--serve", nargs="?", const=8710, type=int, help="dev: serve ui/ over HTTP")
     parser.add_argument("--debug", action="store_true", help="verbose log + devtools")
     args = parser.parse_args(argv)
+
+    if args.netopt_apply or args.netopt_restore or args.audioeq_apply or args.audioeq_restore:
+        from app import audioeq, netopt
+
+        target = args.result or str(paths.data_dir() / "netopt_result.json")
+        if args.netopt_apply or args.netopt_restore:
+            return netopt.run_elevated("restore" if args.netopt_restore else "apply", target)
+        return audioeq.run_elevated("restore" if args.audioeq_restore else "apply", target)
 
     if args.nvapi_stairfix or args.nvapi_settings:
         import json as _json
@@ -316,7 +328,7 @@ def main(argv: list[str] | None = None) -> int:
         height=win_h,
         x=x,
         y=y,
-        min_size=(int(1000 * zoom), int(640 * zoom)),
+        min_size=(int(1280 * zoom), int(780 * zoom)),
         frameless=True,
         easy_drag=False,
         shadow=True,
@@ -345,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
         log.info("window guard off (Windows 전용)")
 
     # ── 최대화 완전 차단 (v1.3.1) ──
-    # 1200×750 고정.  타이틀바의 최대화 버튼을 없애고, Win32 스타일에서도
+    # 1440×880 고정.  타이틀바의 최대화 버튼을 없애고, Win32 스타일에서도
     # WS_MAXIMIZEBOX·WS_THICKFRAME·WS_MAXIMIZE 를 지워 더블클릭·단축키로도
     # 최대화되지 않게 한다 (최대화 후 복귀가 어긋나던 문제 자체를 막는다).
     try:

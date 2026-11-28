@@ -150,10 +150,13 @@ class AccountService:
                 "message": "회원가입 완료 · 로그인되었습니다"}
 
     def recover(self, email: str) -> dict[str, Any]:
+        """비밀번호 찾기 — 재설정 메일.  링크는 홈페이지(#partner 페이지)로 돌아온다."""
         addr = str(email or "").strip()
         if not _EMAIL.match(addr):
             raise ValueError("이메일 주소를 확인해 주세요")
-        return self.client().recover(addr)
+        from .supabase_sync import RECOVER_REDIRECT
+
+        return self.client().recover(addr, redirect_to=RECOVER_REDIRECT)
 
     def sign_out(self) -> dict[str, Any]:
         cloud = self.store.cloud()

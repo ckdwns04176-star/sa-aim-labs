@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -27,12 +29,54 @@ SUBSCRIPTION_TABLE = "subscriptions"   # plan(free/pro) · pro_until
 DEFAULT_URL = "https://ujnffbskudzkatskbmwc.supabase.co"
 DEFAULT_ANON_KEY = "sb_publishable_B_6vCFDiRcNpBfdc0mG3Vw_41b7xL5x"
 
+# v2.0.7 — 비밀번호 재설정 메일의 링크가 돌아올 주소.
+#   Supabase 프로젝트의 Redirect URLs 에 이 주소가 등록돼 있어야 메일 링크가 열린다.
+RECOVER_REDIRECT = "https://sa-aim-labs.pages.dev"
+
 
 class SupabaseError(RuntimeError):
-    def __init__(self, message: str, *, status: int | None = None, payload: Any = None):
+    """Supabase 호출 오류 — 상태 코드·서버 코드·네트워크 여부를 함께 들고 다닌다.
+
+    v2.0.7: 예전에는 어떤 실패든 UI 에서 "네트워크 오류"로 보였다.  이제
+    HTTP 상태(429 발송 한도, 422 잘못된 이메일 …)와 서버 메시지를 그대로
+    올려 보내 화면이 실제 안내를 띄울 수 있게 한다.
+    """
+
+    def __init__(self, message: str, *, status: int | None = None, payload: Any = None,
+                 code: str | None = None, network: bool = False):
         super().__init__(message)
         self.status = status
         self.payload = payload
+        self.code = code
+        self.network = network
+
+    def as_dict(self) -> dict[str, Any]:
+        return {"ok": False, "message": str(self), "status": self.status,
+                "code": self.code, "network": bool(self.network)}
+
+
+def _http_message(code: int, detail: str, payload: Any) -> str:
+    """HTTP 오류 → 사용자가 바로 할 일이 보이는 문장."""
+    detail = str(detail or "").strip()
+    if code == 429:
+        wait = re.search(r"after (\d+) seconds?", detail)
+        when = f"약 {wait.group(1)}초 뒤" if wait else "잠시(약 1분) 뒤"
+        return f"메일 발송 한도에 걸렸습니다 · {when} 다시 시도해 주세요"
+    if code in (400, 422):
+        low = detail.lower()
+        if "for security purposes" in low or "rate limit" in low:
+            return f"잠시 뒤 다시 시도해 주세요 · {detail}"
+        if "redirect" in low:
+            return ("재설정 링크 주소가 Supabase 에 등록되지 않았습니다 · "
+                    f"Redirect URLs 에 {RECOVER_REDIRECT} 를 추가해 주세요 · {detail}")
+        return f"이메일 주소를 다시 확인해 주세요 · {detail or '요청을 처리하지 못했습니다'}"
+    if code in (401, 403):
+        return f"권한이 없습니다 · Supabase 설정을 확인해 주세요 · {detail or f'HTTP {code}'}"
+    if code == 404:
+        return "요청한 주소를 찾지 못했습니다 · Supabase URL 을 확인해 주세요"
+    if code >= 500:
+        return f"Supabase 서버가 잠시 응답하지 않습니다 · 잠시 뒤 다시 시도해 주세요 · {detail or f'HTTP {code}'}"
+    return detail or f"HTTP {code}"
 
 
 def load_config() -> dict[str, str]:
@@ -104,11 +148,22 @@ class SupabaseClient:
             except ValueError:
                 payload = raw
             message = payload
+            code: str | None = None
             if isinstance(payload, dict):
-                message = payload.get("msg") or payload.get("message") or payload.get("error_description") or payload.get("error") or raw
-            raise SupabaseError(str(message or f"HTTP {exc.code}"), status=exc.code, payload=payload) from exc
+                message = (payload.get("msg") or payload.get("message")
+                           or payload.get("error_description") or payload.get("error") or raw)
+                code = str(payload.get("error_code") or payload.get("code") or "") or None
+            # v2.0.7 — 429(발송 한도)·422·5xx 를 실제 안내 문장으로 바꾼다.
+            raise SupabaseError(_http_message(exc.code, str(message or ""), payload),
+                                status=exc.code, payload=payload, code=code) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise SupabaseError("응답이 없습니다(시간 초과) · 인터넷 연결을 확인하고 다시 시도해 주세요",
+                                network=True) from exc
         except urllib.error.URLError as exc:
-            raise SupabaseError(f"네트워크 오류 · {exc.reason}") from exc
+            raise SupabaseError(f"네트워크 오류 · 서버에 연결하지 못했습니다 ({exc.reason})",
+                                network=True) from exc
+        except OSError as exc:
+            raise SupabaseError(f"네트워크 오류 · {exc}", network=True) from exc
 
     # ------------------------------------------------------------ auth
     @staticmethod
@@ -143,20 +198,23 @@ class SupabaseClient:
                              query={"grant_type": "refresh_token"})
         return self._session(body or {}, "")
 
-    def recover(self, email: str, redirect_to: str = "") -> dict[str, Any]:
+    def recover(self, email: str, redirect_to: str = RECOVER_REDIRECT) -> dict[str, Any]:
         """비밀번호 찾기 — ``POST /auth/v1/recover``.
 
         Supabase 가 재설정 링크를 담은 메일을 보낸다.  앱에는 메일만 보내고
         새 비밀번호는 받지 않는다 (비밀번호는 Supabase Auth 밖으로 나오지 않는다).
+        ``redirect_to`` 는 메일 링크가 돌아올 주소 — 없으면 Supabase 기본 사이트로
+        가 버려 사용자가 앱으로 돌아오지 못한다.
         """
         address = str(email or "").strip()
         if "@" not in address:
-            raise SupabaseError("이메일 주소를 확인해 주세요")
+            raise SupabaseError("이메일 주소를 확인해 주세요", status=422, code="invalid_email")
         body: dict[str, Any] = {"email": address}
-        if redirect_to:
-            body["redirect_to"] = redirect_to
+        target = str(redirect_to or "").strip()
+        if target:
+            body["redirect_to"] = target
         self._request("POST", "/auth/v1/recover", body=body, prefer="return=minimal")
-        return {"ok": True, "email": address,
+        return {"ok": True, "email": address, "redirect_to": target,
                 "message": "비밀번호 재설정 메일을 보냈습니다 · 메일의 링크에서 새 비밀번호를 정해 주세요"}
 
     def sign_out(self, access_token: str) -> None:

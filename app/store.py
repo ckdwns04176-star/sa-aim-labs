@@ -62,7 +62,7 @@ DEFAULTS: dict[str, Any] = {
         # ── 화면 ──
         "theme": "coral",
         "ui_scale": 100,
-        "ui_scale_auto": True,
+        "ui_scale_auto": False,
         # ── 인게임 오버레이 (v2.0.0 · Win32 순정 창) ──
         "overlay_enabled": True,
         "overlay_hotkey_lobby": "Insert",
@@ -328,18 +328,18 @@ class Store:
             return self.data["settings"]
 
     # ---------------------------------------------------------------- 서든 계정 (최대 3)
-    def accounts(self) -> list[dict[str, Any]]:
-        """저장된 서든 계정 목록.
-
-        예전 단일 ``nickname`` 설정과 하위 호환 — 목록이 비어 있으면 현재
-        닉네임 하나를 첫 계정으로 돌려준다.  중복은 버리고 최대 3개만 남긴다.
-        """
+    # v2.0.7 — 칸 번호를 **위치로 고정**한다.  예전에는 빈 칸을 지우고 목록을
+    # 압축해서, 3번 칸에 먼저 닉네임을 넣으면 1번 칸으로 옮겨지고 다른 칸의
+    # 닉네임까지 사라질 수 있었다.  이제 항상 3칸을 돌려주고 빈 칸은 "",
+    # UI·계정 전환은 같은 칸 번호를 쓴다.
+    def account_slots(self) -> list[dict[str, Any]]:
+        """저장된 3칸 — 빈 칸은 ``nickname`` "" 로 남긴다 (위치 고정)."""
         with self._lock:
             raw = self.data["settings"].get("accounts")
             current = str(self.data["settings"].get("nickname") or "").strip()[:NICK_MAX]
         rows: list[dict[str, Any]] = []
         if isinstance(raw, list):
-            for item in raw:
+            for item in raw[:MAX_ACCOUNTS]:
                 label = ""
                 if isinstance(item, dict):
                     nick = str(item.get("nickname") or "").strip()[:NICK_MAX]
@@ -348,50 +348,67 @@ class Store:
                     nick = item.strip()[:NICK_MAX]
                 else:
                     nick = ""
-                if nick:
-                    rows.append({"nickname": nick, "label": label})
+                rows.append({"nickname": nick, "label": label})
         seen: set[str] = set()
         out: list[dict[str, Any]] = []
         for row in rows:
             key = row["nickname"].lower()
-            if key in seen:
-                continue
-            seen.add(key)
+            if key and key in seen:
+                row = {"nickname": "", "label": row.get("label") or ""}
+            elif key:
+                seen.add(key)
             out.append(row)
-        if not out and current:
-            out = [{"nickname": current, "label": ""}]
-        return out[:MAX_ACCOUNTS]
+        while len(out) < MAX_ACCOUNTS:
+            out.append({"nickname": "", "label": ""})
+        if not any(row["nickname"] for row in out) and current:
+            # 예전 단일 nickname 설정과 하위 호환 — 첫 칸 계정으로 보여 준다.
+            out[0] = {"nickname": current, "label": ""}
+        return [dict(row) for row in out[:MAX_ACCOUNTS]]
+
+    def accounts(self) -> list[dict[str, Any]]:
+        """닉네임이 있는 칸만 (조회·백업용) — 위치가 필요하면 :meth:`account_slots`."""
+        return [dict(row) for row in self.account_slots() if row["nickname"]]
 
     def active_account_index(self) -> int:
-        """지금 조회 기준이 되는 계정 번호 — 현재 닉네임과 일치하는 칸을 우선."""
-        current = str(self.settings.get("nickname") or "").strip().lower()
-        rows = self.accounts()
-        for index, row in enumerate(rows):
-            if row["nickname"].lower() == current:
+        """지금 조회 기준이 되는 칸 번호 — 현재 닉네임과 같은 칸을 먼저 본다."""
+        with self._lock:
+            current = str(self.data["settings"].get("nickname") or "").strip().lower()
+            try:
+                stored = int(self.data["settings"].get("active_account") or 0)
+            except (TypeError, ValueError):
+                stored = 0
+        slots = self.account_slots()
+        for index, row in enumerate(slots):
+            if row["nickname"] and row["nickname"].lower() == current:
                 return index
-        try:
-            index = int(self.settings.get("active_account") or 0)
-        except (TypeError, ValueError):
-            index = 0
-        return index if 0 <= index < len(rows) else 0
+        if 0 <= stored < len(slots) and slots[stored]["nickname"]:
+            return stored
+        for index, row in enumerate(slots):
+            if row["nickname"]:
+                return index
+        return 0
 
     def accounts_state(self) -> dict[str, Any]:
-        rows = self.accounts()
-        return {"items": rows, "active": self.active_account_index(), "max": MAX_ACCOUNTS,
+        slots = self.account_slots()
+        return {"items": slots, "active": self.active_account_index(), "max": MAX_ACCOUNTS,
                 "nickname": str(self.settings.get("nickname") or "")}
 
     def _write_accounts(self, rows: list[dict[str, Any]], active: int,
                         nickname: str | None = None) -> dict[str, Any]:
-        rows = rows[:MAX_ACCOUNTS]
-        active = max(0, min(int(active), max(0, len(rows) - 1)))
+        slots = [{"nickname": str((row or {}).get("nickname") or "")[:NICK_MAX],
+                  "label": str((row or {}).get("label") or "")[:16]}
+                 for row in list(rows)[:MAX_ACCOUNTS]]
+        while len(slots) < MAX_ACCOUNTS:
+            slots.append({"nickname": "", "label": ""})
+        active = max(0, min(int(active), MAX_ACCOUNTS - 1))
         with self._lock:
             settings = self.data["settings"]
-            settings["accounts"] = rows
+            settings["accounts"] = slots
             settings["active_account"] = active
             if nickname is not None:
-                settings["nickname"] = nickname
-            elif rows and active < len(rows):
-                settings["nickname"] = rows[active]["nickname"]
+                settings["nickname"] = str(nickname)[:NICK_MAX]
+            else:
+                settings["nickname"] = slots[active]["nickname"]
             self.save()
         return self.accounts_state()
 
@@ -403,71 +420,62 @@ class Store:
         except (TypeError, ValueError):
             slot = 0
         slot = max(0, min(MAX_ACCOUNTS - 1, slot))
-        rows = list(self.accounts())
+        slots = self.account_slots()
         active = self.active_account_index()
 
         if not nick:
-            if slot < len(rows):
-                rows.pop(slot)
-                if active > slot:
-                    active -= 1
-            active = max(0, min(active, len(rows) - 1))
-            return self._write_accounts(rows, active, rows[active]["nickname"] if rows else "")
+            slots[slot] = {"nickname": "", "label": ""}
+            if active == slot or not slots[active]["nickname"]:
+                active = next((i for i, row in enumerate(slots) if row["nickname"]), 0)
+            return self._write_accounts(slots, active, slots[active]["nickname"])
 
-        while len(rows) <= slot:
-            rows.append({"nickname": "", "label": ""})
-        rows[slot] = {"nickname": nick,
-                      "label": str(label or rows[slot].get("label") or "").strip()[:16]}
+        # 같은 닉네임이 다른 칸에 이미 있으면 그 칸을 비운다 (중복 금지).
+        for index_, row in enumerate(slots):
+            if index_ != slot and row["nickname"].lower() == nick.lower():
+                slots[index_] = {"nickname": "", "label": row.get("label") or ""}
+        slots[slot] = {"nickname": nick,
+                       "label": str(label or slots[slot].get("label") or "").strip()[:16]}
 
-        # 같은 닉네임이 두 칸에 들어가지 않게 앞 칸만 남긴다.
-        seen: set[str] = set()
-        unique: list[dict[str, Any]] = []
-        for row in rows:
-            key = str(row.get("nickname") or "").lower()
-            if not key or key in seen:
-                continue
-            seen.add(key)
-            unique.append(row)
-        rows = unique[:MAX_ACCOUNTS]
-
-        if slot == active or len(rows) == 1:
-            active = next((i for i, row in enumerate(rows)
-                           if row["nickname"].lower() == nick.lower()), 0)
-            return self._write_accounts(rows, active, nick)
-        active = min(active, len(rows) - 1)
-        return self._write_accounts(rows, active)
+        if not slots[active]["nickname"]:
+            # 지금 활성 칸이 비어 있었다면 — 방금 채운 칸을 활성으로 잡는다.
+            active = slot if slots[slot]["nickname"] else \
+                next((i for i, row in enumerate(slots) if row["nickname"]), active)
+        if active == slot:
+            return self._write_accounts(slots, active, nick)
+        return self._write_accounts(slots, active)
 
     def switch_account(self, index: Any = 0) -> dict[str, Any]:
         """계정 전환 — 홈·병영수첩 조회 기준 닉네임이 바로 바뀐다."""
-        rows = self.accounts()
-        if not rows:
-            return self.accounts_state()
+        slots = self.account_slots()
         try:
             slot = int(index)
         except (TypeError, ValueError):
             slot = 0
-        slot = max(0, min(slot, len(rows) - 1))
-        return self._write_accounts(rows, slot, rows[slot]["nickname"])
+        slot = max(0, min(slot, MAX_ACCOUNTS - 1))
+        if not slots[slot]["nickname"]:
+            return self.accounts_state()   # 빈 칸은 전환하지 않는다
+        return self._write_accounts(slots, slot, slots[slot]["nickname"])
 
     def remember_account(self, nickname: Any) -> dict[str, Any]:
-        """설정에서 저장한 닉네임을 계정 목록에 반영한다.
+        """설정에서 저장한 닉네임을 계정 칸에 반영한다.
 
         이미 있으면 그 칸을 활성화하고, 없으면 빈 칸에 추가한다.  세 칸이 모두
         차 있으면 지금 활성 칸을 새 닉네임으로 교체한다.
         """
         nick = str(nickname or "").strip()[:NICK_MAX]
-        rows = self.accounts()
+        slots = self.account_slots()
         active = self.active_account_index()
         if not nick:
-            return self._write_accounts(rows, active, "")
-        keys = [row["nickname"].lower() for row in rows]
-        if nick.lower() in keys:
-            return self._write_accounts(rows, keys.index(nick.lower()), nick)
-        if len(rows) < MAX_ACCOUNTS:
-            rows = rows + [{"nickname": nick, "label": ""}]
-            return self._write_accounts(rows, len(rows) - 1, nick)
-        rows[active] = {"nickname": nick, "label": rows[active].get("label") or ""}
-        return self._write_accounts(rows, active, nick)
+            return self._write_accounts(slots, active, "")
+        for index, row in enumerate(slots):
+            if row["nickname"].lower() == nick.lower():
+                return self._write_accounts(slots, index, nick)
+        for index, row in enumerate(slots):
+            if not row["nickname"]:
+                slots[index] = {"nickname": nick, "label": ""}
+                return self._write_accounts(slots, index, nick)
+        slots[active] = {"nickname": nick, "label": slots[active].get("label") or ""}
+        return self._write_accounts(slots, active, nick)
 
     def public_settings(self) -> dict[str, Any]:
         """Settings safe to hand to the UI (secrets masked, never raw)."""

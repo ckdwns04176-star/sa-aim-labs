@@ -16,7 +16,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable
 
-from . import auth as auth_mod, barracks as barracks_mod, capture as capture_mod, insights, nexon, nvidia, overlay, party_lobby, paths, scouting, supabase_sync, tilt, toast, tray, updates, v140, v150, winutil
+from . import audioeq, auth as auth_mod, banners as banners_mod, barracks as barracks_mod, netopt, capture as capture_mod, insights, nexon, nvidia, overlay, party_lobby, paths, scouting, supabase_sync, tilt, toast, tray, updates, v140, v150, winutil
 from . import hotkeys as hotkeys_mod
 from .store import Store, now_iso, scrub_secrets as store_scrub, today_str
 
@@ -98,6 +98,18 @@ class Api:
         # 겹쳐 두 번 백업하거나 UI 스레드를 붙잡지 않게 한다.
         self._shutdown_done = False
         self._shutdown_lock = __import__("threading").Lock()
+        # v2.0.7 — 네트워크 최적화 · 사플 EQ 상태 캐시 (레지스트리 조회는 비싸다)
+        self._net_state: dict[str, Any] | None = None
+        self._net_state_at = 0.0
+        self._audio_state: dict[str, Any] | None = None
+        self._audio_state_at = 0.0
+        # v2.0.7 — 창 안 자체 배너 (우측 160×600 · 하단 728×90)
+        self.banners = banners_mod.BannerService(self.store)
+        try:
+            if self.banners.settings().get("banner_source") != "local":
+                self.banners.refresh_async()
+        except Exception:  # noqa: BLE001 - 배너 갱신 실패가 시작을 막지 않는다
+            log.debug("banner refresh could not start", exc_info=True)
         self._cleanup_cache_once()
 
     def set_display(self, width: int = 0, height: int = 0, scale: float = 1.0) -> dict[str, Any]:
@@ -110,12 +122,12 @@ class Api:
     set_display._serializable = False  # type: ignore[attr-defined]
 
     def effective_ui_scale(self) -> int:
-        """화면에 적용할 배율 — 사용자가 직접 고른 값이 우선, 아니면 QHD 자동값."""
-        raw = self.store.settings.get("ui_scale")
-        auto = bool(self.store.settings.get("ui_scale_auto", True))
-        if auto:
-            return int(self._display.get("auto_scale") or v150.DEFAULT_UI_SCALE)
-        return v150.clean_ui_scale(raw)
+        """화면에 적용할 배율 — v2.0.7 부터 **100% 고정**.
+
+        배율을 바꾸면 창 크기·카드 배치가 함께 흔들려서, 사용자 요청으로
+        설정 UI 를 숨기고 항상 100% 로 둔다.  (예전 저장값이 남아 있어도 무시)
+        """
+        return v150.DEFAULT_UI_SCALE
 
     effective_ui_scale._serializable = False  # type: ignore[attr-defined]
 
@@ -180,7 +192,7 @@ class Api:
         """v1.3.1 — 최대화는 없앴다 (1200×750 고정). UI 에서도 버튼을 제거했고,
         혹시 남아 있는 호출이 와도 창을 건드리지 않고 현재 상태만 돌려준다."""
         return self._ok(maximized=False, fixed=True,
-                        message="이 앱은 1200×750 고정 크기로만 동작합니다")
+                        message="이 앱은 1440×880 고정 크기로만 동작합니다")
 
     def close_window(self) -> dict[str, Any]:
         """완전 종료 — **UI 스레드를 붙잡지 않는다** (v2.0.3).
@@ -587,6 +599,9 @@ class Api:
             },
             "settings": settings,
             "accounts": store.accounts_state(),
+            "banners": self.banners.state(str(((account_state or {}).get("plan") or {}).get("plan") or "")),
+            "netopt": self.net_state(pending=light),
+            "audioeq": self.audio_state(pending=light),
             "nexon": {
                 "connected": bool((store.settings.get("api_key") or "").strip()),
                 "nickname": store.settings.get("nickname") or "",
@@ -607,6 +622,9 @@ class Api:
                 "form": form,
                 "overlay": overlay_state,
                 "stairfix": utils_state.get("stairfix"),
+                "nvidia": {"mode": utils_state.get("mode"),
+                           "applied": bool(utils_state.get("mode")),
+                           "label": nvidia.MODES.get(str(utils_state.get("mode") or ""), "")},
                 "accel": utils_state.get("accel"),
                 "account": account_state,
                 "nickname": (barracks or {}).get("nickname") or (store.settings.get("nickname") or ""),
@@ -786,13 +804,196 @@ class Api:
         except Exception as exc:  # noqa: BLE001
             return self._err(exc, accounts=self.store.accounts_state())
 
+    # ---------------------------------------------------------- v2.0.7 · 네트워크 · 사플 EQ
+    def net_state(self, *, force: bool = False, pending: bool = False) -> dict[str, Any]:
+        """네트워크 핑 최적화 상태 — 3초 캐시."""
+        if pending and self._net_state is not None:
+            return dict(self._net_state)
+        if pending:
+            return {"supported": os.name == "nt", "pending": True, "applied": False,
+                    "label": "확인 중", "counts": {}, "done": 0, "total": 0}
+        if not force and self._net_state and time.monotonic() - self._net_state_at < 3:
+            return dict(self._net_state)
+        try:
+            state = netopt.state()
+        except Exception as exc:  # noqa: BLE001
+            state = {"supported": os.name == "nt", "applied": False, "label": "확인 실패",
+                     "error": str(exc), "counts": {}, "done": 0, "total": 0}
+        state["needs_admin"] = bool(state.get("supported") and not netopt.needs_admin())
+        self._net_state, self._net_state_at = state, time.monotonic()
+        return dict(state)
+
+    def apply_net_opt(self, elevate: bool = False) -> dict[str, Any]:
+        """네트워크 최적화 원클릭 적용 — 권한이 없으면 UAC 로 다시 실행."""
+        try:
+            if elevate and os.name == "nt" and not netopt.needs_admin():
+                return {"ok": True, **netopt.elevate_help("apply"), "elevated": True,
+                        "state": self._build_state(light=True)}
+            result = netopt.apply()
+            if result.get("state"):
+                self._net_state = result["state"]
+                self._net_state_at = time.monotonic()
+            if not result.get("ok") and not result.get("unsupported"):
+                admin = any("관리자" in str(e) for e in (result.get("errors") or []))
+                if admin and os.name == "nt":
+                    return {**result, "needs_admin": True, "can_elevate": True,
+                            "message": "관리자 권한이 필요합니다 · UAC 를 승인하면 한 번에 적용됩니다",
+                            "state": self._build_state(light=True)}
+            return {**result, "state": self._build_state(light=True)}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def restore_net_opt(self, elevate: bool = False) -> dict[str, Any]:
+        try:
+            if elevate and os.name == "nt" and not netopt.needs_admin():
+                return {"ok": True, **netopt.elevate_help("restore"), "elevated": True,
+                        "state": self._build_state(light=True)}
+            result = netopt.restore()
+            if result.get("state"):
+                self._net_state = result["state"]
+                self._net_state_at = time.monotonic()
+            return {**result, "state": self._build_state(light=True)}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def wait_netopt_result(self, timeout: float = 30.0) -> dict[str, Any]:
+        """UAC 로 적용한 결과 파일을 기다린다 (v1.3.0 방식 · 화면 갱신용)."""
+        deadline = time.monotonic() + max(5.0, float(timeout or 30.0))
+        while time.monotonic() < deadline:
+            result = netopt.read_result()
+            if result:
+                if result.get("state"):
+                    self._net_state = result["state"]
+                    self._net_state_at = time.monotonic()
+                return {**result, "state": self._build_state(light=True)}
+            time.sleep(0.4)
+        return {"ok": False, "timeout": True,
+                "message": "관리자 권한 적용 결과를 기다리다 시간이 지났습니다 · UAC 창을 승인했는지 확인해 주세요"}
+
+    def audio_state(self, *, force: bool = False, pending: bool = False) -> dict[str, Any]:
+        """사플 EQ 상태 — Equalizer APO 감지 · 윈도우 음량 균등화 값."""
+        if pending and self._audio_state is not None:
+            return dict(self._audio_state)
+        if pending:
+            return {"supported": os.name == "nt", "pending": True, "label": "확인 중",
+                    "apo": {"installed": False, "path": None, "preset": False},
+                    "loudness": {"supported": False, "devices": [], "applied": False}}
+        if not force and self._audio_state and time.monotonic() - self._audio_state_at < 5:
+            return dict(self._audio_state)
+        try:
+            state = audioeq.state()
+        except Exception as exc:  # noqa: BLE001
+            state = {"supported": os.name == "nt", "label": "확인 실패", "error": str(exc),
+                     "apo": {"installed": False, "path": None, "preset": False},
+                     "loudness": {"supported": False, "devices": [], "applied": False}}
+        state["needs_admin"] = bool(state.get("supported") and not netopt.needs_admin())
+        self._audio_state, self._audio_state_at = state, time.monotonic()
+        return dict(state)
+
+    def apply_audio_eq(self, elevate: bool = False) -> dict[str, Any]:
+        """사플 EQ 원클릭 — Equalizer APO 프리셋 우선, 없으면 윈도우 음량 균등화."""
+        try:
+            if elevate and os.name == "nt" and not netopt.needs_admin():
+                return {"ok": True, **audioeq.elevate_help("apply"), "elevated": True,
+                        "state": self._build_state(light=True)}
+            result = audioeq.apply()
+            if result.get("state"):
+                self._audio_state = result["state"]
+                self._audio_state_at = time.monotonic()
+            if result.get("needs_admin") and os.name == "nt":
+                return {**result, "needs_admin": True, "can_elevate": True,
+                        "message": result.get("message") or "관리자 권한이 필요합니다",
+                        "state": self._build_state(light=True)}
+            return {**result, "state": self._build_state(light=True)}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def remove_audio_eq(self, elevate: bool = False) -> dict[str, Any]:
+        try:
+            if elevate and os.name == "nt" and not netopt.needs_admin():
+                return {"ok": True, **audioeq.elevate_help("restore"), "elevated": True,
+                        "state": self._build_state(light=True)}
+            result = audioeq.remove()
+            if result.get("state"):
+                self._audio_state = result["state"]
+                self._audio_state_at = time.monotonic()
+            return {**result, "state": self._build_state(light=True)}
+        except Exception as exc:  # noqa: BLE001
+            return self._err(exc)
+
+    def wait_audioeq_result(self, timeout: float = 30.0) -> dict[str, Any]:
+        deadline = time.monotonic() + max(5.0, float(timeout or 30.0))
+        while time.monotonic() < deadline:
+            result = audioeq.read_result()
+            if result:
+                if result.get("state"):
+                    self._audio_state = result["state"]
+                    self._audio_state_at = time.monotonic()
+                return {**result, "state": self._build_state(light=True)}
+            time.sleep(0.4)
+        return {"ok": False, "timeout": True,
+                "message": "관리자 권한 적용 결과를 기다리다 시간이 지났습니다 · UAC 창을 승인했는지 확인해 주세요"}
+
+    def open_sound_panel(self) -> dict[str, Any]:
+        return audioeq.open_sound_panel()
+
+    # ---------------------------------------------------------- v2.0.7 · 자체 배너
+    def banner_state(self, refresh: bool = False) -> dict[str, Any]:
+        """배너 상태 — refresh=True 면 원격 JSON 을 새로 받아 본다."""
+        try:
+            if refresh:
+                self.banners.refresh(force=True)
+            plan = str(((self.account.state().get("plan") or {}) or {}).get("plan") or "")
+            return {"ok": True, "banners": self.banners.state(plan)}
+        except Exception as exc:  # noqa: BLE001 - 배너 실패는 앱을 막지 않는다
+            return {"ok": False, "message": str(exc)}
+
+    def banner_impression(self, ids: Any = None) -> dict[str, Any]:
+        """노출 카운터 — 하루에 같은 배너는 한 번만 센다."""
+        try:
+            if isinstance(ids, str):
+                ids = [ids]
+            return self.banners.record("impressions", list(ids or []))
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "message": str(exc)}
+
+    def banner_click(self, banner_id: str = "", url: str = "") -> dict[str, Any]:
+        """배너 클릭 — 카운터를 올리고 링크를 연다 (자사 배너는 문의 창구)."""
+        result: dict[str, Any] = {"ok": True}
+        try:
+            self.banners.record("clicks", [banner_id])
+        except Exception:  # noqa: BLE001 - 카운터 실패가 링크를 막지 않는다
+            log.debug("banner click count failed", exc_info=True)
+        state = {}
+        try:
+            plan = str(((self.account.state().get("plan") or {}) or {}).get("plan") or "")
+            state = self.banners.state(plan)
+        except Exception:  # noqa: BLE001
+            state = {}
+        item = None
+        for row in (state.get("rail") or []) + (state.get("bottom") or []):
+            if str(row.get("id")) == str(banner_id):
+                item = row
+                break
+        target = banners_mod._safe_url(url) or (item or {}).get("url") or ""
+        house = bool((item or {}).get("house"))
+        if house or not target:
+            # 자사 배너 → 광고·클랜·제휴 문의 창구
+            return {**result, "house": True, "partner_url": banners_mod.PARTNER_URL,
+                    "email": banners_mod.CONTACT_EMAIL, "stats": state.get("stats")}
+        opened = winutil.open_target(target)
+        return {**result, "house": False, "url": target, "opened": opened,
+                "stats": state.get("stats")}
+
     def save_settings(self, patch: dict[str, Any]) -> dict[str, Any]:
         allowed = {"nickname", "auto_sync", "notify", "hotkey_enabled", "goals", "cloud_email",
                    "tilt_watch", "tilt_interval", "onboarded", "auto_cloud",
                    "theme", "ui_scale", "ui_scale_auto",
                    "overlay_enabled", "overlay_hotkey_lobby", "overlay_hotkey_scout",
                    "overlay_mapban_seconds", "overlay_party_seconds", "overlay_scan_x",
-                   "overlay_scan_y", "overlay_scan_scale", "toast_enabled", "toast_position", "toast_auto"}
+                   "overlay_scan_y", "overlay_scan_scale", "toast_enabled", "toast_position", "toast_auto",
+                   "banner_enabled", "banner_hide_pro", "banner_source", "banner_json_url",
+                   "banner_stats", "banner_stats_url"}
         clean: dict[str, Any] = {}
         for key, value in (patch or {}).items():
             if key not in allowed:
@@ -1536,9 +1737,9 @@ class Api:
             if mode not in nvidia.MODES:
                 raise nvidia.DrsError(f"알 수 없는 프로필: {mode}")
             if mode == "stairfix":
-                # 계단현상 끄기 = 내장된 Drs 패치 로직 (프로필 팩 불필요)
+                # 그래픽 호환 설정 = 내장된 Drs 패치 로직 (프로필 팩 불필요)
                 if not mgr.supported:
-                    raise nvidia.DrsError("계단현상 끄기는 윈도우 NVIDIA 환경에서만 적용됩니다")
+                    raise nvidia.DrsError("그래픽 호환 설정은 윈도우 NVIDIA 환경에서만 적용됩니다")
                 if not mgr.drs_dir.is_dir():
                     raise nvidia.DrsError(
                         "NVIDIA Drs 폴더를 찾지 못했습니다 · NVIDIA 드라이버 설치 후 한 번 실행해 주세요"
@@ -1551,7 +1752,7 @@ class Api:
                 if elevate:
                     return {"ok": True, **(mgr.elevate_help(mode)), "state": self._build_state()}
                 result = mgr.apply_stairfix(force=True)
-                self._remember_drs("stairfix", result, label="계단현상 끄기 적용 전")
+                self._remember_drs("stairfix", result, label="그래픽 호환 설정 적용 전")
                 self._drs_state = None
                 return {"ok": True, **result, "state": self._build_state()}
             if not mgr.available_modes().get(mode):
@@ -1600,7 +1801,7 @@ class Api:
             if not latest:
                 raise nvidia.DrsError("복구 지점이 없습니다 · 먼저 프로필을 적용해 주세요")
             result = self._drs().restore(latest[0]["id"])
-            self._remember_drs(None, result, label="계단현상 설정 복구")
+            self._remember_drs(None, result, label="그래픽 설정 복구")
             self._drs_state = None
             return {"ok": True, **result, "state": self._build_state()}
         except Exception as exc:  # noqa: BLE001
@@ -1862,9 +2063,16 @@ class Api:
             return self._err(exc)
 
     def auth_recover(self, email: str = "") -> dict[str, Any]:
-        """비밀번호 찾기 — Supabase 가 재설정 링크 메일을 보낸다."""
+        """비밀번호 찾기 — Supabase 가 재설정 링크 메일을 보낸다.
+
+        v2.0.7 — 발송 한도(429)·잘못된 주소(422)·네트워크 실패를 구분해
+        ``status``·``code``·``network`` 를 함께 돌려준다.  화면이 모든 실패를
+        "네트워크 오류"로 뭉개지 않고 실제 안내를 띄울 수 있게 하기 위해서다.
+        """
         try:
             return self.account.recover(email)
+        except supabase_sync.SupabaseError as exc:
+            return {**exc.as_dict(), "email": str(email or "").strip()}
         except Exception as exc:  # noqa: BLE001
             return self._err(exc)
 

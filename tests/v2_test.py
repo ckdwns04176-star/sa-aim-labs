@@ -180,9 +180,9 @@ class FakeSupabase:
         return {"email": email, "user_id": "u-1", "needs_confirmation": True,
                 "message": "가입 확인 메일"}
 
-    def recover(self, email: str) -> dict:
-        self.calls.append("recover")
-        return {"ok": True, "email": email, "message": "재설정 메일"}
+    def recover(self, email: str, redirect_to: str = "") -> dict:
+        self.calls.append(("recover", redirect_to))
+        return {"ok": True, "email": email, "redirect_to": redirect_to, "message": "재설정 메일"}
 
     def subscription(self, token: str, user_id: str) -> dict | None:
         self.calls.append("subscription")
@@ -708,7 +708,8 @@ def test_v201_win32() -> None:
     check("native_overlay: WM_CLOSE 로 창 정상 종료", "PostMessageW(ctypes.c_void_p(self.hwnd), WM_CLOSE" in src)
     check("native_overlay: 등록된 클래스 ATOM 캐시", "_class_atoms: dict[str, int]" in src and "_class_atoms[class_name] = atom" in src)
     check("native_overlay: CreateWindowExW 에 클래스 ATOM 전달", "class_atom_arg = ctypes.cast(ctypes.c_void_p(class_atom), wintypes.LPCWSTR)" in src and "ex_style, class_atom_arg" in src)
-    check("native_overlay: 진단 빌드 표식", 'OVERLAY_DIAG_BUILD = "class-atom-v3-20261127"' in src and "build={OVERLAY_DIAG_BUILD}" in src)
+    check("native_overlay: 진단 빌드 표식",
+          'OVERLAY_DIAG_BUILD = "class-atom-v4-20261128"' in src and "build={OVERLAY_DIAG_BUILD}" in src)
 
 
 def test_v201_scouting() -> None:
@@ -1835,6 +1836,423 @@ def test_v206_api_savings() -> None:
     check("v2.0.6: 저장소 기본값 False", '"toast_enabled": False' in store_src)
 
 
+
+
+# ======================================================================
+# v2.0.7 — 오버레이 첫 렌더 · 계정 3칸 · 비밀번호 찾기 · 배너 · 핑 · 사플 EQ
+# ======================================================================
+def test_v207_overlay_thread() -> None:
+    """첫 렌더 실패 수정 — 그리기는 창 소유 스레드에서, GDI+ 실패 시 GDI 재시도."""
+    from app import native_overlay
+
+    src = (ROOT / "app" / "native_overlay.py").read_text(encoding="utf-8")
+    check("v2.0.7: WM_APP_RENDER 메시지 정의", "WM_APP_RENDER = 0x8000 + 1" in src)
+    check("v2.0.7: wndproc 이 WM_APP_RENDER 처리", "if msg == WM_APP_RENDER:" in src)
+    check("v2.0.7: 창 스레드 id 보관", "self._thread_id = threading.get_ident()" in src)
+    check("v2.0.7: 다른 스레드면 큐로 넘김",
+          "if self._thread_id and threading.get_ident() != self._thread_id:" in src
+          and "self._post_render(spec)" in src)
+    check("v2.0.7: PostMessageW 로 그리기 요청",
+          "PostMessageW(ctypes.c_void_p(self.hwnd), WM_APP_RENDER, 0, 0)" in src)
+    check("v2.0.7: 렌더는 GDI+ → GDI 두 번 시도",
+          [a["force_gdi"] for a in native_overlay.RENDER_ATTEMPTS] == [False, True])
+    check("v2.0.7: render_prims force_gdi 지원",
+          "force_gdi: bool = False" in src and "force_gdi=bool(attempt.get" in src)
+    check("v2.0.7: blit 실패에 GetLastError 문구", "UpdateLayeredWindow 실패 · " in src)
+    check("v2.0.7: CreateDIBSection 실패를 원인과 함께",
+          "CreateDIBSection 실패 · " in src and "CreateCompatibleDC 실패 · " in src)
+    # 리눅스에서는 창을 만들 수 없다 — 조용히 False
+    window = native_overlay.NativeOverlayWindow("toast", "t")
+    check("v2.0.7: 리눅스 create() = False · 오류 문구",
+          window.create({"x": 0, "y": 0, "w": 300, "h": 80}, native_overlay.smoke_spec("toast")) is False
+          and window.error == "Windows 전용", str(window.error))
+    check("v2.0.7: 리눅스 update() = False",
+          window.update(native_overlay.smoke_spec("toast")) is False)
+
+
+def test_v207_accounts() -> None:
+    """3칸 계정 — 칸 번호 고정 · 엔터 등록 · 2/3번 전환 유지."""
+    import tempfile
+
+    from app.store import Store
+
+    d = Path(tempfile.mkdtemp(prefix="sa_acct_"))
+    store = Store(d / "data.json")
+    state = store.accounts_state()
+    check("v2.0.7: 계정 칸은 항상 3칸", len(state["items"]) == 3, str(len(state["items"])))
+
+    # 예전에는 3번 칸에 먼저 넣으면 1번으로 당겨졌다
+    store.save_account(2, "세번째")
+    state = store.accounts_state()
+    check("v2.0.7: 3번 칸에 넣으면 3번에 남음",
+          state["items"][2]["nickname"] == "세번째" and state["items"][0]["nickname"] == "",
+          str(state["items"]))
+    store.save_account(0, "첫번째")
+    store.save_account(1, "두번째")
+    state = store.save_account(1, "두번째")
+    check("v2.0.7: 세 칸 모두 유지", [r["nickname"] for r in state["items"]] == ["첫번째", "두번째", "세번째"],
+          str(state["items"]))
+    check("v2.0.7: 다른 칸 등록은 활성 칸을 바꾸지 않음",
+          state["active"] == 2 and state["nickname"] == "세번째",
+          f'{state["active"]} {state["nickname"]}')
+
+    switched = store.switch_account(1)
+    check("v2.0.7: 2번 전환 → 활성 2번·닉네임 2번",
+          switched["active"] == 1 and switched["nickname"] == "두번째", str(switched))
+    switched = store.switch_account(2)
+    check("v2.0.7: 3번 전환 → 활성 3번",
+          switched["active"] == 2 and switched["nickname"] == "세번째", str(switched))
+    switched = store.switch_account(0)
+    check("v2.0.7: 1번 복귀", switched["active"] == 0 and switched["nickname"] == "첫번째")
+    same = store.switch_account(1)
+    check("v2.0.7: 전환은 캐시·state 에도 반영", same["items"][1]["nickname"] == "두번째")
+
+    # 중복·빈 칸
+    dupe = store.save_account(2, "첫번째")
+    check("v2.0.7: 같은 닉네임은 한 칸만",
+          [r["nickname"] for r in dupe["items"]].count("첫번째") == 1, str(dupe["items"]))
+    cleared = store.save_account(1, "")
+    check("v2.0.7: 빈 값 = 그 칸 비우기", cleared["items"][1]["nickname"] == "", str(cleared["items"]))
+    empty_slot = store.switch_account(1)
+    check("v2.0.7: 빈 칸 전환은 무시", empty_slot["active"] != 1 or not empty_slot["items"][1]["nickname"])
+
+    # UI 소스 계약
+    bridge = (ROOT / "ui" / "bridge.js").read_text(encoding="utf-8")
+    check("v2.0.7: renderAccounts 에 설정창 칸 포함", "'#set-accounts', false" in bridge)
+    check("v2.0.7: renderAccounts force 인자", "function renderAccounts(st, force)" in bridge)
+    check("v2.0.7: 엔터 입력 전에 blur", "try { input.blur(); }" in bridge)
+    check("v2.0.7: 전환 후 설정창 닉네임 동기화", "syncNickInputs(" in bridge
+          and "fetchBarracks(false, nextNick)" in bridge)
+    check("v2.0.7: fetchBarracks 가 닉네임 override 받음",
+          "async function fetchBarracks(andTest, nickOverride)" in bridge)
+    check("v2.0.7: acctState 는 칸을 당기지 않음",
+          "while (items.length < ACCT_MAX) items.push({ nickname: '', label: '' });" in bridge)
+
+
+def test_v207_recover() -> None:
+    """비밀번호 찾기 — redirect_to · 429/422/네트워크를 실제 안내로."""
+    from app import supabase_sync
+
+    check("v2.0.7: 재설정 링크는 홈페이지", supabase_sync.RECOVER_REDIRECT == "https://sa-aim-labs.pages.dev")
+    msg429 = supabase_sync._http_message(
+        429, "For security purposes, you can only request this after 58 seconds.",
+        {"error_code": "over_email_send_rate_limit"})
+    check("v2.0.7: 429 = 발송 한도 + 대기 시간", "발송 한도" in msg429 and "58초" in msg429, msg429)
+    msg422 = supabase_sync._http_message(422, "Unable to validate email address: invalid format", {})
+    check("v2.0.7: 422 = 이메일 확인 안내", "이메일" in msg422, msg422)
+    msg500 = supabase_sync._http_message(503, "upstream", {})
+    check("v2.0.7: 5xx = 서버 안내", "서버" in msg500, msg500)
+    err = supabase_sync.SupabaseError("test", status=429, code="over_email_send_rate_limit")
+    payload = err.as_dict()
+    check("v2.0.7: 오류에 status·code 포함",
+          payload["status"] == 429 and payload["code"] == "over_email_send_rate_limit"
+          and payload["ok"] is False, str(payload))
+
+    src = (ROOT / "app" / "supabase_sync.py").read_text(encoding="utf-8")
+    check("v2.0.7: recover 기본 redirect_to", "redirect_to: str = RECOVER_REDIRECT" in src)
+    check("v2.0.7: 시간 초과와 연결 실패를 구분", "시간 초과" in src and "연결하지 못했습니다" in src)
+    auth_src = (ROOT / "app" / "auth.py").read_text(encoding="utf-8")
+    check("v2.0.7: auth.recover 가 redirect 전달", "redirect_to=RECOVER_REDIRECT" in auth_src)
+    bridge = (ROOT / "ui" / "bridge.js").read_text(encoding="utf-8")
+    check("v2.0.7: 화면이 429 안내를 따로 보여 줌",
+          "res.status === 429" in bridge and "메일 발송 한도" in (ROOT / "app" / "supabase_sync.py").read_text(encoding="utf-8"))
+
+
+def test_v207_ui_text() -> None:
+    """계단현상 문구 제거 · 배율 고정 · 예시 문구."""
+    html = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.js").read_text(encoding="utf-8")
+    for path in ("app/nvidia.py", "app/drs.py", "app/nvapi_drs.py", "app/api.py"):
+        text = (ROOT / path).read_text(encoding="utf-8")
+        check(f"v2.0.7: {path} 계단현상 문구 없음", "계단현상" not in text)
+    check("v2.0.7: UI 계단현상 문구 없음", "계단현상" not in html and "계단현상" not in bridge)
+    check("v2.0.7: 그래픽 최적화 기능은 유지", "서든어택 그래픽 최적화" in html)
+    check("v2.0.7: 배율 선택 UI 없음", 'id="set-scale"' not in html and "set-scale" not in bridge)
+    check("v2.0.7: 배율은 100% 고정", "document.documentElement.style.setProperty('--ui', '1')" in bridge)
+    check("v2.0.7: 닉네임 예시는 스나이퍼01", 'placeholder="스나이퍼01' in html)
+    check("v2.0.7: 휴가중. 예시 문구 없음", "휴가중. 또는 barracks" not in html)
+    check("v2.0.7: 창 기본 1440×880", "--W:1440px" in html and "--H:880px" in html)
+
+    from app import api as api_mod, paths as paths_mod, winutil
+    check("v2.0.7: 버전 2.0.7", paths_mod.APP_VERSION == "2.0.7", paths_mod.APP_VERSION)
+    check("v2.0.7: 창 상수 1440×880",
+          (winutil.WINDOW_WIDTH, winutil.WINDOW_HEIGHT) == (1440, 880),
+          f"{winutil.WINDOW_WIDTH}x{winutil.WINDOW_HEIGHT}")
+    state = build_state()
+    check("v2.0.7: 배율 상태 100 고정", state.get("ui_scale") == 100, str(state.get("ui_scale")))
+    state["settings"]["ui_scale"] = 125
+    api = api_mod.Api(store=None) if False else None  # noqa: F841 - 아래에서 store 로 검사
+    from app.store import Store
+    import tempfile
+    d = Path(tempfile.mkdtemp(prefix="sa_scale_"))
+    st = Store(d / "data.json")
+    st.update_settings({"ui_scale": 125, "ui_scale_auto": True})
+    a = api_mod.Api(store=st)
+    check("v2.0.7: 예전 배율 저장값도 무시", a.effective_ui_scale() == 100, str(a.effective_ui_scale()))
+
+
+def test_v207_banners() -> None:
+    """자체 배너 — 자사 기본 · 원격 검증/캐시 · PRO 숨김 · 카운터."""
+    import tempfile
+
+    from app import banners
+    from app.store import Store
+
+    d = Path(tempfile.mkdtemp(prefix="sa_ban_"))
+    store = Store(d / "data.json")
+    svc = banners.BannerService(store, data_dir=d / "banners")
+    state = svc.state("free")
+    check("v2.0.7: 자사 배너 기본", state["visible"] and state["origin"] == "local", str(state.get("origin")))
+    check("v2.0.7: 세로 배너 160×600", tuple(state["sizes"]["rail"]) == (160, 600))
+    check("v2.0.7: 가로 배너 728×90", tuple(state["sizes"]["bottom"]) == (728, 90))
+    check("v2.0.7: 자사 배너 클릭은 문의 창구",
+          state["rail"][0]["url"] == banners.PARTNER_URL and state["rail"][0]["email"] == banners.CONTACT_EMAIL)
+    check("v2.0.7: PRO 회원은 배너 숨김", svc.state("pro")["visible"] is False)
+    store.update_settings({"banner_hide_pro": False})
+    svc2 = banners.BannerService(store, data_dir=d / "banners")
+    check("v2.0.7: 숨김 끄면 PRO 도 표시", svc2.state("pro")["visible"] is True)
+    store.update_settings({"banner_enabled": False})
+    check("v2.0.7: 배너 끄기", banners.BannerService(store, data_dir=d / "banners").state()["visible"] is False)
+    store.update_settings({"banner_enabled": True})
+
+    # 원격 JSON — 검증·폴백
+    bad = banners.normalize_payload({"rail": [{"title": "no url"}], "bottom": "x"})
+    check("v2.0.7: 원격 배너 형식 검증", bad is None)
+    good = banners.normalize_payload({"rail": [{"id": "ad1", "title": "클랜 모집", "url": "https://example.com",
+                                                "image": "javascript:alert(1)", "accent": "#123456",
+                                                "points": ["가", "나"], "weight": "3"}],
+                                      "bottom": [{"title": "하단", "url": "https://example.com/2"}]})
+    check("v2.0.7: 원격 배너 정규화", good and good["rail"][0]["weight"] == 3, str(good))
+    check("v2.0.7: 위험한 이미지 URL 차단", good["rail"][0]["image"] == "")
+
+    payload = {"rail": [{"id": "r1", "title": "광고", "url": "https://example.com", "accent": "#00FF00"}],
+               "bottom": [{"id": "b1", "title": "하단 광고", "url": "https://example.com/b"}]}
+    remote_store = Store((d / "remote.json"))
+    remote_store.update_settings({"banner_source": "remote",
+                                  "banner_json_url": "https://example.com/banners.json"})
+    calls = {"n": 0}
+
+    def opener(url, timeout):
+        calls["n"] += 1
+        return payload
+
+    rsvc = banners.BannerService(remote_store, opener=opener, data_dir=d / "banners2")
+    res = rsvc.refresh(force=True)
+    check("v2.0.7: 원격 배너 받기", res.get("ok") is True and res.get("rail") == 1, str(res))
+    st_remote = rsvc.state("free")
+    check("v2.0.7: 원격이 있으면 원격 배너", st_remote["origin"] == "remote"
+          and st_remote["rail"][0]["id"] == "r1", str(st_remote["origin"]))
+    check("v2.0.7: 원격 배너는 house=False", st_remote["rail"][0]["house"] is False)
+    # 캐시 파일로 다시 열어도 원격 배너 유지
+    again = banners.BannerService(remote_store, opener=lambda *a: {}, data_dir=d / "banners2")
+    check("v2.0.7: 원격 배너 디스크 캐시", again.state("free")["origin"] == "remote")
+
+    def boom(url, timeout):
+        raise OSError("offline")
+
+    fsvc = banners.BannerService(remote_store, opener=boom, data_dir=d / "banners3")
+    fsvc.refresh(force=True)
+    check("v2.0.7: 원격 실패 → 자사 배너", fsvc.state("free")["origin"] == "local")
+
+    # 카운터 — 노출은 하루 한 번, 클릭은 매번
+    csvc = banners.BannerService(Store(d / "count.json"), data_dir=d / "banners4")
+    csvc.record("impressions", ["house-rail-1", "house-bottom-1"])
+    csvc.record("impressions", ["house-rail-1", "house-bottom-1"])
+    summary = csvc.stats_summary()
+    check("v2.0.7: 노출 카운터는 하루 한 번", summary["impressions"] == 2, str(summary))
+    csvc.record("clicks", ["house-rail-1"])
+    csvc.record("clicks", ["house-rail-1"])
+    check("v2.0.7: 클릭 카운터 누적", csvc.stats_summary()["clicks"] == 2, str(csvc.stats_summary()))
+    check("v2.0.7: 배너 id 없으면 실패", csvc.record("clicks", []).get("ok") is False)
+
+
+def test_v207_netopt() -> None:
+    """네트워크 최적화 — 계획·적용·백업·복구 (FakeRegistry)."""
+    import tempfile
+
+    from app import netopt
+
+    tree = {
+        "HKLM": {
+            netopt.TCP_IFACE_KEY + r"\{IF-1}": {"TcpAckFrequency": (2, 4)},
+            netopt.TCP_IFACE_KEY + r"\{IF-2}": {},
+            netopt.THROTTLE_KEY: {"NetworkThrottlingIndex": (10, 4)},
+            netopt.NETCLASS_KEY + r"\0001": {"DriverDesc": ("Realtek", 1), "PnPCapabilities": (0, 4)},
+            netopt.NETCLASS_KEY + r"\0002": {"DriverDesc": ("Intel", 1)},
+        }
+    }
+    reg = netopt.FakeRegistry(tree)
+    old_windows = netopt.IS_WINDOWS
+    netopt.IS_WINDOWS = True
+    try:
+        rows = netopt.plan(reg)
+        groups = {r["group"] for r in rows}
+        check("v2.0.7: 핑 항목 4종 계획", groups == {"tcp", "throttle", "priority", "nic"}, str(groups))
+        before = netopt.state(reg)
+        check("v2.0.7: 적용 전 상태", before["supported"] and not before["applied"], str(before["label"]))
+        d = Path(tempfile.mkdtemp(prefix="sa_net_"))
+        result = netopt.apply(reg, path=d / "backup.json")
+        check("v2.0.7: 네트워크 적용", result["ok"] and len(result["changes"]) >= 5, str(len(result.get("changes") or [])))
+        after = netopt.state(reg)
+        check("v2.0.7: 적용 후 모두 적용됨", after["applied"], str(after.get("label")))
+        check("v2.0.7: 백업 파일 저장", (d / "backup.json").exists())
+        check("v2.0.7: 스로틀링 값 0xFFFFFFFF",
+              reg.get("HKLM", netopt.THROTTLE_KEY, "NetworkThrottlingIndex")[1] == 0xFFFFFFFF)
+        check("v2.0.7: 게임 우선순위 3", reg.get("HKLM", netopt.IFEO_KEY, "CpuPriorityClass")[1] == 3)
+        check("v2.0.7: 랜카드 절전 값 24", reg.get("HKLM", netopt.NETCLASS_KEY + r"\0001", "PnPCapabilities")[1] == 24)
+        restored = netopt.restore(reg, path=d / "backup.json")
+        check("v2.0.7: 네트워크 복구", restored["ok"], str(restored.get("message")))
+        check("v2.0.7: 원래 값으로 복구",
+              reg.get("HKLM", netopt.THROTTLE_KEY, "NetworkThrottlingIndex")[1] == 10
+              and reg.get("HKLM", netopt.TCP_IFACE_KEY + r"\{IF-1}", "TcpAckFrequency")[1] == 2,
+              str(reg.tree["HKLM"][netopt.THROTTLE_KEY]))
+        check("v2.0.7: 원래 없던 값은 삭제",
+              reg.get("HKLM", netopt.IFEO_KEY, "CpuPriorityClass")[0] is False)
+        check("v2.0.7: 복구 후 백업 삭제", not (d / "backup.json").exists())
+        check("v2.0.7: 복구 지점 없으면 안내",
+              "복구 지점이 없습니다" in netopt.restore(reg, path=d / "none.json").get("message", ""))
+    finally:
+        netopt.IS_WINDOWS = old_windows
+    check("v2.0.7: 리눅스에서는 적용 안 함(시뮬레이션)",
+          netopt.apply().get("simulated") is True)
+    src = (ROOT / "app" / "netopt.py").read_text(encoding="utf-8")
+    check("v2.0.7: UAC 재실행 지원", "--netopt-apply" in src and "ShellExecuteW" in src)
+    main_src = (ROOT / "main.py").read_text(encoding="utf-8")
+    check("v2.0.7: main 에 네트워크 상승 경로", "--netopt-apply" in main_src and "--netopt-restore" in main_src)
+
+
+def test_v207_audioeq() -> None:
+    """사플 EQ — APO 프리셋 왕복 · 음량 균등화 백업/복구."""
+    import tempfile
+
+    from app import audioeq, netopt
+
+    text = "# my config\nDevice: Speakers\n"
+    with_preset = audioeq.with_preset(text)
+    check("v2.0.7: APO 프리셋 삽입", audioeq.has_preset(with_preset) and "Fc 3000 Hz" in with_preset)
+    check("v2.0.7: 기존 설정 보존", "Device: Speakers" in with_preset and "my config" in with_preset)
+    check("v2.0.7: 해제 = 원래 텍스트", audioeq.strip_block(audioeq.with_preset(text)).strip() == text.strip())
+    twice = audioeq.with_preset(with_preset)
+    check("v2.0.7: 두 번 넣어도 한 블록", twice.count(audioeq.MARK_BEGIN) == 1, str(twice.count(audioeq.MARK_BEGIN)))
+
+    d = Path(tempfile.mkdtemp(prefix="sa_eq_"))
+    cfg = d / "config.txt"
+    cfg.write_text(text, encoding="utf-8")
+    applied = audioeq.apply_apo(cfg, d / "backup")
+    check("v2.0.7: APO 파일 적용", applied["ok"] and audioeq.has_preset(cfg.read_text(encoding="utf-8")))
+    removed = audioeq.remove_apo(cfg, d / "backup")
+    check("v2.0.7: APO 원본 복구",
+          removed["ok"] and cfg.read_text(encoding="utf-8").strip() == text.strip(), str(removed))
+
+    # 음량 균등화 — 활성 장치에 값 넣고 되돌리기
+    render = audioeq.RENDER_KEY
+    tree = {"HKLM": {
+        render + r"\{DEV1}": {"DeviceState": (1, 4)},
+        render + r"\{DEV1}\Properties": {"{a45c254e-df1c-4efd-8020-67d146a850e0},2": ("Realtek", 1)},
+        render + r"\{DEV2}": {"DeviceState": (2, 4)},
+    }}
+    reg = netopt.FakeRegistry(tree)
+    old_windows, old_net = audioeq.IS_WINDOWS, netopt.IS_WINDOWS
+    audioeq.IS_WINDOWS = netopt.IS_WINDOWS = True
+    try:
+        devices = [d for d in audioeq.render_devices(reg) if d["active"]]
+        check("v2.0.7: 활성 출력 장치만", len(devices) == 1 and devices[0]["name"] == "Realtek", str(devices))
+        state = audioeq.loudness_state(reg)
+        check("v2.0.7: 음량 균등화 적용 전", state["applied"] is False)
+        result = audioeq.apply_loudness(reg, path=d / "eq.json")
+        check("v2.0.7: 음량 균등화 값 적용", result["ok"] and result["changed"], str(result))
+        after = audioeq.loudness_state(reg)
+        check("v2.0.7: 적용 후 상태", after["applied"] is True, str(after))
+        back = audioeq.restore_loudness(reg, path=d / "eq.json")
+        check("v2.0.7: 음량 균등화 복구", back["ok"] and (d / "eq.json").exists() is False, str(back))
+        values = reg.values("HKLM", render + r"\{DEV1}\FxProperties")
+        check("v2.0.7: 추가했던 값 제거", not any(k in values for k in dict(audioeq.FX_EFFECT_VALUES)), str(values))
+    finally:
+        audioeq.IS_WINDOWS, netopt.IS_WINDOWS = old_windows, old_net
+    check("v2.0.7: 리눅스는 음량 균등화 시뮬레이션", audioeq.apply_loudness().get("simulated") is True)
+    src = (ROOT / "app" / "audioeq.py").read_text(encoding="utf-8")
+    check("v2.0.7: 사운드 속성 창 열기", "mmsys.cpl" in src)
+    check("v2.0.7: 사플 대역 2~6kHz", "Fc 2000 Hz" in src and "Fc 6000 Hz" in src)
+
+
+def test_v207_ui_banners() -> None:
+    """헤드리스 — 배너 2칸 · 1440×880 · 새 카드 · 로그인 이어 띄우기."""
+    from playwright.sync_api import sync_playwright
+
+    state = build_state(signed_in=False)
+    state["digest"]["show"] = False
+    state["onboarding"] = {"needed": False}
+    state["account"] = {**(state.get("account") or {}), "signed_in": False}
+    errors: list[str] = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch(args=["--no-sandbox"])
+        page = browser.new_page(viewport={"width": 1440, "height": 880}, device_scale_factor=1)
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.add_init_script(mock_js(state))
+        page.goto((ROOT / "ui" / "index.html").as_uri())
+        page.wait_for_selector("#app-splash", state="hidden", timeout=20000)
+        page.wait_for_timeout(1200)
+        check("v2.0.7 UI: 부팅 오류 없음", not errors, str(errors[:3]))
+        rail = page.evaluate("()=>{const e=document.querySelector('#ad-rail-slot .ad-card');if(!e)return null;const r=e.getBoundingClientRect();return [Math.round(r.width),Math.round(r.height)];}")
+        bottom = page.evaluate("()=>{const e=document.querySelector('#ad-bottom-slot .ad-card');if(!e)return null;const r=e.getBoundingClientRect();return [Math.round(r.width),Math.round(r.height)];}")
+        check("v2.0.7 UI: 세로 배너 160×600", rail == [160, 600], str(rail))
+        check("v2.0.7 UI: 가로 배너 728×90", bottom == [728, 90], str(bottom))
+        check("v2.0.7 UI: 배너 2칸 (세로+가로)",
+              page.eval_on_selector_all("#ad-rail-slot .ad-card, #ad-bottom-slot .ad-card", "els=>els.length") == 2)
+        check("v2.0.7 UI: 자사 배너 문의 문구", "문의" in page.eval_on_selector("#ad-rail-slot", "e=>e.innerText"))
+        # 자동 로그인 안내가 떠 있으면 배너 클릭을 가로막는다 — 닫고 진행
+        page.evaluate("()=>{AL.authLater=true;document.querySelectorAll('.mask.show').forEach(m=>m.classList.remove('show'));}")
+        page.wait_for_timeout(200)
+        # 자사 배너 클릭 → 문의 창구
+        page.click("#ad-rail-slot .ad-card")
+        page.wait_for_timeout(400)
+        check("v2.0.7 UI: 배너 클릭 → 문의 창",
+              page.evaluate("()=>document.getElementById('partner-mask').classList.contains('show')") is True)
+        check("v2.0.7 UI: 문의 이메일 표시",
+              page.eval_on_selector("#partner-email", "e=>e.value") == "ckdwns04176@gmail.com")
+        page.evaluate("()=>document.getElementById('partner-mask').classList.remove('show')")
+
+        # 요약 팝업을 닫으면 로그인 안내가 이어서 뜬다
+        page.evaluate("()=>{AL.authAutoShown=false; AL.authLater=false; const m=document.getElementById('digest-mask'); if(m) m.classList.add('show');}")
+        page.wait_for_timeout(150)
+        page.evaluate("()=>document.querySelector('#digest-mask [data-close]').click()")
+        page.wait_for_timeout(1100)
+        check("v2.0.7 UI: 요약 닫힌 뒤 로그인 창",
+              page.evaluate("()=>document.getElementById('auth-mask').classList.contains('show')") is True)
+        page.evaluate("()=>document.getElementById('auth-mask').classList.remove('show')")
+
+        # 새 카드 — 네트워크 · 사플 EQ
+        page.evaluate("()=>{showScreen('utils'); if(window.showUtilTab) showUtilTab('system');}")
+        page.wait_for_timeout(700)
+        check("v2.0.7 UI: 네트워크 카드", page.evaluate("()=>!!document.getElementById('net-card')") is True)
+        check("v2.0.7 UI: 사플 EQ 카드", page.evaluate("()=>!!document.getElementById('eq-card')") is True)
+        check("v2.0.7 UI: EQ 밴드 7칸", page.eval_on_selector_all("#eq-bands .eq-b", "els=>els.length") == 7)
+        check("v2.0.7 UI: 네트워크 4항목",
+              page.eval_on_selector_all("#net-rows .tw-row", "els=>els.length") == 4)
+        check("v2.0.7 UI: 시스템 탭 넘침 없음",
+              page.evaluate("()=>{const s=document.getElementById('s-utils');return s.scrollWidth<=s.clientWidth+1;}") is True)
+        check("v2.0.7 UI: 시스템 탭 세로 잘림 없음",
+              page.evaluate("()=>{const s=document.getElementById('s-utils');return s.scrollHeight<=s.clientHeight+1;}") is True)
+        page.screenshot(path=str(SHOTS / "v207-system.png"))
+        page.evaluate("()=>{showScreen('home');}")
+        page.wait_for_timeout(500)
+        page.screenshot(path=str(SHOTS / "v207-home.png"))
+        check("v2.0.7 UI: 1440×880 넘침 없음",
+              page.evaluate("()=>[document.documentElement.scrollWidth,document.documentElement.scrollHeight]") == [1440, 880])
+        browser.close()
+
+
+def test_v207_share() -> None:
+    """카톡·디코 복사 — 버튼과 포맷."""
+    html = (ROOT / "ui" / "index.html").read_text(encoding="utf-8")
+    bridge = (ROOT / "ui" / "bridge.js").read_text(encoding="utf-8")
+    check("v2.0.7: 내전 결과 카톡·디코 복사 버튼", 'id="balance-share"' in html and "카톡·디코 복사" in html)
+    check("v2.0.7: 병영수첩 공유 버튼", 'id="br-share"' in html)
+    check("v2.0.7: 공유 텍스트 끝에 SA Aim Labs", "lines.push('SA Aim Labs');" in bridge)
+    check("v2.0.7: 병영수첩 요약 포맷", "최근 ${n(st.games)}판 · 승률" in bridge)
+    check("v2.0.7: 내전 팀 포맷", "⚖️ 내전 팀 밸런스" in bridge)
+
+
 def main() -> int:
     for fn in (test_nvapi, test_store, test_auth, test_insights, test_duo, test_ocr,
                test_scouting, test_overlay, test_api,
@@ -1843,7 +2261,9 @@ def main() -> int:
                test_v203_gdiplus, test_v203_capture, test_v203_countdown_split,
                test_v203_scan_teams, test_v203_scout_overlay, test_v203_scout_speed,
                test_v203_shutdown, test_v203_overlay_scout_api, test_v205_nvidia_single,
-               test_v206_api_savings):
+               test_v206_api_savings, test_v207_overlay_thread, test_v207_accounts,
+               test_v207_recover, test_v207_ui_text, test_v207_banners, test_v207_netopt,
+               test_v207_audioeq, test_v207_share):
         try:
             fn()
         except Exception as exc:  # noqa: BLE001
@@ -1856,6 +2276,12 @@ def main() -> int:
         import traceback
         traceback.print_exc()
         check("test_ui_v201 실행", False, str(exc))
+    try:
+        test_v207_ui_banners()
+    except Exception as exc:  # noqa: BLE001
+        import traceback
+        traceback.print_exc()
+        check("test_v207_ui_banners 실행", False, str(exc))
     try:
         shots = test_ui()
         print("screenshots:", len(shots))

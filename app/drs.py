@@ -1,4 +1,4 @@
-"""NVIDIA Drs database reader / writer for the 계단현상 끄기 (stair-fix) setting.
+"""NVIDIA Drs database reader / writer for the 그래픽 호환 설정 (stair-fix) setting.
 
 The driver keeps per-application 3D settings in
 ``C:\\ProgramData\\NVIDIA Corporation\\Drs\\nvdrsdb0.bin`` (plus the mirror
@@ -17,12 +17,12 @@ The driver keeps per-application 3D settings in
       u8   value[size - 12]
 
 ``Antialiasing compatibility`` is setting ``0x00D55F7D``.  The Sudden Attack
-community guide (타격효과 · 중세철창 · 계단현상 제거) uses ``0x00401241`` for it,
+community guide (타격효과 · 중세철창 · 그래픽 제거) uses ``0x00401241`` for it,
 which this module can read and write **in place** — the record length never
 changes, so no offset in the file has to be fixed up.
 
 Nothing here touches the disk; :mod:`app.nvidia` owns backups and elevation, and
-these helpers are what makes 계단현상 끄기 work without shipping a whole
+these helpers are what makes 그래픽 호환 설정 work without shipping a whole
 third-party Drs pack.
 """
 from __future__ import annotations
@@ -39,14 +39,14 @@ MAX_RECORD = 0x1000
 GAME_EXE = "suddenattack.exe"
 
 # NVIDIA Profile Inspector setting ids used by the Sudden Attack guide.
-SETTING_AA_COMPAT = 0x00D55F7D      # Antialiasing compatibility (DX9) / 계단현상 · 타격효과 · 중세철창
+SETTING_AA_COMPAT = 0x00D55F7D      # Antialiasing compatibility (DX9) / 그래픽 · 타격효과 · 중세철창
 SETTING_AA_COMPAT2 = 0x1095DEF8     # Antialiasing compatibility (second dword, left untouched)
 SETTING_AA_MODE = 0x10D773D2        # Antialiasing - Mode (0=앱 설정, 1=Override)
 SETTING_AA_SETTING = 0x101E61A9     # Antialiasing - Setting (1 = 2x MSAA)
 STAIRFIX_VALUE = 0x00401241         # 0x00401241 — guide value
 DEFAULT_VALUE = 0x00020041          # driver default seen on a stock database
 
-# 계단현상 끄기 = 이 세트가 함께 있어야 드라이버가 0x00401241 을 실제로 쓴다.
+# 그래픽 호환 설정 = 이 세트가 함께 있어야 드라이버가 0x00401241 을 실제로 쓴다.
 # (AA Mode/Setting 이 꺼져 있으면 compatibility 값은 무시된다 — v1.0.0 수정)
 STAIRFIX_SET: tuple[tuple[int, int], ...] = (
     (SETTING_AA_COMPAT, STAIRFIX_VALUE),
@@ -56,7 +56,7 @@ STAIRFIX_SET: tuple[tuple[int, int], ...] = (
 
 # Values we know how to describe (used by the UI/telemetry only).
 KNOWN_AA_COMPAT = {
-    0x00401241: "계단현상·타격효과 제거",
+    0x00401241: "안티앨리어싱 호환 패치",
     0x00020041: "기본값",
     0x00000000: "해제",
 }
@@ -66,7 +66,7 @@ KNOWN_AA_COMPAT = {
 # 확인한 ID 를 쓴다.  예전 표는 0x1095DEF8(실제로는 SLI Compatibility Bits DX9)을
 # '안티앨리어싱 호환성 보조값'으로 표시하는 등 이름이 틀렸다.
 SETTING_NAMES: dict[int, tuple[str, str]] = {
-    SETTING_AA_COMPAT: ("계단현상 끄기", "Antialiasing compatibility (DX9)"),
+    SETTING_AA_COMPAT: ("그래픽 호환 설정", "Antialiasing compatibility (DX9)"),
     SETTING_AA_MODE: ("안티앨리어싱 모드", "Antialiasing - Mode"),
     SETTING_AA_SETTING: ("안티앨리어싱 설정", "Antialiasing - Setting"),
     0x00A879CF: ("수직 동기", "Vertical Sync"),
@@ -107,7 +107,7 @@ VALUE_LABELS: dict[int, dict[int, str]] = {
 
 # '고성능 게이밍' 체크리스트 — 적용 결과 팝업에서 항목별 상태를 보여 준다.
 CHECKLIST: tuple[tuple[int, str, str], ...] = (
-    (SETTING_AA_COMPAT, "계단현상 끄기", "0x00401241 로 패치"),
+    (SETTING_AA_COMPAT, "그래픽 호환 설정", "0x00401241 로 패치"),
     (0x1057EB71, "전원 관리 모드", "최대 성능 선호"),
     (0x0005F543, "저지연 모드", "켬(1)"),
     (0x007BA09E, "최대 사전 렌더 프레임", "1 프레임"),
@@ -161,7 +161,7 @@ def change_list(before: bytes | bytearray | None, after: bytes | bytearray | Non
     """두 Drs DB 사이에서 값이 달라진 서든어택 프로필 설정들 — 적용 내역 모달용.
 
     값은 ``before`` / ``after`` (0x…) 와 ``label_before`` / ``label_after`` (전원 관리
-    모드 → 최대 성능 선호 같은 읽는 이름) 를 함께 돌려준다.  계단현상 끄기
+    모드 → 최대 성능 선호 같은 읽는 이름) 를 함께 돌려준다.  그래픽 호환 설정
     (0x00D55F7D) 는 항상 맨 앞에 온다.
     """
     old = values_of(before, exe) if before else {}
@@ -421,7 +421,7 @@ def describe(value: int | None) -> str:
 
 # --------------------------------------------------------------------- write
 def stairfix_values(blob: bytes | bytearray, exe: str = GAME_EXE) -> dict[int, int | None]:
-    """계단현상 세트(호환성·AA 모드·AA 설정)의 현재 값."""
+    """그래픽 호환 세트(호환성·AA 모드·AA 설정)의 현재 값."""
     off = profile_offset(blob, exe)
     if off is None:
         return {sid: None for sid, _ in STAIRFIX_SET}
@@ -477,7 +477,7 @@ def apply_profile_values(blob: bytes | bytearray, values: dict[int, int],
 
 
 def set_stairfix(blob: bytes | bytearray, exe: str = GAME_EXE) -> tuple[bytearray, dict[str, Any]]:
-    """계단현상 끄기 세트를 적용한 복사본을 돌려준다.
+    """그래픽 호환 세트를 적용한 복사본을 돌려준다.
 
     기존에는 ``Antialiasing compatibility`` 레코드가 있을 때만 값을 바꿔서,
     ① 레코드가 없으면 예외로 실패하고 ② AA Mode/Setting 이 꺼져 있으면

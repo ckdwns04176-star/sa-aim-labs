@@ -47,6 +47,10 @@ ULW_ALPHA = 0x00000002
 AC_SRC_OVER = 0x00
 AC_SRC_ALPHA = 0x01
 HTTRANSPARENT = -1
+# v2.0.7 — 그리기는 **창 소유 스레드**에서만 한다.  다른 스레드가 부르면 이 메시지를
+# 창 스레드 큐에 넣고, 창 스레드가 그 자리에서 bitmap·GDI+·UpdateLayeredWindow 를
+# 실행한다.  (스레드가 다른 HDC/Graphics 로 첫 렌더를 하면 실패하던 문제)
+WM_APP_RENDER = 0x8000 + 1
 WM_DESTROY = 0x0002
 WM_CLOSE = 0x0010
 WM_NCHITTEST = 0x0084
@@ -74,7 +78,16 @@ FONT = "Malgun Gothic"
 FONT_FALLBACK = "Segoe UI"
 
 # 진단 표식 — 실기 로그에서 어느 오버레이 빌드가 도는지 바로 확인한다.
-OVERLAY_DIAG_BUILD = "class-atom-v3-20261127"
+OVERLAY_DIAG_BUILD = "class-atom-v4-20261128"
+
+# 첫 렌더 시도 순서 — ① GDI+ 로 한 번 ② 실패하면 GDI 로 한 번 더.
+# 둘 다 실패하면 오류 원인(Win32 코드 포함)을 self.error 에 남긴다.
+RENDER_ATTEMPTS: tuple[dict[str, Any], ...] = (
+    {"label": "GDI+", "force_gdi": False},
+    {"label": "GDI", "force_gdi": True},
+)
+RENDER_WAIT_SECONDS = 2.5
+BLIT_RETRY_SLEEP = 0.06
 
 # GDI+ TextRenderingHint
 #   3 = ClearTypeGridFit → 32bpp 레이어드 창에서 알파가 깨져 글자가 검게 뭉친다
@@ -596,9 +609,16 @@ class _Bitmap:
         header.biBitCount = 32
         header.biCompression = 0             # BI_RGB
         self.hdc = self.gdi32.CreateCompatibleDC(None)
+        if not self.hdc:
+            libs = win32()
+            raise RuntimeError(f"CreateCompatibleDC 실패 · {libs.error_text(libs.last_error())}")
         self._bits = ctypes.c_void_p()
         self.hbitmap = self.gdi32.CreateDIBSection(
             self.hdc, ctypes.byref(self._info), 0, ctypes.byref(self._bits), None, 0)
+        if not self.hbitmap:
+            code = libs.last_error()
+            self.gdi32.DeleteDC(self.hdc)
+            raise RuntimeError(f"CreateDIBSection 실패 · {libs.error_text(code)}")
         self.old = self.gdi32.SelectObject(self.hdc, self.hbitmap)
         self.premultiplied = True
 
@@ -619,11 +639,12 @@ class _Bitmap:
             pass
 
 
-def render_prims(bitmap: _Bitmap, prims: Sequence[dict[str, Any]]) -> bool:
-    """그리기 명령 → DIB. GDI+ 가 없으면 GDI 사각형/글자로 폴백한다."""
-    gp = gdiplus()
-    if gp.ok:
-        return _render_gdiplus(gp, bitmap, prims)
+def render_prims(bitmap: _Bitmap, prims: Sequence[dict[str, Any]], *, force_gdi: bool = False) -> bool:
+    """그리기 명령 → DIB. GDI+ 가 없거나 force_gdi 면 GDI 사각형/글자로 그린다."""
+    if not force_gdi:
+        gp = gdiplus()
+        if gp.ok:
+            return _render_gdiplus(gp, bitmap, prims)
     return _render_gdi(bitmap, prims)
 
 
@@ -796,8 +817,15 @@ class NativeOverlayWindow:
         self.error: str | None = None
         self._wndproc = None
         self._thread: threading.Thread | None = None
+        self._thread_id: int | None = None
         self._ready = threading.Event()
         self._size = (10, 10)
+        # 창 스레드에 그리기를 넘길 때 쓰는 슬롯 (v2.0.7)
+        self._spec_lock = threading.Lock()
+        self._pending_spec: dict[str, Any] | None = None
+        self._render_done = threading.Event()
+        self._render_ok = False
+        self._force_gdi = False
 
     def diag(self) -> str:
         """실기 로그용 한 줄 — 어느 오버레이 빌드가 창을 만들었는지."""
@@ -817,10 +845,17 @@ class NativeOverlayWindow:
             if not self._ready.wait(4.0):
                 self.error = "창 생성 시간 초과"
                 return False
-            if self.hwnd:
-                # 첫 그리기가 실패하면 창만 보이고 내용이 없는 상태가 되므로 실패로 돌려준다.
+            if not self.hwnd:
+                self.error = self.error or "오버레이 창을 만들지 못했습니다"
+                return False
+            # 첫 그리기 — 창 스레드에서 실행된다.  (다른 스레드의 HDC·GDI+ 로
+            # 그리던 예전 구조가 첫 렌더 실패의 원인이었다)
+            if not self.update(spec):
+                # 한 번 더: 큐에 넣은 그리기가 아직 안 돌았을 수 있으니 짧게 기다렸다 재시도
+                time.sleep(BLIT_RETRY_SLEEP)
                 if not self.update(spec):
                     self.error = self.error or "오버레이 첫 렌더에 실패했습니다"
+                    log.error("native overlay first render failed · %s · %s", self.diag(), self.error)
                     return False
             log.info("native overlay created · %s", self.diag())
             return bool(self.hwnd)
@@ -829,20 +864,76 @@ class NativeOverlayWindow:
             return False
 
     def update(self, spec: dict[str, Any]) -> bool:
+        """내용 갱신 — 어느 스레드에서 불러도 **창 소유 스레드**가 그린다."""
         if os.name != "nt" or not self.hwnd:
             return False
+        if self._thread_id and threading.get_ident() != self._thread_id:
+            return self._post_render(spec)
+        return self._render_now(spec)
+
+    # -------------------------------------------------- 그리기 (창 스레드)
+    def _post_render(self, spec: dict[str, Any]) -> bool:
+        """창 스레드 큐에 그리기를 넣고 결과를 기다린다."""
+        with self._spec_lock:
+            self._pending_spec = spec
+        self._render_done.clear()
         try:
-            if self.bitmap is None or self._size != (spec["w"], spec["h"]):
-                if self.bitmap is not None:
-                    self.bitmap.dispose()
-                self._size = (int(spec["w"]), int(spec["h"]))
-                self.bitmap = _Bitmap(*self._size)
-            else:
-                self.bitmap.clear()
-            if not render_prims(self.bitmap, spec.get("prims") or []):
-                return False
-            return self._blit()
+            posted = win32().user32.PostMessageW(ctypes.c_void_p(self.hwnd), WM_APP_RENDER, 0, 0)
         except Exception:  # noqa: BLE001
+            posted = 0
+        if not posted:
+            code = win32().last_error()
+            self.error = f"그리기 요청을 전달하지 못했습니다 · {win32().error_text(code)}"
+            log.warning(self.error)
+            return False
+        if not self._render_done.wait(RENDER_WAIT_SECONDS):
+            # 메시지 루프가 바쁘거나 창이 사라졌다 — 다음 갱신에서 다시 그린다.
+            log.warning("overlay render timeout · %s", self.diag())
+            return False
+        return bool(self._render_ok)
+
+    def _take_pending(self) -> dict[str, Any] | None:
+        with self._spec_lock:
+            spec = self._pending_spec
+            self._pending_spec = None
+        return spec
+
+    def _render_now(self, spec: dict[str, Any]) -> bool:
+        """실제 그리기 — 반드시 창 소유 스레드에서 불린다."""
+        self.error = None
+        try:
+            width, height = int(spec.get("w") or 0), int(spec.get("h") or 0)
+            if width <= 0 or height <= 0:
+                self.error = f"오버레이 크기가 올바르지 않습니다 · {width}×{height}"
+                return False
+            ok = False
+            last_error: str | None = None
+            for attempt in RENDER_ATTEMPTS:
+                if self.bitmap is None or self._size != (width, height):
+                    if self.bitmap is not None:
+                        self.bitmap.dispose()
+                    self._size = (width, height)
+                    self.bitmap = _Bitmap(width, height)
+                else:
+                    self.bitmap.clear()
+                if not render_prims(self.bitmap, spec.get("prims") or [],
+                                    force_gdi=bool(attempt.get("force_gdi"))):
+                    last_error = f"{attempt.get('label')} 그리기 실패"
+                    continue
+                if self._blit():
+                    ok = True
+                    break
+                last_error = self.error or "UpdateLayeredWindow 실패"
+                time.sleep(BLIT_RETRY_SLEEP)
+                if self._blit():
+                    ok = True
+                    break
+            if not ok:
+                self.error = f"오버레이 첫 렌더에 실패했습니다 · {last_error or '알 수 없는 오류'}"
+                log.error(self.error)
+            return ok
+        except Exception as exc:  # noqa: BLE001
+            self.error = f"오버레이 렌더 오류 · {exc}"
             log.debug("overlay update failed", exc_info=True)
             return False
 
@@ -913,7 +1004,9 @@ class NativeOverlayWindow:
             self.bitmap.hdc, ctypes.byref(src), 0, ctypes.byref(blend), ULW_ALPHA)
         if not ok:
             code = libs.last_error()
-            log.debug("UpdateLayeredWindow 실패 · %s", libs.error_text(code))
+            self.error = f"UpdateLayeredWindow 실패 · {libs.error_text(code)}"
+            log.warning("overlay blit failed · hwnd=%s size=%s · %s",
+                        self.hwnd, self._size, libs.error_text(code))
         return bool(ok)
 
     def _run(self) -> None:
@@ -938,6 +1031,17 @@ class NativeOverlayWindow:
                     return HTTRANSPARENT
                 if msg == WM_ERASEBKGND:
                     return 1
+                if msg == WM_APP_RENDER:
+                    # v2.0.7 — 다른 스레드가 요청한 그리기를 창 스레드에서 실행한다.
+                    try:
+                        spec = self._take_pending()
+                        self._render_ok = bool(spec) and self._render_now(spec)
+                    except Exception:  # noqa: BLE001 - 그리기 실패가 메시지 루프를 죽이면 안 된다
+                        self._render_ok = False
+                        log.debug("queued overlay render failed", exc_info=True)
+                    finally:
+                        self._render_done.set()
+                    return 0
                 if msg == WM_DESTROY:
                     user32.PostQuitMessage(0)
                     return 0
@@ -985,6 +1089,7 @@ class NativeOverlayWindow:
                 self._ready.set()
                 return
             self.hwnd = int(hwnd)
+            self._thread_id = threading.get_ident()
             try:
                 # 작업 표시줄·Alt+Tab 에도 남지 않게
                 user32.SetWindowPos(ctypes.c_void_p(self.hwnd), ctypes.c_void_p(HWND_TOPMOST),
@@ -1001,6 +1106,9 @@ class NativeOverlayWindow:
             log.debug("native overlay thread failed", exc_info=True)
             self._ready.set()
         finally:
+            self._thread_id = None
+            with self._spec_lock:
+                self._pending_spec = None
             if self.bitmap is not None:
                 self.bitmap.dispose()
                 self.bitmap = None

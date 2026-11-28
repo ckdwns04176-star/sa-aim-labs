@@ -141,6 +141,7 @@ def mock_js(state: dict) -> str:
     window.__CALLS = [];
     window.__PY_STATE = __STATE__;
     const S = () => JSON.parse(JSON.stringify(window.__PY_STATE));
+    const SET = (st) => { window.__PY_STATE = JSON.parse(JSON.stringify(st)); };
     const clone = (v) => JSON.parse(JSON.stringify(v));
     window.pywebview = {api: {
       async bootstrap() { return {ok: true, state: S(), log_file: 'C:/log/app.log'}; },
@@ -193,17 +194,26 @@ def mock_js(state: dict) -> str:
       async connect_nickname() { return {ok:true, state:S(), nickname:'스나이퍼01', message:'연결'}; },
       async switch_account(p) { window.__CALLS.push(['switch_account', p && p.index]); const st=S();
         const acc=st.accounts||{items:[],active:0,max:3}; const i=Number((p||{}).index||0);
-        if(acc.items && acc.items[i]) { acc.active=i; acc.nickname=acc.items[i].nickname;
+        acc.items=Array.isArray(acc.items)?acc.items:[];
+        while(acc.items.length<3) acc.items.push({nickname:'',label:''});
+        if(acc.items[i] && acc.items[i].nickname) { acc.active=i; acc.nickname=acc.items[i].nickname;
           st.settings=Object.assign({}, st.settings||{}, {nickname:acc.nickname}); }
-        return {ok:true, state:st, accounts:acc, nickname:(p||{}).nickname, message:'계정 전환'}; },
+        SET(st);
+        return {ok:true, state:st, accounts:acc, nickname:acc.nickname, message:'계정 전환'}; },
       async save_account(p) { window.__CALLS.push(['save_account', p && p.index, p && p.nickname]); const st=S();
         const acc=st.accounts||{items:[],active:0,max:3}; const i=Number((p||{}).index||0);
         const n=String((p||{}).nickname||'').trim();
         acc.items=Array.isArray(acc.items)?acc.items:[];
-        while(acc.items.length<=i) acc.items.push({nickname:'',label:''});
+        while(acc.items.length<3) acc.items.push({nickname:'',label:''});
         acc.items[i]={nickname:n,label:''};
-        acc.items=acc.items.filter(function(r){return r && r.nickname;});
-        acc.nickname=st.settings && st.settings.nickname || n;
+        acc.items=acc.items.slice(0,3);
+        if(!(acc.items[acc.active]&&acc.items[acc.active].nickname)) {
+          const f=acc.items.findIndex(function(r){return r && r.nickname;});
+          acc.active=f<0?0:f;
+        }
+        acc.nickname=(acc.items[acc.active]||{}).nickname || '';
+        st.settings=Object.assign({}, st.settings||{}, {nickname:acc.nickname});
+        SET(st);
         return {ok:true, state:st, accounts:acc, nickname:n, message:n+' 계정 저장'}; },
       async search_user() { return {ok:true, found:true, user:{name:'스나이퍼01'}}; },
       async lookup_barracks() { return {ok:true, barracks:S().barracks, peek:true}; },
@@ -256,7 +266,19 @@ def mock_js(state: dict) -> str:
       async load_party_preset() { return {ok:true, members:['0.1초의각'], message:'불러옴'}; },
       async party_scan() { return {ok:true, rows:[], message:'스캔'}; },
       async overlay_party_show() { return {ok:false, message:'Windows 전용'}; },
-      async copy_text() { return {ok:true}; },
+      async copy_text(t) { window.__CALLS.push(['copy_text', t]); return {ok:true}; },
+      async banner_click(id, url) { window.__CALLS.push(['banner_click', id]); return {ok:true, house:true,
+        partner_url:'https://sa-aim-labs.pages.dev/#partner', email:'ckdwns04176@gmail.com'}; },
+      async banner_impression(ids) { window.__CALLS.push(['banner_impression', ids]); return {ok:true}; },
+      async banner_state() { return {ok:true, banners:(S().banners||{})}; },
+      async net_state() { return {ok:true, netopt:(S().netopt||{})}; },
+      async apply_net_opt() { window.__CALLS.push(['apply_net_opt']); return {ok:true, message:'적용', state:S()}; },
+      async restore_net_opt() { window.__CALLS.push(['restore_net_opt']); return {ok:true, message:'복구', state:S()}; },
+      async wait_netopt_result() { return {ok:true, message:'적용', state:S()}; },
+      async apply_audio_eq() { window.__CALLS.push(['apply_audio_eq']); return {ok:true, message:'사플', state:S()}; },
+      async remove_audio_eq() { window.__CALLS.push(['remove_audio_eq']); return {ok:true, message:'해제', state:S()}; },
+      async wait_audioeq_result() { return {ok:true, state:S()}; },
+      async open_sound_panel() { window.__CALLS.push(['open_sound_panel']); return {ok:true, message:'사운드 속성'}; },
       async app_info() { return {ok:true}; }
     }};
     """.replace("__STATE__", json.dumps(state, ensure_ascii=False))
